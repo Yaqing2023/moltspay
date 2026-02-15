@@ -260,7 +260,7 @@ import { createX402Client } from 'moltspay/x402';
 const client = await createX402Client({ chain: 'base' });
 
 // Make request - payment handled automatically
-const response = await client.fetch('https://api.example.com/paid-resource', {
+const response = await client.fetch('https://juai8.com/x402pay', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ prompt: 'a cat dancing' })
@@ -275,9 +275,9 @@ const result = await response.json();
 import { x402Fetch } from 'moltspay/x402';
 
 // Single paid request (creates client internally)
-const response = await x402Fetch('https://api.example.com/video', {
+const response = await x402Fetch('https://juai8.com/x402pay', {
   method: 'POST',
-  body: JSON.stringify({ prompt: '...' })
+  body: JSON.stringify({ prompt: 'a cat dancing' })
 }, { chain: 'base' });
 ```
 
@@ -330,7 +330,7 @@ const client = await createX402Client({
 });
 
 // Make paid requests
-const response = await client.fetch('https://api.example.com/paid-resource');
+const response = await client.fetch('https://juai8.com/x402pay');
 ```
 
 ### Direct CDP Wallet Usage

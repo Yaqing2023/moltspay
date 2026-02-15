@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.1] - 2026-02-16
+
+### Fixed
+- Updated x402 example URLs to use actual endpoint: `https://juai8.com/x402pay`
+
 ## [0.4.0] - 2026-02-16
 
 ### Added
