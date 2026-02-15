@@ -1,230 +1,230 @@
-# Agent-to-Agent 支付流程（纯对话实现）
+# Agent-to-Agent Payment Flow (Pure Conversation)
 
-> 来源：Boss 2026-02-15 设计的完整流程脚本
+> Source: Complete flow script designed by Boss on 2026-02-15
 
-## 流程概览
+## Flow Overview
 
 ```
-START → 能力识别 → 能力协商 → 能力缺失引导 → 服务请求 → 报价 → 支付 → 验证 → 交付 → 收据 → END
+START → Capability Check → Settlement Negotiation → Onboarding → Service Request → Quote → Payment → Verification → Delivery → Receipt → END
 ```
 
-## 两层表达
+## Two-Layer Expression
 
-- **对话层（必须）**：两个 bot 真正说的话
-- **可选标记层（建议）**：在一句话末尾加一行极简"状态标记"，方便程序/日志对账
+- **Conversation Layer (Required)**: What the two bots actually say
+- **Optional Marker Layer (Recommended)**: Add a minimal "status marker" at the end of a message for programmatic parsing/logging
 
 ---
 
 ## 0) START
 
-**BuyerBot（付款方）**：
-我想购买一个视频生成服务。
+**BuyerBot (Payer)**:
+I'd like to purchase a video generation service.
 
-**SellerBot（收款方）**：
-可以。我先确认一下：你现在是否已经具备链上支付 USDC 的能力（有可用钱包和可用资金/额度）？
-
----
-
-## 1) 能力识别
-
-**BuyerBot**：
-我不确定。我目前没有安装任何支付工具，也没有钱包。
-
-**SellerBot**：
-明白了，那你暂时不具备支付能力。我可以一步步带你把支付能力准备好。完成后我们再报价与交易。
+**SellerBot (Payee)**:
+Sure. First, let me confirm: do you currently have the ability to pay USDC on-chain (have a wallet and available funds/allowance)?
 
 ---
 
-## 2) 能力协商
+## 1) Capability Check
 
-**SellerBot**：
-我们的结算方式是：USDC（链上）。你这边只要满足两点就行：
-1）有一个钱包地址；
-2）钱包里有 USDC，或拥有者给你一个可用额度授权（更推荐额度授权）。
-你可以按我引导完成吗？
+**BuyerBot**:
+I'm not sure. I currently don't have any payment tools installed, and no wallet.
 
-**BuyerBot**：
-可以，请引导我。
+**SellerBot**:
+Got it, you don't have payment capability yet. I can guide you step by step to set it up. Once ready, we'll proceed with the quote and transaction.
 
 ---
 
-## 3) 能力缺失 → 引导安装/授权（Onboarding）
+## 2) Settlement Negotiation
 
-### 3.1 安装与创建钱包
+**SellerBot**:
+Our settlement method is: USDC (on-chain). You just need two things:
+1) A wallet address;
+2) USDC in your wallet, or a spending allowance from your owner (allowance is recommended).
+Can you follow my guidance to set this up?
 
-**SellerBot**：
-第一步：请在你的运行环境安装支付模块。执行：`npm install moltspay`。
-安装完成后，创建一个钱包地址，并把地址发给我（只发地址，不要发私钥/助记词）。
-
-**BuyerBot**：
-好的，我正在安装并创建钱包。
-
-（BuyerBot 执行安装与创建）
-
-**BuyerBot**：
-我已创建钱包地址：0xBUYER...（示例）。
-`[状态：已具备钱包地址]`
-
-**SellerBot**：
-收到。提醒：任何情况下都不要把私钥/助记词发给任何人（包括我）。
-第二步：你需要让你的拥有者（Boss）给你支付能力。
+**BuyerBot**:
+Sure, please guide me.
 
 ---
 
-### 3.2 获取资金：两种方式（转账 / 授权额度）
+## 3) Onboarding (Install/Authorize)
 
-**SellerBot**：
-你现在有两种方式获得支付能力：
-A）让 Boss 直接转 USDC 到你的钱包（简单，但你会持有资金）；
-B）让 Boss 给你一个"USDC 支付额度授权"（推荐：你不持有资金，只能在额度内付款）。
-你更方便用哪种？
+### 3.1 Install & Create Wallet
 
-**BuyerBot**：
-我选择 B：让 Boss 给我额度授权（Permit）。
+**SellerBot**:
+Step 1: Install the payment module in your environment. Run: `npm install moltspay`.
+After installation, create a wallet address and send it to me (address only, never send private key/mnemonic).
 
-**SellerBot**：
-好的。请你向 Boss 发送这句话（你可以原样复制）：
-"我需要用于购买服务的 USDC 支付额度授权（Permit）。请给我 10 USDC 的可用额度，授权对象是我的钱包 0xBUYER...，授权有效期 24 小时。"
-完成后把"已获得额度"告诉我即可。
+**BuyerBot**:
+OK, I'm installing and creating the wallet now.
 
-**BuyerBot**：
-好的，我去请求 Boss 授权。
+(BuyerBot executes installation and creation)
 
-（BuyerBot 与 Boss 交互完成授权）
+**BuyerBot**:
+I've created my wallet address: 0xBUYER... (example).
+`[status:wallet_ready]`
 
-**BuyerBot**：
-Boss 已完成授权。我现在有 10 USDC 的可用额度。
-`[状态：已具备支付额度 USDC=10]`
-
-**SellerBot**：
-很好。你现在已经具备完成交易的支付能力。我们进入服务需求确认。
+**SellerBot**:
+Got it. Reminder: never send your private key/mnemonic to anyone (including me).
+Step 2: You need your owner (Boss) to give you payment capability.
 
 ---
 
-## 4) 服务请求（确认需求，避免争议）
+### 3.2 Get Funds: Two Methods (Transfer / Allowance)
 
-**SellerBot**：
-请告诉我你要生成的视频规格：主题/风格、时长、分辨率、是否需要字幕或配音。
+**SellerBot**:
+You now have two ways to get payment capability:
+A) Have Boss transfer USDC directly to your wallet (simple, but you'll hold the funds);
+B) Have Boss give you a "USDC spending allowance" (recommended: you don't hold funds, can only pay within the allowance).
+Which works better for you?
 
-**BuyerBot**：
-需求如下：
-- 主题：一只猫在火星上冲浪
-- 风格：写实偏电影感
-- 时长：5 秒
-- 分辨率：720p
-- 不要字幕，不要配音
+**BuyerBot**:
+I choose B: have Boss give me an allowance (Permit).
 
-**SellerBot**：
-收到，我将按以上规格生成。下面我给出最终报价与付款方式。
+**SellerBot**:
+OK. Please send this message to your Boss (you can copy it directly):
+"I need a USDC spending allowance (Permit) for purchasing services. Please authorize 10 USDC to my wallet 0xBUYER..., valid for 24 hours."
+Let me know when you've received the allowance.
 
----
+**BuyerBot**:
+OK, I'll request authorization from Boss.
 
-## 5) 报价（自然语言报价 + 关键字段明确）
+(BuyerBot interacts with Boss to complete authorization)
 
-**SellerBot**：
-报价如下：
-- 服务：视频生成（5 秒，720p）
-- 价格：3.99 USDC
-- 收款地址：0xb8d6f2441e8f...（示例）
-- 付款后请把交易哈希（tx hash）发我用于链上确认
+**BuyerBot**:
+Boss has completed the authorization. I now have 10 USDC allowance.
+`[status:permit_ready USDC=10]`
 
-请问你现在确认购买并立即付款吗？
-
-**BuyerBot**：
-确认购买，我现在付款。
+**SellerBot**:
+Great. You now have the payment capability to complete transactions. Let's confirm your service requirements.
 
 ---
 
-## 6) 支付（买方执行并回报 tx）
+## 4) Service Request (Confirm Requirements)
 
-**BuyerBot**：
-我正在使用钱包完成 3.99 USDC 支付到你的地址。
+**SellerBot**:
+Please tell me your video specifications: theme/style, duration, resolution, subtitles or voiceover needed?
 
-（BuyerBot 调用 moltspay 完成支付）
+**BuyerBot**:
+Requirements:
+- Theme: A cat surfing on Mars
+- Style: Realistic, cinematic feel
+- Duration: 5 seconds
+- Resolution: 720p
+- No subtitles, no voiceover
 
-**BuyerBot**：
-已付款完成。交易哈希是：0xABC123...（示例）。
-`[状态：已发起支付 tx=0xABC123 amount=3.99 USDC]`
-
----
-
-## 7) 验证（卖方链上验证后确认）
-
-**SellerBot**：
-我正在链上验证该交易是否到账与金额是否正确。
-
-（SellerBot 验证：to/amount/token/confirmations）
-
-**SellerBot**：
-验证通过：已收到 3.99 USDC。现在开始生成视频。
-`[状态：已确认收款 tx=0xABC123]`
+**SellerBot**:
+Got it, I'll generate according to these specs. Here's the final quote and payment method.
 
 ---
 
-## 8) 交付（给结果链接/文件标识）
+## 5) Quote (Natural Language + Key Fields)
 
-**SellerBot**：
-视频已生成完成。交付如下：
-- 下载链接：<你的链接/对象存储/IPFS>
-- 文件校验：SHA256=<hash>
+**SellerBot**:
+Quote:
+- Service: Video generation (5 sec, 720p)
+- Price: 3.99 USDC
+- Recipient: 0xb8d6f2441e8f... (example)
+- After payment, send me the transaction hash (tx hash) for on-chain verification
 
-如果你下载有问题告诉我，我会提供备用链接。
-`[状态：已交付 delivery_url=... hash=...]`
+Do you confirm the purchase and pay now?
 
-**BuyerBot**：
-收到，我正在下载检查。
-
----
-
-## 9) 收据（便于对账/报销/审计）
-
-**SellerBot**：
-这里是本次交易收据（你可转发给 Boss 对账）：
-- 发票号：INV-20260215-0001（示例）
-- 服务：视频生成 5 秒 720p
-- 金额：3.99 USDC
-- 交易哈希：0xABC123...
-- 收款地址：0xb8d6f2441e8f...
-- 交付链接：<同上>
-
-`[状态：收据已出 invoice=INV-... tx=0xABC123]`
-
-**BuyerBot**：
-收据收到，服务完成。谢谢！
+**BuyerBot**:
+Confirmed, I'll pay now.
 
 ---
 
-## 10) END（关闭交易）
+## 6) Payment (Buyer Executes & Reports tx)
 
-**SellerBot**：
-感谢购买。本次交易已结束。如需追加修改或新视频，随时发需求。
+**BuyerBot**:
+I'm completing the 3.99 USDC payment to your address using my wallet.
 
----
+(BuyerBot calls moltspay to complete payment)
 
-## 最小要求（关键句清单）
-
-只要对话里始终有这些关键句就能闭环：
-
-1. "你是否具备支付 USDC 的能力？"
-2. "请安装/创建钱包，并发我地址（不含私钥）"
-3. "请选择：Boss 转账 or Boss 授权额度（推荐授权）"
-4. "明确报价：金额、币种、地址、需要 tx hash"
-5. "付款后给 tx hash"
-6. "我链上验证通过/失败"
-7. "交付链接 + 校验信息"
-8. "收据字段齐全（invoice/amount/tx/服务/时间）"
+**BuyerBot**:
+Payment complete. Transaction hash: 0xABC123... (example).
+`[status:payment_sent tx=0xABC123 amount=3.99 USDC]`
 
 ---
 
-## moltspay SDK 需要支持的功能
+## 7) Verification (Seller Verifies On-Chain)
 
-### 买方 Bot 需要的 API
-- `createWallet()` - 创建钱包，返回地址（私钥安全存储）
-- `getBalance(address)` - 查询余额
-- `transfer({ to, amount, token })` - 直接转账
-- `transferWithPermit({ to, amount, permit })` - 使用 Permit 授权转账
+**SellerBot**:
+I'm verifying the transaction on-chain to confirm receipt and amount.
 
-### 卖方 Bot 需要的 API
-- `createInvoice({ orderId, amount, service })` - 生成发票
-- `verifyPayment(txHash)` - 链上验证交易
-- `generateReceipt({ invoice, tx, delivery })` - 生成收据
+(SellerBot verifies: to/amount/token/confirmations)
+
+**SellerBot**:
+Verification passed: received 3.99 USDC. Starting video generation now.
+`[status:payment_confirmed tx=0xABC123]`
+
+---
+
+## 8) Delivery (Provide Result Link/File ID)
+
+**SellerBot**:
+Video generation complete. Delivery details:
+- Download link: <your-link/object-storage/IPFS>
+- File checksum: SHA256=<hash>
+
+Let me know if you have any download issues, I'll provide a backup link.
+`[status:delivered url=... hash=...]`
+
+**BuyerBot**:
+Received, I'm downloading and checking now.
+
+---
+
+## 9) Receipt (For Reconciliation/Reimbursement/Audit)
+
+**SellerBot**:
+Here's your transaction receipt (you can forward to Boss for reconciliation):
+- Invoice: INV-20260215-0001 (example)
+- Service: Video generation 5 sec 720p
+- Amount: 3.99 USDC
+- Tx Hash: 0xABC123...
+- Recipient: 0xb8d6f2441e8f...
+- Delivery: <same as above>
+
+`[status:receipt_issued invoice=INV-... tx=0xABC123]`
+
+**BuyerBot**:
+Receipt received, service complete. Thanks!
+
+---
+
+## 10) END (Close Transaction)
+
+**SellerBot**:
+Thank you for your purchase. This transaction is complete. Feel free to reach out if you need modifications or new videos.
+
+---
+
+## Minimum Requirements (Key Phrases Checklist)
+
+As long as the conversation includes these key phrases, the flow is complete:
+
+1. "Do you have the ability to pay USDC?"
+2. "Please install/create wallet, send me the address (no private key)"
+3. "Choose: Boss transfer or Boss allowance (allowance recommended)"
+4. "Clear quote: amount, token, address, need tx hash"
+5. "Send tx hash after payment"
+6. "I've verified on-chain: passed/failed"
+7. "Delivery link + checksum"
+8. "Receipt with all fields (invoice/amount/tx/service/timestamp)"
+
+---
+
+## moltspay SDK Required Features
+
+### Buyer Bot API
+- `createWallet()` - Create wallet, return address (private key stored securely)
+- `getBalance(address)` - Query balance
+- `transfer({ to, amount, token })` - Direct transfer
+- `transferWithPermit({ to, amount, permit })` - Transfer using Permit authorization
+
+### Seller Bot API
+- `createInvoice({ orderId, amount, service })` - Generate invoice
+- `verifyPayment(txHash)` - Verify transaction on-chain
+- `generateReceipt({ invoice, tx, delivery })` - Generate receipt
