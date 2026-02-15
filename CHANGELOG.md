@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.4] - 2026-02-16
+
+### Fixed
+- Fixed imports: use `import { createX402Client } from 'moltspay'` (main export)
+- Removed broken subpath exports (`/x402`, `/cdp`) that didn't exist in build
+
 ## [0.4.3] - 2026-02-16
 
 ### Fixed

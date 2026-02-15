@@ -273,7 +273,7 @@ npx moltspay init --chain base
 
 ```typescript
 // 3. Make paid requests - payment handled automatically
-import { createX402Client } from 'moltspay/x402';
+import { createX402Client } from 'moltspay';
 
 const client = await createX402Client({ chain: 'base' });
 
@@ -289,7 +289,7 @@ const result = await response.json();
 ### One-shot Request
 
 ```typescript
-import { x402Fetch } from 'moltspay/x402';
+import { x402Fetch } from 'moltspay';
 
 // Single paid request
 const response = await x402Fetch('https://juai8.com/zen7/v1/video/generate', {
