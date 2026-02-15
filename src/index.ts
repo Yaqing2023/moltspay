@@ -6,6 +6,7 @@
 
 // Core classes
 export { PaymentAgent } from './agent/PaymentAgent.js';
+export { AgentWallet, getAgentAddress } from './agent/AgentWallet.js';
 export { Wallet, SecureWallet } from './wallet/index.js';
 export { PermitPayment } from './permit/index.js';
 export { AuditLog } from './audit/AuditLog.js';
@@ -20,6 +21,8 @@ export {
   formatPermitRequest,
   signPermit,
   PermitSigner,
+  AllowanceWallet,
+  generatePermitInstructions,
   type CreateWalletOptions,
   type CreateWalletResult,
   type WalletData,
@@ -30,6 +33,11 @@ export {
   type SignPermitParams,
   type SignPermitResult,
   type SignPermitConfig,
+  type AllowanceWalletConfig,
+  type OwnerPermit,
+  type SpendParams,
+  type SpendResult,
+  type AllowanceStatus,
 } from './wallet/index.js';
 
 // Order management
@@ -85,3 +93,42 @@ export { CHAINS, getChain, listChains, getChainById, ERC20_ABI } from './chains/
 
 // Types
 export * from './types/index.js';
+
+// x402 Protocol Support
+export {
+  // Low-level x402 helpers
+  X402_VERSION,
+  PAYMENT_REQUIRED_HEADER,
+  PAYMENT_HEADER,
+  PAYMENT_RESPONSE_HEADER,
+  parsePaymentRequired,
+  encodePaymentPayload,
+  chainToNetwork,
+  networkToChain,
+  signEIP3009,
+  createExactEvmPayload,
+  wrapFetchWith402,
+  createPaymentRequiredResponse,
+  verifyPaymentHeader,
+  // Easy-to-use x402 client
+  createX402Client,
+  x402Fetch,
+  isX402Available,
+  type X402PaymentRequirements,
+  type X402PaymentPayload,
+  type EIP3009Authorization,
+  type X402Client,
+  type X402ClientConfig,
+} from './x402/index.js';
+
+// CDP (Coinbase Developer Platform) Wallet
+export {
+  initCDPWallet,
+  loadCDPWallet,
+  getCDPWalletAddress,
+  isCDPAvailable,
+  CDPWallet,
+  type CDPWalletConfig,
+  type CDPWalletData,
+  type CDPInitResult,
+} from './cdp/index.js';

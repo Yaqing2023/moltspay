@@ -24,3 +24,12 @@ export {
   type SignPermitResult,
   type SignPermitConfig,
 } from './signPermit.js';
+export {
+  AllowanceWallet,
+  generatePermitInstructions,
+  type AllowanceWalletConfig,
+  type OwnerPermit,
+  type SpendParams,
+  type SpendResult,
+  type AllowanceStatus,
+} from './AllowanceWallet.js';

@@ -10,8 +10,10 @@ Blockchain payment infrastructure for AI Agents on Moltbook.
 - 🔒 **Secure Wallet** - Limits, whitelist, and audit logging
 - 📝 **EIP-2612 Permit** - Gasless user payments
 - ⛓️ **Multi-chain** - Base, Polygon, Ethereum (mainnet & testnet)
-- 🤖 **Agent-to-Agent** - Complete A2A payment flow support (v0.2.0+)
+- 🤖 **Agent-to-Agent** - Complete A2A payment flow support
 - 🧾 **Receipt Generation** - Transaction receipts for audit/accounting
+- 🔄 **x402 Protocol** - HTTP-native payments (v0.4.0+)
+- 🏦 **CDP Wallet** - Coinbase Developer Platform integration (v0.4.0+)
 
 ## Installation
 
@@ -80,7 +82,59 @@ Complete support for pure-conversation payment between AI Agents.
 START → 能力识别 → 能力协商 → Onboarding → 服务请求 → 报价 → 支付 → 验证 → 交付 → 收据 → END
 ```
 
-### Buyer Agent: Create Wallet & Pay
+### Client Agent: Auto-Setup (Recommended - v0.2.5+)
+
+The simplest way for a client agent to get started:
+
+**First-time setup is automatic:**
+```bash
+# 1. Install (agent does this automatically when calling a paid service)
+npm install moltspay
+
+# 2. Initialize wallet (automatic, no gas needed)
+npx moltspay init --chain base
+
+# Output:
+# ✅ Agent wallet initialized
+#    Address: 0xABC123...
+#    Storage: ~/.moltspay
+```
+
+**Owner funds the Agent (one-time):**
+- Agent tells Owner its wallet address
+- Owner sends USDC to the agent's address using Coinbase, MetaMask, etc.
+- No complex signatures needed — just a simple transfer
+
+**Agent pays for services:**
+```bash
+npx moltspay transfer --to 0xSERVICE_PROVIDER --amount 0.99 --chain base
+```
+
+### Code Example (Auto-Initialize)
+
+```typescript
+import { AgentWallet } from 'moltspay';
+
+// Auto-creates wallet on first use (no gas needed)
+const wallet = new AgentWallet({ chain: 'base' });
+console.log('Agent address:', wallet.address);
+// Tell Owner to send USDC to this address
+
+// Check balance
+const balance = await wallet.getBalance();
+console.log('USDC balance:', balance.usdc);
+
+// Pay for services
+const result = await wallet.transfer({
+  to: '0xServiceProvider...',
+  amount: 0.99,
+});
+console.log('Paid:', result.txHash);
+```
+
+### Buyer Agent: Create Wallet & Pay (Manual)
+
+For more control, you can manually manage wallet creation:
 
 ```typescript
 import { createWallet, loadWallet, PermitWallet } from 'moltspay';
@@ -172,26 +226,130 @@ Standard templates for natural A2A dialogue:
 import { SellerTemplates, BuyerTemplates, parseStatusMarker } from 'moltspay';
 
 // Seller templates
-SellerTemplates.askPaymentCapability()     // "你是否具备链上支付 USDC 的能力？"
-SellerTemplates.guideInstall()             // "请安装 moltspay..."
-SellerTemplates.guideFunding()             // "A) 直接转账 B) Permit授权"
-SellerTemplates.guidePermit(agentAddr, 10) // "请向 Boss 发送..."
+SellerTemplates.askPaymentCapability()       // "Do you have USDC payment capability?"
+SellerTemplates.guideInstall()               // "Install moltspay and init wallet..."
+SellerTemplates.guideFunding(agentAddr, 10)  // "Ask Owner to send USDC to your wallet"
 SellerTemplates.quote({ service, price, recipientAddress })
 SellerTemplates.verificationPassed(amount)
 SellerTemplates.deliver({ downloadUrl, fileHash })
 SellerTemplates.receipt(receipt)
 
 // Buyer templates
-BuyerTemplates.requestService('视频生成')
-BuyerTemplates.noCapability()              // "我没有钱包"
-BuyerTemplates.walletCreated(address)      // "[状态：已具备钱包地址]"
-BuyerTemplates.choosePermit()              // "我选择 B"
-BuyerTemplates.permitReceived(10)          // "[状态：已具备支付额度 USDC=10]"
-BuyerTemplates.paymentSent(txHash, amount) // "[状态：已发起支付 tx=...]"
+BuyerTemplates.requestService('video generation')
+BuyerTemplates.noCapability()                // "I don't have a wallet"
+BuyerTemplates.walletCreated(address)        // "[status:wallet_ready]"
+BuyerTemplates.fundingReceived(10)           // "[status:funded USDC=10]"
+BuyerTemplates.requestFunding(addr, 10)      // "Owner, please send USDC to my wallet"
+BuyerTemplates.paymentSent(txHash, amount)   // "[status:payment_sent tx=...]"
 
 // Parse status markers from messages
-const status = parseStatusMarker('[状态：已发起支付 tx=0xabc amount=3.99 USDC]');
+const status = parseStatusMarker('[status:payment_sent tx=0xabc amount=3.99 USDC]');
 // { type: 'payment_sent', data: { txHash: '0xabc', amount: '3.99' } }
+```
+
+## x402 Protocol Support (v0.4.0+)
+
+x402 is an open standard for HTTP-native payments. When a server returns 402 Payment Required, the client can pay and retry automatically.
+
+### Quick Start with x402
+
+```typescript
+import { createX402Client } from 'moltspay/x402';
+
+// Create x402-enabled client (uses local wallet)
+const client = await createX402Client({ chain: 'base' });
+
+// Make request - payment handled automatically
+const response = await client.fetch('https://api.example.com/paid-resource', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ prompt: 'a cat dancing' })
+});
+
+const result = await response.json();
+```
+
+### One-shot Request
+
+```typescript
+import { x402Fetch } from 'moltspay/x402';
+
+// Single paid request (creates client internally)
+const response = await x402Fetch('https://api.example.com/video', {
+  method: 'POST',
+  body: JSON.stringify({ prompt: '...' })
+}, { chain: 'base' });
+```
+
+### x402 Flow
+
+```
+Client Agent                              Service Provider
+     │                                         │
+     │  POST /api/video                        │
+     │  ────────────────────────────────────>  │
+     │                                         │
+     │  402 Payment Required                   │
+     │  X-PAYMENT-REQUIRED: {price, wallet}    │
+     │  <────────────────────────────────────  │
+     │                                         │
+     │  [moltspay auto-signs payment]          │
+     │                                         │
+     │  POST /api/video                        │
+     │  X-PAYMENT: {signature, auth}           │
+     │  ────────────────────────────────────>  │
+     │                                         │
+     │  200 OK + result                        │
+     │  <────────────────────────────────────  │
+```
+
+## CDP Wallet Support (v0.4.0+)
+
+Use Coinbase Developer Platform (CDP) for hosted wallet management.
+
+### Initialize CDP Wallet
+
+```bash
+# Set CDP credentials
+export CDP_API_KEY_ID=your-key-id
+export CDP_API_KEY_SECRET=your-key-secret
+
+# Initialize CDP wallet
+npx moltspay init --cdp --chain base
+```
+
+### Use CDP Wallet with x402
+
+```typescript
+import { createX402Client } from 'moltspay/x402';
+
+// Create x402 client with CDP wallet
+const client = await createX402Client({ 
+  chain: 'base', 
+  useCDP: true  // Use CDP instead of local wallet
+});
+
+// Make paid requests
+const response = await client.fetch('https://api.example.com/paid-resource');
+```
+
+### Direct CDP Wallet Usage
+
+```typescript
+import { CDPWallet } from 'moltspay/cdp';
+
+const wallet = new CDPWallet({ chain: 'base' });
+
+// Check balance
+const balance = await wallet.getBalance();
+console.log('USDC:', balance.usdc);
+
+// Transfer USDC
+const result = await wallet.transfer({
+  to: '0xRecipient...',
+  amount: 0.99
+});
+console.log('Tx:', result.txHash);
 ```
 
 ## API Reference

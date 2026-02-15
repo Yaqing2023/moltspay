@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.4.0] - 2026-02-16
+
+### Added
+
+#### x402 Protocol Support
+- `createX402Client()` - Create HTTP client with automatic x402 payment handling
+- `x402Fetch()` - One-shot function for paid HTTP requests
+- `isX402Available()` - Check if x402 packages are installed
+- Automatic 402 Payment Required response handling
+- Integration with official `@x402/fetch` and `@x402/evm` packages
+
+#### CDP (Coinbase Developer Platform) Wallet
+- `initCDPWallet()` - Initialize CDP-hosted wallet
+- `CDPWallet` class - Manage CDP wallet operations
+- `npx moltspay init --cdp` - CLI command for CDP wallet creation
+- No gas needed for wallet creation
+- viem account compatibility for x402 integration
+
+#### CLI Enhancements
+- `moltspay init` now supports `--cdp` flag for CDP wallet
+- `moltspay init` shows clear next steps after initialization
+
+### Changed
+- x402 packages moved to peerDependencies (optional)
+- CDP SDK added as optional peerDependency
+- Package exports updated to include `/x402` and `/cdp` subpaths
+
+## [0.3.0] - 2026-02-15
+
+### Added
+- AgentWallet with auto-initialization
+- Direct transfer support (wallet.transfer())
+- Service payment helper (wallet.payService())
+
 ## [0.2.1] - 2026-02-15
 
 ### Changed

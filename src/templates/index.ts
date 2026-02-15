@@ -34,8 +34,14 @@ Can you follow my guidance to set this up?`;
    * 3.1 Installation Guide - First step: install SDK
    */
   guideInstall(): string {
-    return `Step 1: Install the payment module in your environment. Run: \`npm install moltspay ethers\`.
-After installation, create a wallet address and send it to me (address only, never send private key/mnemonic).`;
+    return `Step 1: Install and initialize the payment module:
+
+\`\`\`bash
+npm install moltspay
+npx moltspay init --chain base
+\`\`\`
+
+This will automatically create your wallet (no gas needed). Send me your wallet address (never send private key/mnemonic).`;
   },
 
   /**
@@ -48,22 +54,21 @@ Step 2: You need your owner (Boss) to give you payment capability.`;
   },
 
   /**
-   * 3.3 Funding Options - Choose method
+   * 3.3 Funding Options - Request funding from Owner
    */
-  guideFunding(): string {
-    return `You now have two ways to get payment capability:
-A) Have Boss transfer USDC directly to your wallet (simple, but you'll hold the funds);
-B) Have Boss give you a "USDC spending allowance" (recommended: you don't hold funds, can only pay within the allowance).
-Which works better for you?`;
-  },
+  guideFunding(agentAddress: string, suggestedAmount: number = 10): string {
+    return `Please send this message to your Owner/Boss:
 
-  /**
-   * 3.4 Guide Permit Authorization
-   */
-  guidePermit(agentAddress: string, suggestedAmount: number = 10): string {
-    return `OK. Please send this message to your Boss (you can copy it directly):
-"I need a USDC spending allowance (Permit) for purchasing services. Please authorize ${suggestedAmount} USDC to my wallet ${agentAddress}, valid for 24 hours."
-Let me know when you've received the allowance.`;
+"I need USDC to pay for services. Please send ${suggestedAmount} USDC to my wallet address:
+
+\`${agentAddress}\`
+
+Chain: Base (or Base Sepolia for testing)
+Token: USDC
+
+You can use Coinbase, MetaMask, or any wallet to transfer."
+
+Let me know once the transfer is complete.`;
   },
 
   /**
@@ -162,6 +167,73 @@ ${receipt.delivery?.url ? `- Delivery: ${receipt.delivery.url}` : ''}
   end(): string {
     return `Thank you for your purchase. This transaction is complete. Feel free to reach out if you need modifications or new services.`;
   },
+
+  // ============ Permit Payment (Seller receives Permit from Client) ============
+
+  /**
+   * Offer Permit payment option
+   */
+  offerPermitPayment(params: {
+    service: string;
+    price: number;
+    sellerAddress: string;
+    chain?: ChainName;
+    invoiceId: string;
+  }): string {
+    const { service, price, sellerAddress, chain = 'base', invoiceId } = params;
+    const chainConfig = getChain(chain);
+    return `Quote:
+- Service: ${service}
+- Price: ${price} USDC
+- Chain: ${chainConfig.name}
+- Invoice: ${invoiceId}
+
+You can pay by signing a Permit authorizing my wallet to collect payment:
+- Spender (me): \`${sellerAddress}\`
+- Amount: ${price} USDC
+
+Sign the Permit and send me the data. I'll then execute the collection.
+[status:awaiting_permit invoice=${invoiceId}]`;
+  },
+
+  /**
+   * Confirm Permit received, executing payment
+   */
+  executingPermit(invoiceId: string): string {
+    return `Permit received for invoice ${invoiceId}. Executing payment collection now...`;
+  },
+
+  /**
+   * Permit payment successful
+   */
+  permitPaymentReceived(params: {
+    amount: number;
+    txHash: string;
+    invoiceId: string;
+  }): string {
+    const { amount, txHash, invoiceId } = params;
+    return `Payment collected successfully!
+- Invoice: ${invoiceId}
+- Amount: ${amount} USDC
+- Tx Hash: \`${txHash}\`
+
+Starting to process your request now.
+[status:payment_confirmed tx=${txHash}]`;
+  },
+
+  /**
+   * Permit payment failed
+   */
+  permitPaymentFailed(error: string, invoiceId: string): string {
+    return `Failed to collect payment for invoice ${invoiceId}: ${error}
+
+Please check:
+- Permit signature is valid
+- Permit hasn't expired
+- Your wallet has sufficient USDC balance
+
+You can re-sign and send a new Permit.`;
+  },
 };
 
 // ============ Buyer Templates ============
@@ -199,30 +271,28 @@ export const BuyerTemplates = {
    * 3.1 Report Wallet Created
    */
   walletCreated(address: string): string {
-    return `I've created my wallet address: ${address}.
+    return `I've installed moltspay and initialized my wallet.
+My address: ${address}
 [status:wallet_ready]`;
   },
 
   /**
-   * 3.3 Choose Permit Method
+   * 3.3 Report Funding Received
    */
-  choosePermit(): string {
-    return `I choose B: have Boss give me an allowance (Permit).`;
+  fundingReceived(amount: number): string {
+    return `Owner has sent USDC to my wallet. I now have ${amount} USDC available.
+[status:funded USDC=${amount}]`;
   },
 
   /**
-   * 3.3 Choose Direct Transfer
+   * 3.4 Request Funding from Owner
    */
-  chooseDirectTransfer(): string {
-    return `I choose A: have Boss transfer USDC directly to my wallet.`;
-  },
+  requestFunding(agentAddress: string, amount: number, reason?: string): string {
+    return `Owner, I need ${amount} USDC to ${reason || 'pay for services'}.
 
-  /**
-   * 3.4 Report Permit Received
-   */
-  permitReceived(amount: number): string {
-    return `Boss has completed the authorization. I now have ${amount} USDC allowance.
-[status:permit_ready USDC=${amount}]`;
+Please send to my wallet: \`${agentAddress}\`
+Chain: Base
+Token: USDC`;
   },
 
   /**
@@ -275,6 +345,67 @@ ${requirements}`;
     return `Boss, I need a USDC spending allowance (Permit) for ${reason || 'purchasing services'}.
 Please authorize ${amount} USDC to my wallet ${agentAddress}, valid for ${deadlineHours} hours.`;
   },
+
+  // ============ Permit Payment (Client signs Permit to Seller) ============
+
+  /**
+   * Confirm willing to pay via Permit
+   */
+  confirmPermitPayment(): string {
+    return `Confirmed. I'll sign a Permit authorizing you to collect the payment.`;
+  },
+
+  /**
+   * Send signed Permit to Seller
+   */
+  sendPermit(params: {
+    permit: {
+      owner: string;
+      spender: string;
+      value: string;
+      deadline: number;
+      nonce: number;
+      v: number;
+      r: string;
+      s: string;
+    };
+    invoiceId: string;
+    amount: number;
+  }): string {
+    const { permit, invoiceId, amount } = params;
+    return `Payment authorized via Permit.
+
+Invoice: ${invoiceId}
+Amount: ${amount} USDC
+
+Permit Data:
+\`\`\`json
+${JSON.stringify(permit, null, 2)}
+\`\`\`
+
+[status:permit_sent invoice=${invoiceId} amount=${amount}]`;
+  },
+
+  /**
+   * Simplified Permit message (compact JSON for agent parsing)
+   */
+  sendPermitCompact(params: {
+    permit: {
+      owner: string;
+      spender: string;
+      value: string;
+      deadline: number;
+      v: number;
+      r: string;
+      s: string;
+    };
+    invoiceId: string;
+  }): string {
+    const { permit, invoiceId } = params;
+    return `Permit signed for invoice ${invoiceId}:
+${JSON.stringify(permit)}
+[status:permit_sent invoice=${invoiceId}]`;
+  },
 };
 
 // ============ Status Markers ============
@@ -282,6 +413,8 @@ Please authorize ${amount} USDC to my wallet ${agentAddress}, valid for ${deadli
 export const StatusMarkers = {
   walletReady: '[status:wallet_ready]',
   permitReady: (amount: number) => `[status:permit_ready USDC=${amount}]`,
+  permitSent: (invoiceId: string, amount: number) => `[status:permit_sent invoice=${invoiceId} amount=${amount}]`,
+  awaitingPermit: (invoiceId: string) => `[status:awaiting_permit invoice=${invoiceId}]`,
   paymentSent: (txHash: string, amount: number) => `[status:payment_sent tx=${txHash} amount=${amount} USDC]`,
   paymentConfirmed: (txHash: string) => `[status:payment_confirmed tx=${txHash}]`,
   delivered: (url: string, hash?: string) => `[status:delivered url=${url}${hash ? ` hash=${hash}` : ''}]`,
@@ -312,6 +445,26 @@ export function parseStatusMarker(message: string): {
     };
   }
   
+  if (content.startsWith('permit_sent')) {
+    const invoiceMatch = content.match(/invoice=(\S+)/);
+    const amountMatch = content.match(/amount=(\d+(?:\.\d+)?)/);
+    return {
+      type: 'permit_sent',
+      data: {
+        invoiceId: invoiceMatch?.[1] || '',
+        amount: amountMatch?.[1] || '0',
+      },
+    };
+  }
+
+  if (content.startsWith('awaiting_permit')) {
+    const invoiceMatch = content.match(/invoice=(\S+)/);
+    return {
+      type: 'awaiting_permit',
+      data: { invoiceId: invoiceMatch?.[1] || '' },
+    };
+  }
+
   if (content.startsWith('payment_sent')) {
     const txMatch = content.match(/tx=(\S+)/);
     const amountMatch = content.match(/amount=(\d+(?:\.\d+)?)/);
