@@ -29,6 +29,16 @@ export {
   type VerifyPaymentResult,
 } from './verify/index.js';
 
+// 支付引导
+export {
+  generatePaymentGuide,
+  generatePaymentReminder,
+  generateWalletGuide,
+  extractTransactionHash,
+  hasTransactionHash,
+  type PaymentGuideParams,
+} from './guide/index.js';
+
 // 链配置
 export { CHAINS, getChain, listChains, getChainById, ERC20_ABI } from './chains/index.js';
 

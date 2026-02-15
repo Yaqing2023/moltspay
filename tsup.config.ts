@@ -9,6 +9,7 @@ export default defineConfig({
     'chains/index': 'src/chains/index.ts',
     'orders/index': 'src/orders/index.ts',
     'verify/index': 'src/verify/index.ts',
+    'guide/index': 'src/guide/index.ts',
   },
   format: ['cjs', 'esm'],
   dts: true,
