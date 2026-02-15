@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.3] - 2026-02-16
+
+### Fixed
+- Corrected x402 endpoint URL to `https://juai8.com/zen7/v1/video/generate`
+
 ## [0.4.2] - 2026-02-16
 
 ### Changed

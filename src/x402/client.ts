@@ -14,7 +14,7 @@
  * const client = await createX402Client({ chain: 'base', useCDP: true });
  * 
  * // Make request - payment handled automatically
- * const response = await client.fetch('https://juai8.com/x402pay');
+ * const response = await client.fetch('https://juai8.com/zen7/v1/video/generate');
  * ```
  */
 
@@ -136,7 +136,7 @@ async function createCDPX402Client(config: X402ClientConfig): Promise<X402Client
  * const client = await createX402Client({ chain: 'base' });
  * 
  * // Request paid API - payment handled automatically
- * const response = await client.fetch('https://juai8.com/x402pay', {
+ * const response = await client.fetch('https://juai8.com/zen7/v1/video/generate', {
  *   method: 'POST',
  *   headers: { 'Content-Type': 'application/json' },
  *   body: JSON.stringify({ prompt: 'a cat dancing' })
@@ -166,7 +166,7 @@ export async function createX402Client(config: X402ClientConfig = {}): Promise<X
  * ```typescript
  * import { x402Fetch } from 'moltspay/x402';
  * 
- * const response = await x402Fetch('https://juai8.com/x402pay', {
+ * const response = await x402Fetch('https://juai8.com/zen7/v1/video/generate', {
  *   method: 'POST',
  *   body: JSON.stringify({ prompt: 'a cat dancing' })
  * }, { chain: 'base' });

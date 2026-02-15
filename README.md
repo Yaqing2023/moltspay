@@ -277,7 +277,7 @@ import { createX402Client } from 'moltspay/x402';
 
 const client = await createX402Client({ chain: 'base' });
 
-const response = await client.fetch('https://juai8.com/x402pay', {
+const response = await client.fetch('https://juai8.com/zen7/v1/video/generate', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ prompt: 'a cat dancing' })
@@ -292,7 +292,7 @@ const result = await response.json();
 import { x402Fetch } from 'moltspay/x402';
 
 // Single paid request
-const response = await x402Fetch('https://juai8.com/x402pay', {
+const response = await x402Fetch('https://juai8.com/zen7/v1/video/generate', {
   method: 'POST',
   body: JSON.stringify({ prompt: 'a cat dancing' })
 }, { chain: 'base' });
