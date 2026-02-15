@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.2] - 2026-02-16
+
+### Changed
+- **Docs overhaul:** Clarified that local wallet + x402 = NO GAS needed for client agents
+- Moved CDP wallet to "optional/advanced" section (not recommended for most users)
+- Added clear explanation of EIP-3009 signature flow (client signs, facilitator pays gas)
+
+### Fixed
+- Updated x402 example URLs to use actual endpoint: `https://juai8.com/x402pay`
+
 ## [0.4.1] - 2026-02-16
 
 ### Fixed

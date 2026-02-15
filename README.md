@@ -251,15 +251,32 @@ const status = parseStatusMarker('[status:payment_sent tx=0xabc amount=3.99 USDC
 
 x402 is an open standard for HTTP-native payments. When a server returns 402 Payment Required, the client can pay and retry automatically.
 
-### Quick Start with x402
+**Key benefit: Client agents need NO gas!** x402 uses EIP-3009 signatures - the client only signs, and Coinbase's facilitator executes on-chain (paying gas).
+
+### Client Agent Setup (Simple, No Gas Needed)
+
+```bash
+# 1. Initialize wallet (generates local keypair)
+npx moltspay init --chain base
+
+# Output:
+# ✅ Local wallet initialized
+#    Address: 0xABC123...
+#    Storage: ~/.moltspay
+```
+
+```bash
+# 2. Tell your owner to send USDC to your address
+#    Owner sends USDC via Coinbase/MetaMask - just a normal transfer
+#    NO ETH/gas needed in your wallet!
+```
 
 ```typescript
+// 3. Make paid requests - payment handled automatically
 import { createX402Client } from 'moltspay/x402';
 
-// Create x402-enabled client (uses local wallet)
 const client = await createX402Client({ chain: 'base' });
 
-// Make request - payment handled automatically
 const response = await client.fetch('https://juai8.com/x402pay', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
@@ -274,82 +291,59 @@ const result = await response.json();
 ```typescript
 import { x402Fetch } from 'moltspay/x402';
 
-// Single paid request (creates client internally)
+// Single paid request
 const response = await x402Fetch('https://juai8.com/x402pay', {
   method: 'POST',
   body: JSON.stringify({ prompt: 'a cat dancing' })
 }, { chain: 'base' });
 ```
 
-### x402 Flow
+### How x402 Works (No Gas for Client)
 
 ```
-Client Agent                              Service Provider
-     │                                         │
-     │  POST /api/video                        │
-     │  ────────────────────────────────────>  │
-     │                                         │
-     │  402 Payment Required                   │
-     │  X-PAYMENT-REQUIRED: {price, wallet}    │
-     │  <────────────────────────────────────  │
-     │                                         │
-     │  [moltspay auto-signs payment]          │
-     │                                         │
-     │  POST /api/video                        │
-     │  X-PAYMENT: {signature, auth}           │
-     │  ────────────────────────────────────>  │
-     │                                         │
-     │  200 OK + result                        │
-     │  <────────────────────────────────────  │
+Client Agent                    Server                     Facilitator (Coinbase)
+     │                            │                              │
+     │ POST /x402pay              │                              │
+     │ ────────────────────────>  │                              │
+     │                            │                              │
+     │ 402 + payment requirements │                              │
+     │ <────────────────────────  │                              │
+     │                            │                              │
+     │ [Sign EIP-3009]            │                              │
+     │ (OFF-CHAIN, NO GAS!)       │                              │
+     │                            │                              │
+     │ POST + signature           │                              │
+     │ ────────────────────────>  │ Forward signature            │
+     │                            │ ─────────────────────────>   │
+     │                            │                              │
+     │                            │   Execute transfer on-chain  │
+     │                            │   (FACILITATOR PAYS GAS)     │
+     │                            │ <─────────────────────────   │
+     │                            │                              │
+     │ 200 OK + result            │                              │
+     │ <────────────────────────  │                              │
 ```
 
-## CDP Wallet Support (v0.4.0+)
+**Client agent requirements:**
+- ✅ Local wallet (just for signing)
+- ✅ USDC balance (owner sends once)
+- ❌ NO ETH/gas needed
+- ❌ NO API credentials needed
 
-Use Coinbase Developer Platform (CDP) for hosted wallet management.
+## CDP Wallet Support (Optional, Advanced)
 
-### Initialize CDP Wallet
+CDP wallet is an **optional alternative** for cases where you want Coinbase to host the wallet. Most users should use the simple local wallet above.
 
 ```bash
-# Set CDP credentials
+# Only if you have CDP credentials and want hosted wallet
 export CDP_API_KEY_ID=your-key-id
 export CDP_API_KEY_SECRET=your-key-secret
-
-# Initialize CDP wallet
 npx moltspay init --cdp --chain base
 ```
 
-### Use CDP Wallet with x402
-
 ```typescript
-import { createX402Client } from 'moltspay/x402';
-
-// Create x402 client with CDP wallet
-const client = await createX402Client({ 
-  chain: 'base', 
-  useCDP: true  // Use CDP instead of local wallet
-});
-
-// Make paid requests
-const response = await client.fetch('https://juai8.com/x402pay');
-```
-
-### Direct CDP Wallet Usage
-
-```typescript
-import { CDPWallet } from 'moltspay/cdp';
-
-const wallet = new CDPWallet({ chain: 'base' });
-
-// Check balance
-const balance = await wallet.getBalance();
-console.log('USDC:', balance.usdc);
-
-// Transfer USDC
-const result = await wallet.transfer({
-  to: '0xRecipient...',
-  amount: 0.99
-});
-console.log('Tx:', result.txHash);
+// Use CDP wallet
+const client = await createX402Client({ chain: 'base', useCDP: true });
 ```
 
 ## API Reference
