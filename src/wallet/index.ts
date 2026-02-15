@@ -17,3 +17,10 @@ export {
   type TransferWithPermitParams,
   type TransferWithPermitResult,
 } from './PermitWallet.js';
+export {
+  signPermit,
+  PermitSigner,
+  type SignPermitParams,
+  type SignPermitResult,
+  type SignPermitConfig,
+} from './signPermit.js';

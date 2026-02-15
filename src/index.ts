@@ -18,6 +18,8 @@ export {
   walletExists,
   PermitWallet,
   formatPermitRequest,
+  signPermit,
+  PermitSigner,
   type CreateWalletOptions,
   type CreateWalletResult,
   type WalletData,
@@ -25,6 +27,9 @@ export {
   type PermitData,
   type TransferWithPermitParams,
   type TransferWithPermitResult,
+  type SignPermitParams,
+  type SignPermitResult,
+  type SignPermitConfig,
 } from './wallet/index.js';
 
 // Order management
