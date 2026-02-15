@@ -1,10 +1,10 @@
 /**
- * PaymentAgent - 核心支付代理
+ * PaymentAgent - Core Payment Agent
  * 
- * 功能：
- * - 生成 Invoice（支付请求）
- * - 验证链上支付
- * - 生成钱包深度链接
+ * Features:
+ * - Generate Invoice (payment request)
+ * - Verify on-chain payment
+ * - Generate wallet deep link
  */
 
 import { ethers } from 'ethers';
@@ -49,7 +49,7 @@ export class PaymentAgent {
   }
 
   /**
-   * 生成支付请求（Invoice）
+   * Generate payment request（Invoice）
    */
   createInvoice(params: CreateInvoiceParams): Invoice {
     const expiresMinutes = params.expiresMinutes || 30;
@@ -80,19 +80,19 @@ export class PaymentAgent {
   }
 
   /**
-   * 生成钱包深度链接（支持 MetaMask 等）
+   * Generate wallet deep link（supports MetaMask etc）
    */
   generateDeepLink(amount: number, memo: string): string {
-    const amountWei = Math.floor(amount * 1e6); // USDC 6位小数
+    const amountWei = Math.floor(amount * 1e6); // USDC 6 decimals
     return `https://metamask.app.link/send/${this.chainConfig.usdc}@${this.chainConfig.chainId}/transfer?address=${this.walletAddress}&uint256=${amountWei}`;
   }
 
   /**
-   * 验证链上支付
+   * Verify on-chain payment
    */
   async verifyPayment(txHash: string, options: VerifyOptions = {}): Promise<VerifyResult> {
     try {
-      // 确保 txHash 格式正确
+      // Ensure txHash format is correct
       if (!txHash.startsWith('0x')) {
         txHash = '0x' + txHash;
       }
@@ -107,29 +107,29 @@ export class PaymentAgent {
         return { verified: false, error: 'Transaction failed' };
       }
 
-      // Transfer 事件签名
+      // Transfer event signature
       const transferTopic = ethers.id('Transfer(address,address,uint256)');
       const usdcAddress = this.chainConfig.usdc.toLowerCase();
 
       for (const log of receipt.logs) {
-        // 检查是否是 USDC 合约的 Transfer 事件
+        // Check if USDC contract Transfer event
         if (
           log.address.toLowerCase() === usdcAddress &&
           log.topics.length >= 3 &&
           log.topics[0] === transferTopic
         ) {
-          // 解析 from, to, amount
+          // Parse from, to, amount
           const from = ethers.getAddress('0x' + log.topics[1].slice(-40));
           const to = ethers.getAddress('0x' + log.topics[2].slice(-40));
           const amountWei = BigInt(log.data);
           const amount = Number(amountWei) / 1e6;
 
-          // 检查接收地址
+          // Check recipient address
           if (to.toLowerCase() !== this.walletAddress.toLowerCase()) {
             continue;
           }
 
-          // 检查金额（允许误差）
+          // Check amount (allow tolerance)
           const tolerance = options.tolerance ?? 0.01;
           if (options.expectedAmount) {
             const diff = Math.abs(amount - options.expectedAmount);
@@ -164,7 +164,7 @@ export class PaymentAgent {
   }
 
   /**
-   * 扫描最近转账（按金额匹配）
+   * Scan recent transfers (match by amount)
    */
   async scanRecentTransfers(expectedAmount: number, timeoutMinutes: number = 30): Promise<VerifyResult> {
     try {
@@ -172,7 +172,7 @@ export class PaymentAgent {
       const blocksPerMinute = Math.ceil(60 / this.chainConfig.avgBlockTime);
       const fromBlock = currentBlock - (timeoutMinutes * blocksPerMinute);
 
-      // 使用 getLogs 扫描 Transfer 事件
+      // Use getLogs to scan Transfer events
       const transferTopic = ethers.id('Transfer(address,address,uint256)');
       const recipientTopic = ethers.zeroPadValue(this.walletAddress, 32);
 
@@ -187,7 +187,7 @@ export class PaymentAgent {
         const amountWei = BigInt(log.data);
         const amount = Number(amountWei) / 1e6;
 
-        // 按金额匹配
+        // Match by amount
         if (Math.abs(amount - expectedAmount) < 0.01) {
           const from = ethers.getAddress('0x' + log.topics[1].slice(-40));
           
@@ -211,7 +211,7 @@ export class PaymentAgent {
   }
 
   /**
-   * 获取钱包余额
+   * Get wallet balance
    */
   async getBalance(address?: string): Promise<WalletBalance> {
     const addr = address || this.walletAddress;
@@ -230,7 +230,7 @@ export class PaymentAgent {
   }
 
   /**
-   * 格式化 Invoice 为人类可读消息
+   * Format Invoice as human-readable message
    */
   formatInvoiceMessage(invoice: Invoice, includeJson: boolean = true): string {
     let msg = `🎬 **Payment Request**

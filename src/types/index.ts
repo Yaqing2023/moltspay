@@ -1,8 +1,8 @@
 /**
- * Payment Agent 类型定义
+ * Payment Agent Type Definitions
  */
 
-// ============ 链配置 ============
+// ============ Chain Config ============
 
 export interface ChainConfig {
   name: string;
@@ -16,7 +16,7 @@ export interface ChainConfig {
 
 export type ChainName = 'base' | 'base_sepolia' | 'polygon' | 'ethereum' | 'sepolia';
 
-// ============ Invoice 协议 ============
+// ============ Invoice Protocol ============
 
 export interface Invoice {
   type: 'payment_request';
@@ -45,7 +45,7 @@ export interface CreateInvoiceParams {
   metadata?: Record<string, unknown>;
 }
 
-// ============ 支付验证 ============
+// ============ Payment Verification ============
 
 export interface VerifyResult {
   verified: boolean;
@@ -63,10 +63,10 @@ export interface VerifyResult {
 
 export interface VerifyOptions {
   expectedAmount?: number;
-  tolerance?: number; // 允许的金额误差百分比，默认 0.01 (1%)
+  tolerance?: number; // Amount tolerance percentage, default 0.01 (1%)
 }
 
-// ============ 钱包 ============
+// ============ Wallet ============
 
 export interface WalletBalance {
   address: string;
@@ -94,11 +94,11 @@ export interface TransferParams {
   requester?: string;
 }
 
-// ============ 安全控制 ============
+// ============ Security Controls ============
 
 export interface SecurityLimits {
-  singleMax: number;      // 单笔最大金额
-  dailyMax: number;       // 日最大金额
+  singleMax: number;      // Single transaction max
+  dailyMax: number;       // Daily max
   requireWhitelist: boolean;
 }
 
@@ -121,7 +121,7 @@ export interface PendingTransfer {
   status: 'pending' | 'approved' | 'rejected' | 'executed';
 }
 
-// ============ 审计日志 ============
+// ============ Audit Log ============
 
 export interface AuditEntry {
   timestamp: number;
@@ -189,11 +189,11 @@ export interface PermitExecuteResult {
   error?: string;
 }
 
-// ============ Agent 配置 ============
+// ============ Agent Config ============
 
 export interface PaymentAgentConfig {
   chain?: ChainName;
   walletAddress?: string;
-  privateKey?: string;   // 可选，仅用于发送交易
-  rpcUrl?: string;       // 自定义 RPC
+  privateKey?: string;   // Optional, only for sending transactions
+  rpcUrl?: string;       // Custom RPC
 }

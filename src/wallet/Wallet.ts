@@ -1,9 +1,9 @@
 /**
- * Wallet - 基础托管钱包
+ * Wallet - Basic Custody Wallet
  * 
- * 功能：
- * - 查询余额
- * - 发送 USDC 转账
+ * Features:
+ * - Query balance
+ * - Send USDC transfer
  */
 
 import { ethers } from 'ethers';
@@ -52,7 +52,7 @@ export class Wallet {
   }
 
   /**
-   * 获取钱包余额
+   * Get wallet balance
    */
   async getBalance(): Promise<WalletBalance> {
     const [ethBalance, usdcBalance] = await Promise.all([
@@ -69,17 +69,17 @@ export class Wallet {
   }
 
   /**
-   * 发送 USDC 转账
+   * Send USDC transfer
    */
   async transfer(to: string, amount: number): Promise<TransferResult> {
     try {
-      // 验证地址
+      // Validate address
       to = ethers.getAddress(to);
       
-      // 转换金额（USDC 6位小数）
+      // Convert amount (USDC 6 decimals)
       const amountWei = BigInt(Math.floor(amount * 1e6));
 
-      // 检查余额
+      // Check balance
       const balance = await this.usdcContract.balanceOf(this.address);
       if (BigInt(balance) < amountWei) {
         return {
@@ -88,7 +88,7 @@ export class Wallet {
         };
       }
 
-      // 发送交易
+      // Send transaction
       const tx = await this.usdcContract.transfer(to, amountWei);
       const receipt = await tx.wait();
 
@@ -119,7 +119,7 @@ export class Wallet {
   }
 
   /**
-   * 获取 ETH 余额
+   * Get ETH balance
    */
   async getEthBalance(): Promise<string> {
     const balance = await this.provider.getBalance(this.address);
@@ -127,7 +127,7 @@ export class Wallet {
   }
 
   /**
-   * 获取 USDC 余额
+   * Get USDC balance
    */
   async getUsdcBalance(): Promise<string> {
     const balance = await this.usdcContract.balanceOf(this.address);

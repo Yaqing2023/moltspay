@@ -1,5 +1,5 @@
 /**
- * 订单管理模块
+ * Order Management Module
  */
 
 import { randomBytes } from 'crypto';
@@ -21,12 +21,12 @@ export interface Order {
 }
 
 export type OrderStatus = 
-  | 'pending'      // 等待支付
-  | 'paid'         // 已支付
-  | 'generating'   // 生成中
-  | 'completed'    // 已完成
-  | 'failed'       // 失败
-  | 'cancelled';   // 已取消
+  | 'pending'      // Pending payment
+  | 'paid'         // Paid
+  | 'generating'   // Generating
+  | 'completed'    // Completed
+  | 'failed'       // Failed
+  | 'cancelled';   // Cancelled
 
 export interface CreateOrderParams {
   prompt: string;
@@ -44,7 +44,7 @@ export interface OrderStore {
 }
 
 /**
- * 内存订单存储（默认实现）
+ * In-memory order store (default implementation)
  */
 export class MemoryOrderStore implements OrderStore {
   private orders: Map<string, Order> = new Map();
@@ -79,7 +79,7 @@ export class MemoryOrderStore implements OrderStore {
 }
 
 /**
- * 订单管理器
+ * Order Manager
  */
 export class OrderManager {
   private store: OrderStore;
@@ -97,14 +97,14 @@ export class OrderManager {
   }
 
   /**
-   * 生成订单ID
+   * Generate order ID
    */
   private generateOrderId(): string {
     return 'vo_' + randomBytes(4).toString('hex');
   }
 
   /**
-   * 创建订单
+   * Create order
    */
   async createOrder(params: CreateOrderParams): Promise<Order> {
     const order: Order = {
@@ -123,14 +123,14 @@ export class OrderManager {
   }
 
   /**
-   * 获取订单
+   * Get order
    */
   async getOrder(orderId: string): Promise<Order | null> {
     return this.store.get(orderId);
   }
 
   /**
-   * 更新订单
+   * Update order
    */
   async updateOrder(orderId: string, updates: Partial<Order>): Promise<Order | null> {
     const order = await this.store.get(orderId);
@@ -142,12 +142,12 @@ export class OrderManager {
   }
 
   /**
-   * 查找用户的待支付订单
+   * Find user pending orders
    */
   async findPendingOrder(userId: string): Promise<Order | null> {
     const orders = await this.store.findByUser(userId, 'pending');
     
-    // 返回24小时内的待支付订单
+    // Return pending orders within 24 hours
     const now = Date.now();
     for (const order of orders) {
       const age = now - new Date(order.createdAt).getTime();
@@ -159,7 +159,7 @@ export class OrderManager {
   }
 
   /**
-   * 标记订单为已支付
+   * Mark order as paid
    */
   async markAsPaid(orderId: string, txHash: string, payerAddress?: string): Promise<Order | null> {
     return this.updateOrder(orderId, {
@@ -171,14 +171,14 @@ export class OrderManager {
   }
 
   /**
-   * 标记订单为生成中
+   * Mark order as generating
    */
   async markAsGenerating(orderId: string): Promise<Order | null> {
     return this.updateOrder(orderId, { status: 'generating' });
   }
 
   /**
-   * 标记订单为完成
+   * Mark order as completed
    */
   async markAsCompleted(orderId: string, videoPath: string): Promise<Order | null> {
     return this.updateOrder(orderId, {
@@ -188,7 +188,7 @@ export class OrderManager {
   }
 
   /**
-   * 标记订单为失败
+   * Mark order as failed
    */
   async markAsFailed(orderId: string, error: string): Promise<Order | null> {
     return this.updateOrder(orderId, {
@@ -198,7 +198,7 @@ export class OrderManager {
   }
 
   /**
-   * 取消订单
+   * Cancel order
    */
   async cancelOrder(orderId: string): Promise<Order | null> {
     return this.updateOrder(orderId, { status: 'cancelled' });

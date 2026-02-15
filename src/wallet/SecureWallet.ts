@@ -1,12 +1,12 @@
 /**
- * SecureWallet - 安全托管钱包
+ * SecureWallet - Secure Custody Wallet
  * 
- * 在基础 Wallet 之上增加：
- * - 单笔限额控制
- * - 日限额控制
- * - 白名单机制
- * - 审计日志
- * - 超限审批队列
+ * Built on top of basic Wallet with：
+ * - Single transaction limit
+ * - Daily limit
+ * - Whitelist mechanism
+ * - Audit logging
+ * - Over-limit approval queue
  */
 
 import { Wallet, type WalletConfig } from './Wallet.js';
@@ -20,8 +20,8 @@ import type {
 } from '../types/index.js';
 
 const DEFAULT_LIMITS: SecurityLimits = {
-  singleMax: 100,      // 单笔最大 $100
-  dailyMax: 1000,      // 日最大 $1000
+  singleMax: 100,      // Single max $100
+  dailyMax: 1000,      // Daily max $1000
   requireWhitelist: true,
 };
 
@@ -46,28 +46,28 @@ export class SecureWallet {
   }
 
   /**
-   * 获取钱包地址
+   * Get wallet address
    */
   get address(): string {
     return this.wallet.address;
   }
 
   /**
-   * 获取余额
+   * Get balance
    */
   async getBalance() {
     return this.wallet.getBalance();
   }
 
   /**
-   * 安全转账（带限额和白名单检查）
+   * Secure transfer (with limit and whitelist checks)
    * 
-   * 支持两种调用方式:
+   * Supports two calling methods:
    * - transfer({ to, amount, reason?, requester? })
    * - transfer(to, amount)
    */
   async transfer(paramsOrTo: TransferParams | string, amountArg?: number | string): Promise<TransferResult> {
-    // 支持两种调用方式
+    // Supports two calling methods
     let params: TransferParams;
     if (typeof paramsOrTo === 'string') {
       params = { 
@@ -82,7 +82,7 @@ export class SecureWallet {
     const toAddress = to.toLowerCase();
     const requestId = `tr_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
-    // 记录请求
+    // Record request
     await this.auditLog.log({
       action: 'transfer_request',
       request_id: requestId,
@@ -93,7 +93,7 @@ export class SecureWallet {
       requester,
     });
 
-    // 1. 白名单检查
+    // 1. Whitelist check
     if (this.limits.requireWhitelist && !this.whitelist.has(toAddress)) {
       await this.auditLog.log({
         action: 'transfer_failed',
@@ -103,9 +103,9 @@ export class SecureWallet {
       return { success: false, error: `Address not in whitelist: ${to}` };
     }
 
-    // 2. 单笔限额检查
+    // 2. Single limit check
     if (amount > this.limits.singleMax) {
-      // 加入审批队列
+      // Add to approval queue
       const pending: PendingTransfer = {
         id: requestId,
         to,
@@ -129,7 +129,7 @@ export class SecureWallet {
       };
     }
 
-    // 3. 日限额检查
+    // 3. Daily limit check
     this.updateDailyTotal();
     if (this.dailyTotal + amount > this.limits.dailyMax) {
       const pending: PendingTransfer = {
@@ -155,10 +155,10 @@ export class SecureWallet {
       };
     }
 
-    // 4. 执行转账
+    // 4. Execute transfer
     const result = await this.wallet.transfer(to, amount);
 
-    // 5. 记录结果
+    // 5. Record result
     if (result.success) {
       this.dailyTotal += amount;
       await this.auditLog.log({
@@ -183,7 +183,7 @@ export class SecureWallet {
   }
 
   /**
-   * 审批待处理转账
+   * Approve pending transfer
    */
   async approve(requestId: string, approver: string): Promise<TransferResult> {
     const pending = this.pendingTransfers.get(requestId);
@@ -203,7 +203,7 @@ export class SecureWallet {
 
     pending.status = 'approved';
 
-    // 执行转账（跳过限额检查）
+    // Execute transfer（Skip limit checks）
     const result = await this.wallet.transfer(pending.to, pending.amount);
 
     if (result.success) {
@@ -233,7 +233,7 @@ export class SecureWallet {
   }
 
   /**
-   * 拒绝待处理转账
+   * Reject pending transfer
    */
   async reject(requestId: string, rejecter: string, reason?: string): Promise<void> {
     const pending = this.pendingTransfers.get(requestId);
@@ -251,7 +251,7 @@ export class SecureWallet {
   }
 
   /**
-   * 添加白名单地址
+   * Add to whitelist
    */
   async addToWhitelist(address: string, addedBy: string): Promise<void> {
     const addr = address.toLowerCase();
@@ -266,7 +266,7 @@ export class SecureWallet {
   }
 
   /**
-   * 移除白名单地址
+   * Remove from whitelist
    */
   async removeFromWhitelist(address: string, removedBy: string): Promise<void> {
     const addr = address.toLowerCase();
@@ -281,14 +281,14 @@ export class SecureWallet {
   }
 
   /**
-   * 检查地址是否在白名单
+   * Check if address is whitelisted
    */
   isWhitelisted(address: string): boolean {
     return this.whitelist.has(address.toLowerCase());
   }
 
   /**
-   * 获取待处理转账列表
+   * Get pending transfers list
    */
   getPendingTransfers(): PendingTransfer[] {
     return Array.from(this.pendingTransfers.values())
@@ -296,14 +296,14 @@ export class SecureWallet {
   }
 
   /**
-   * 获取当前限额配置
+   * Get current limit config
    */
   getLimits(): SecurityLimits {
     return { ...this.limits };
   }
 
   /**
-   * 获取今日已用额度
+   * Get daily used amount
    */
   getDailyUsed(): number {
     this.updateDailyTotal();
@@ -311,7 +311,7 @@ export class SecureWallet {
   }
 
   /**
-   * 更新日限额计数器
+   * Update daily limit counter
    */
   private updateDailyTotal(): void {
     const today = new Date().toISOString().slice(0, 10);

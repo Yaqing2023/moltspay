@@ -1,10 +1,10 @@
 /**
- * AuditLog - 不可篡改审计日志
+ * AuditLog - Immutable Audit Log
  * 
- * 特点：
- * - 链式哈希，任何修改都会破坏链条
- * - 按日期分文件存储
- * - JSONL 格式便于追加和解析
+ * Features:
+ * - Hash-chained, any modification breaks the chain
+ * - Stored by date in separate files
+ * - JSONL format for easy append and parse
  */
 
 import * as fs from 'fs';
@@ -35,7 +35,7 @@ export class AuditLog {
   }
 
   /**
-   * 记录审计日志
+   * Record audit log
    */
   async log(params: LogParams): Promise<AuditEntry> {
     const now = new Date();
@@ -52,15 +52,15 @@ export class AuditLog {
       reason: params.reason,
       requester: params.requester,
       prev_hash: this.lastHash,
-      hash: '', // 计算后填充
+      hash: '', // Filled after calculation
       metadata: params.metadata,
     };
 
-    // 计算哈希（不包含 hash 字段本身）
+    // Calculate hash (excluding hash field itself)
     entry.hash = this.calculateHash(entry);
     this.lastHash = entry.hash;
 
-    // 写入文件
+    // Write to file
     const filePath = this.getFilePath(now);
     const line = JSON.stringify(entry) + '\n';
     fs.appendFileSync(filePath, line, 'utf-8');
@@ -69,7 +69,7 @@ export class AuditLog {
   }
 
   /**
-   * 读取指定日期的日志
+   * Read logs for specified date
    */
   read(date?: Date): AuditEntry[] {
     const filePath = this.getFilePath(date || new Date());
@@ -85,7 +85,7 @@ export class AuditLog {
   }
 
   /**
-   * 验证日志完整性
+   * Verify log integrity
    */
   verify(date?: Date): { valid: boolean; errors: string[] } {
     const entries = this.read(date);
@@ -94,13 +94,13 @@ export class AuditLog {
     for (let i = 0; i < entries.length; i++) {
       const entry = entries[i];
       
-      // 验证哈希
+      // Verify hash
       const expectedHash = this.calculateHash(entry);
       if (entry.hash !== expectedHash) {
         errors.push(`Entry ${i}: hash mismatch (expected ${expectedHash}, got ${entry.hash})`);
       }
 
-      // 验证链接
+      // Verify chain
       if (i > 0 && entry.prev_hash !== entries[i - 1].hash) {
         errors.push(`Entry ${i}: prev_hash mismatch`);
       }
@@ -110,7 +110,7 @@ export class AuditLog {
   }
 
   /**
-   * 搜索日志
+   * Search logs
    */
   search(filter: Partial<{
     action: AuditAction;
@@ -124,7 +124,7 @@ export class AuditLog {
     const startDate = filter.startDate || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const endDate = filter.endDate || new Date();
 
-    // 遍历日期范围
+    // Iterate date range
     const current = new Date(startDate);
     while (current <= endDate) {
       const entries = this.read(current);
@@ -149,7 +149,7 @@ export class AuditLog {
   }
 
   /**
-   * 获取日志文件路径
+   * Get log file path
    */
   private getFilePath(date: Date): string {
     const dateStr = date.toISOString().slice(0, 10);
@@ -157,7 +157,7 @@ export class AuditLog {
   }
 
   /**
-   * 计算条目哈希
+   * Calculate entry hash
    */
   private calculateHash(entry: AuditEntry): string {
     const data = {
@@ -176,12 +176,12 @@ export class AuditLog {
   }
 
   /**
-   * 加载最后一条日志的哈希
+   * Load last log entry hash
    */
   private loadLastHash(): void {
     const today = new Date();
     
-    // 检查今天和昨天的日志
+    // Check today and yesterday logs
     for (let i = 0; i < 2; i++) {
       const date = new Date(today);
       date.setDate(date.getDate() - i);
@@ -195,7 +195,7 @@ export class AuditLog {
   }
 
   /**
-   * 确保目录存在
+   * Ensure directory exists
    */
   private ensureDir(): void {
     if (!fs.existsSync(this.basePath)) {

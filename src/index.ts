@@ -4,13 +4,13 @@
  * @packageDocumentation
  */
 
-// 核心类
+// Core classes
 export { PaymentAgent } from './agent/PaymentAgent.js';
 export { Wallet, SecureWallet } from './wallet/index.js';
 export { PermitPayment } from './permit/index.js';
 export { AuditLog } from './audit/AuditLog.js';
 
-// 钱包创建与 Permit 钱包
+// Wallet creation and Permit wallet
 export {
   createWallet,
   loadWallet,
@@ -27,7 +27,7 @@ export {
   type TransferWithPermitResult,
 } from './wallet/index.js';
 
-// 订单管理
+// Order management
 export { 
   OrderManager, 
   MemoryOrderStore,
@@ -37,7 +37,7 @@ export {
   type CreateOrderParams,
 } from './orders/index.js';
 
-// 支付验证
+// Payment verification
 export {
   verifyPayment,
   getTransactionStatus,
@@ -46,7 +46,7 @@ export {
   type VerifyPaymentResult,
 } from './verify/index.js';
 
-// 支付引导
+// Payment guide
 export {
   generatePaymentGuide,
   generatePaymentReminder,
@@ -56,7 +56,7 @@ export {
   type PaymentGuideParams,
 } from './guide/index.js';
 
-// 收据
+// Receipt
 export {
   generateReceipt,
   generateReceiptFromInvoice,
@@ -67,7 +67,7 @@ export {
   type Receipt,
 } from './receipt/index.js';
 
-// 对话模板
+// Conversation templates
 export {
   SellerTemplates,
   BuyerTemplates,
@@ -75,8 +75,8 @@ export {
   parseStatusMarker,
 } from './templates/index.js';
 
-// 链配置
+// Chain configuration
 export { CHAINS, getChain, listChains, getChainById, ERC20_ABI } from './chains/index.js';
 
-// 类型
+// Types
 export * from './types/index.js';

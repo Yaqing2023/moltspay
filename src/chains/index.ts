@@ -1,11 +1,11 @@
 /**
- * 区块链配置
+ * Blockchain Configuration
  */
 
 import type { ChainConfig, ChainName } from '../types/index.js';
 
 export const CHAINS: Record<ChainName, ChainConfig> = {
-  // ============ 主网 ============
+  // ============ Mainnet ============
   base: {
     name: 'Base',
     chainId: 8453,
@@ -34,7 +34,7 @@ export const CHAINS: Record<ChainName, ChainConfig> = {
     avgBlockTime: 12,
   },
 
-  // ============ 测试网 ============
+  // ============ Testnet ============
   base_sepolia: {
     name: 'Base Sepolia',
     chainId: 84532,
@@ -56,7 +56,7 @@ export const CHAINS: Record<ChainName, ChainConfig> = {
 };
 
 /**
- * 获取链配置
+ * Get chain configuration
  */
 export function getChain(name: ChainName): ChainConfig {
   const config = CHAINS[name];
@@ -67,21 +67,21 @@ export function getChain(name: ChainName): ChainConfig {
 }
 
 /**
- * 列出所有支持的链
+ * List all supported chains
  */
 export function listChains(): ChainName[] {
   return Object.keys(CHAINS) as ChainName[];
 }
 
 /**
- * 根据 chainId 获取链配置
+ * Get chain config by chainId
  */
 export function getChainById(chainId: number): ChainConfig | undefined {
   return Object.values(CHAINS).find(c => c.chainId === chainId);
 }
 
 /**
- * ERC20 ABI（最小化，仅包含需要的方法）
+ * ERC20 ABI (minimal, only required methods)
  */
 export const ERC20_ABI = [
   'function balanceOf(address owner) view returns (uint256)',

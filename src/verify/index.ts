@@ -1,11 +1,11 @@
 /**
- * 链上支付验证模块
+ * On-chain Payment Verification Module
  */
 
 import { ethers } from 'ethers';
 import { getChain, getChainById, type ChainConfig, type ChainName } from '../chains';
 
-// ERC20 Transfer 事件签名
+// ERC20 Transfer event signature
 const TRANSFER_EVENT_TOPIC = ethers.id('Transfer(address,address,uint256)');
 
 export interface VerifyPaymentParams {
@@ -26,12 +26,12 @@ export interface VerifyPaymentResult {
 }
 
 /**
- * 验证链上支付
+ * Verify on-chain payment
  */
 export async function verifyPayment(params: VerifyPaymentParams): Promise<VerifyPaymentResult> {
   const { txHash, expectedAmount, expectedTo } = params;
   
-  // 获取链配置
+  // Get chain config
   let chain: ChainConfig | undefined;
   try {
     if (typeof params.chain === 'number') {
@@ -40,59 +40,59 @@ export async function verifyPayment(params: VerifyPaymentParams): Promise<Verify
       chain = getChain((params.chain || 'base') as ChainName);
     }
     if (!chain) {
-      return { verified: false, error: `不支持的链: ${params.chain}` };
+      return { verified: false, error: `Unsupported chain: ${params.chain}` };
     }
   } catch (e) {
-    return { verified: false, error: `不支持的链: ${params.chain}` };
+    return { verified: false, error: `Unsupported chain: ${params.chain}` };
   }
 
   try {
     const provider = new ethers.JsonRpcProvider(chain.rpc);
     
-    // 获取交易回执
+    // Get transaction receipt
     const receipt = await provider.getTransactionReceipt(txHash);
     
     if (!receipt) {
-      return { verified: false, error: '交易未找到或未确认' };
+      return { verified: false, error: 'Transaction not found or not confirmed' };
     }
 
     if (receipt.status !== 1) {
-      return { verified: false, error: '交易失败' };
+      return { verified: false, error: 'Transaction failed' };
     }
 
-    // 解析 Transfer 事件
+    // Parse Transfer event
     const usdcAddress = chain.usdc?.toLowerCase();
     if (!usdcAddress) {
-      return { verified: false, error: `链 ${chain.name} 未配置USDC地址` };
+      return { verified: false, error: `Chain ${chain.name} USDC address not configured` };
     }
 
     for (const log of receipt.logs) {
-      // 检查是否是 USDC 合约
+      // Check if USDC contract
       if (log.address.toLowerCase() !== usdcAddress) {
         continue;
       }
 
-      // 检查是否是 Transfer 事件
+      // Check if Transfer event
       if (log.topics.length < 3 || log.topics[0] !== TRANSFER_EVENT_TOPIC) {
         continue;
       }
 
-      // 解析 Transfer 事件参数
+      // Parse Transfer event params
       const from = '0x' + log.topics[1].slice(-40);
       const to = '0x' + log.topics[2].slice(-40);
       const amountRaw = BigInt(log.data);
-      const amount = Number(amountRaw) / 1e6; // USDC 6位小数
+      const amount = Number(amountRaw) / 1e6; // USDC 6 decimals
 
-      // 验证收款地址
+      // Verify recipient address
       if (expectedTo && to.toLowerCase() !== expectedTo.toLowerCase()) {
         continue;
       }
 
-      // 验证金额
+      // Verify amount
       if (amount < expectedAmount) {
         return {
           verified: false,
-          error: `金额不足: 收到 ${amount} USDC, 需要 ${expectedAmount} USDC`,
+          error: `Insufficient amount: received ${amount} USDC, expected ${expectedAmount} USDC`,
           amount,
           from,
           to,
@@ -101,7 +101,7 @@ export async function verifyPayment(params: VerifyPaymentParams): Promise<Verify
         };
       }
 
-      // 验证成功
+      // Verification successful
       return {
         verified: true,
         amount,
@@ -112,7 +112,7 @@ export async function verifyPayment(params: VerifyPaymentParams): Promise<Verify
       };
     }
 
-    return { verified: false, error: '未找到USDC转账记录' };
+    return { verified: false, error: 'No USDC transfer found' };
 
   } catch (e: any) {
     return { verified: false, error: e.message || String(e) };
@@ -120,7 +120,7 @@ export async function verifyPayment(params: VerifyPaymentParams): Promise<Verify
 }
 
 /**
- * 获取交易状态
+ * Get transaction status
  */
 export async function getTransactionStatus(
   txHash: string,
@@ -143,7 +143,7 @@ export async function getTransactionStatus(
     const receipt = await provider.getTransactionReceipt(txHash);
 
     if (!receipt) {
-      // 检查是否在 pending 池中
+      // Check if in pending pool
       const tx = await provider.getTransaction(txHash);
       if (tx) {
         return { status: 'pending' };
@@ -172,7 +172,7 @@ export async function getTransactionStatus(
 }
 
 /**
- * 等待交易确认
+ * Wait for transaction confirmation
  */
 export async function waitForTransaction(
   txHash: string,
@@ -184,10 +184,10 @@ export async function waitForTransaction(
   try {
     chainConfig = typeof chain === 'number' ? getChainById(chain) : getChain(chain as ChainName);
     if (!chainConfig) {
-      return { verified: false, confirmed: false, error: `不支持的链: ${chain}` };
+      return { verified: false, confirmed: false, error: `Unsupported chain: ${chain}` };
     }
   } catch (e) {
-    return { verified: false, confirmed: false, error: `不支持的链: ${chain}` };
+    return { verified: false, confirmed: false, error: `Unsupported chain: ${chain}` };
   }
 
   const provider = new ethers.JsonRpcProvider(chainConfig.rpc);
@@ -196,11 +196,11 @@ export async function waitForTransaction(
     const receipt = await provider.waitForTransaction(txHash, confirmations, timeoutMs);
     
     if (!receipt) {
-      return { verified: false, confirmed: false, error: '等待超时' };
+      return { verified: false, confirmed: false, error: 'Timeout waiting' };
     }
 
     if (receipt.status !== 1) {
-      return { verified: false, confirmed: true, error: '交易失败' };
+      return { verified: false, confirmed: true, error: 'Transaction failed' };
     }
 
     return {

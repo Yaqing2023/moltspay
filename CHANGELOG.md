@@ -1,35 +1,41 @@
 # Changelog
 
+## [0.2.1] - 2026-02-15
+
+### Changed
+- Converted all content to English (templates, receipts, guides, comments)
+- Status markers now use `[status:xxx]` format instead of Chinese
+
 ## [0.2.0] - 2026-02-15
 
 ### Added - Agent-to-Agent Payment Flow
 
-完整实现了 Agent 间纯对话支付流程所需的全部功能。
+Complete implementation of all features required for Agent-to-Agent conversational payment flow.
 
-#### P0: 核心功能
+#### P0: Core Features
 
-**createWallet()** - 买方 Agent 创建钱包
+**createWallet()** - Create wallet for buyer Agent
 ```typescript
 import { createWallet, loadWallet } from 'moltspay';
 
-// 创建新钱包（自动存储到 ~/.moltspay/wallet.json）
+// Create new wallet (auto-stored to ~/.moltspay/wallet.json)
 const result = createWallet();
-console.log('钱包地址:', result.address);
+console.log('Wallet address:', result.address);
 
-// 加密存储
+// Encrypted storage
 const result = createWallet({ password: 'secure123' });
 
-// 加载已有钱包
+// Load existing wallet
 const wallet = loadWallet({ password: 'secure123' });
 ```
 
-**PermitWallet** - 使用 Boss 授权的 Permit 支付
+**PermitWallet** - Pay using Boss's Permit authorization
 ```typescript
 import { PermitWallet } from 'moltspay';
 
 const wallet = new PermitWallet({ chain: 'base' });
 
-// 使用 Boss 签署的 Permit 支付
+// Pay using Boss-signed Permit
 const result = await wallet.transferWithPermit({
   to: '0xSELLER...',
   amount: 3.99,
@@ -45,15 +51,15 @@ const result = await wallet.transferWithPermit({
 });
 ```
 
-#### P1: 收据生成
+#### P1: Receipt Generation
 
-**generateReceipt()** - 生成交易收据
+**generateReceipt()** - Generate transaction receipt
 ```typescript
 import { generateReceipt, formatReceiptText } from 'moltspay';
 
 const receipt = generateReceipt({
   orderId: 'vo_abc123',
-  service: '视频生成 5秒 720p',
+  service: 'Video generation 5s 720p',
   amount: 3.99,
   chain: 'base',
   txHash: '0x...',
@@ -65,44 +71,44 @@ const receipt = generateReceipt({
   }
 });
 
-// 格式化为纯文本（适合飞书/WhatsApp）
+// Format as plain text (for Feishu/WhatsApp)
 console.log(formatReceiptText(receipt));
 ```
 
-#### P2: 对话模板
+#### P2: Conversation Templates
 
-**SellerTemplates / BuyerTemplates** - 标准化对话模板
+**SellerTemplates / BuyerTemplates** - Standardized dialogue templates
 ```typescript
 import { SellerTemplates, BuyerTemplates, parseStatusMarker } from 'moltspay';
 
-// 卖方模板
+// Seller templates
 SellerTemplates.askPaymentCapability();
 SellerTemplates.guideInstall();
-SellerTemplates.quote({ service: '视频生成', price: 3.99, recipientAddress: '0x...' });
+SellerTemplates.quote({ service: 'Video gen', price: 3.99, recipientAddress: '0x...' });
 
-// 买方模板
-BuyerTemplates.requestService('视频生成');
+// Buyer templates
+BuyerTemplates.requestService('video generation');
 BuyerTemplates.walletCreated('0x...');
 BuyerTemplates.paymentSent('0xtx...', 3.99);
 
-// 解析状态标记
-const status = parseStatusMarker('[状态：已发起支付 tx=0xabc amount=3.99 USDC]');
+// Parse status markers
+const status = parseStatusMarker('[status:payment_sent tx=0xabc amount=3.99 USDC]');
 // { type: 'payment_sent', data: { txHash: '0xabc', amount: '3.99' } }
 ```
 
 ### New Exports
 
 ```typescript
-// 钱包创建
+// Wallet creation
 export { createWallet, loadWallet, getWalletAddress, walletExists } from 'moltspay';
 
-// Permit 钱包
+// Permit wallet
 export { PermitWallet, formatPermitRequest } from 'moltspay';
 
-// 收据
+// Receipt
 export { generateReceipt, generateReceiptFromInvoice, formatReceiptMessage, formatReceiptText, formatReceiptJson } from 'moltspay';
 
-// 对话模板
+// Conversation templates
 export { SellerTemplates, BuyerTemplates, StatusMarkers, parseStatusMarker } from 'moltspay';
 ```
 
@@ -111,26 +117,26 @@ export { SellerTemplates, BuyerTemplates, StatusMarkers, parseStatusMarker } fro
 ## [0.1.3] - 2026-02-10
 
 ### Added
-- OrderManager 订单管理
-- 支付引导消息生成
+- OrderManager for order management
+- Payment guide message generation
 
 ## [0.1.2] - 2026-02-08
 
 ### Added
-- SecureWallet 安全钱包（限额/白名单/审计）
-- AuditLog 审计日志
+- SecureWallet (limits/whitelist/audit)
+- AuditLog for immutable audit logging
 
 ## [0.1.1] - 2026-02-06
 
 ### Added
-- PaymentAgent 核心类
-- Invoice 生成
-- 链上支付验证
-- 多链支持 (Base, Polygon, Ethereum)
+- PaymentAgent core class
+- Invoice generation
+- On-chain payment verification
+- Multi-chain support (Base, Polygon, Ethereum)
 
 ## [0.1.0] - 2026-02-05
 
 ### Added
-- 初始版本
-- 基础 Wallet 类
-- EIP-2612 Permit 支持
+- Initial release
+- Basic Wallet class
+- EIP-2612 Permit support

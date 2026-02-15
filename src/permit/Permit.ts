@@ -1,7 +1,7 @@
 /**
- * PermitPayment - EIP-2612 无 Gas 预授权
+ * PermitPayment - EIP-2612 Gasless Pre-authorization
  * 
- * 让用户通过签名授权，服务方代付 Gas 执行 transferFrom
+ * User signs authorization, service provider pays gas to execute transferFrom
  */
 
 import { ethers } from 'ethers';
@@ -53,14 +53,14 @@ export class PermitPayment {
   }
 
   /**
-   * 获取用户当前 nonce
+   * Get user current nonce
    */
   async getNonce(owner: string): Promise<number> {
     return Number(await this.usdcContract.nonces(owner));
   }
 
   /**
-   * 生成 EIP-712 签名请求（发给前端/用户钱包）
+   * Generate EIP-712 signing request (for frontend/user wallet)
    */
   async createPermitRequest(
     owner: string,
@@ -72,7 +72,7 @@ export class PermitPayment {
     const deadline = Math.floor(Date.now() / 1000) + deadlineMinutes * 60;
     const value = BigInt(Math.floor(amount * 1e6)).toString();
 
-    // USDC 的 EIP-712 domain（不同链可能不同）
+    // USDC EIP-712 domain (may differ by chain)
     const domain = {
       name: 'USD Coin',
       version: '2',
@@ -120,11 +120,11 @@ export class PermitPayment {
   }
 
   /**
-   * 执行 permit + transferFrom
+   * Execute permit + transferFrom
    * 
-   * @param owner 用户地址
-   * @param amount 金额
-   * @param signature 用户签名 {v, r, s, deadline}
+   * @param owner User address
+   * @param amount Amount
+   * @param signature User signature {v, r, s, deadline}
    */
   async executePermitAndTransfer(
     owner: string,
@@ -138,7 +138,7 @@ export class PermitPayment {
     try {
       const value = BigInt(Math.floor(amount * 1e6));
 
-      // 1. 调用 permit
+      // 1. Call permit
       const permitTx = await this.usdcContract.permit(
         owner,
         this.spenderAddress,
@@ -150,7 +150,7 @@ export class PermitPayment {
       );
       await permitTx.wait();
 
-      // 2. 调用 transferFrom
+      // 2. Call transferFrom
       const transferTx = await this.usdcContract.transferFrom(owner, this.spenderAddress, value);
       const receipt = await transferTx.wait();
 
@@ -167,7 +167,7 @@ export class PermitPayment {
   }
 
   /**
-   * 仅执行 permit（不 transfer）
+   * Execute permit only (no transfer)
    */
   async executePermit(
     owner: string,
@@ -205,23 +205,23 @@ export class PermitPayment {
   }
 
   /**
-   * 格式化 Permit 请求为用户消息
+   * Format Permit request as user message
    */
   formatPermitMessage(request: PermitRequest): string {
     const { typed_data } = request;
     const { message } = typed_data;
 
-    return `🔐 **签名授权请求**
+    return `🔐 **Signature Authorization Request**
 
-授权 \`${(Number(message.value) / 1e6).toFixed(2)} USDC\` 给服务方
+Authorize \`${(Number(message.value) / 1e6).toFixed(2)} USDC\` to service provider
 
-**签名信息：**
+**Signature Details:**
 - Owner: \`${message.owner}\`
 - Spender: \`${message.spender}\`
 - Amount: ${(Number(message.value) / 1e6).toFixed(2)} USDC
 - Deadline: ${new Date(message.deadline * 1000).toISOString()}
 
-请在钱包中签名此请求（不消耗 Gas）。
+Please sign this request in your wallet (no gas required).
 
 \`\`\`json
 ${JSON.stringify(typed_data, null, 2)}
