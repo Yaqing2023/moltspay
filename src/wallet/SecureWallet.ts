@@ -61,8 +61,23 @@ export class SecureWallet {
 
   /**
    * 安全转账（带限额和白名单检查）
+   * 
+   * 支持两种调用方式:
+   * - transfer({ to, amount, reason?, requester? })
+   * - transfer(to, amount)
    */
-  async transfer(params: TransferParams): Promise<TransferResult> {
+  async transfer(paramsOrTo: TransferParams | string, amountArg?: number | string): Promise<TransferResult> {
+    // 支持两种调用方式
+    let params: TransferParams;
+    if (typeof paramsOrTo === 'string') {
+      params = { 
+        to: paramsOrTo, 
+        amount: typeof amountArg === 'string' ? parseFloat(amountArg) : (amountArg || 0)
+      };
+    } else {
+      params = paramsOrTo;
+    }
+    
     const { to, amount, reason, requester } = params;
     const toAddress = to.toLowerCase();
     const requestId = `tr_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;

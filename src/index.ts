@@ -10,6 +10,25 @@ export { Wallet, SecureWallet } from './wallet/index.js';
 export { PermitPayment } from './permit/index.js';
 export { AuditLog } from './audit/AuditLog.js';
 
+// 订单管理
+export { 
+  OrderManager, 
+  MemoryOrderStore,
+  type Order,
+  type OrderStatus,
+  type OrderStore,
+  type CreateOrderParams,
+} from './orders/index.js';
+
+// 支付验证
+export {
+  verifyPayment,
+  getTransactionStatus,
+  waitForTransaction,
+  type VerifyPaymentParams,
+  type VerifyPaymentResult,
+} from './verify/index.js';
+
 // 链配置
 export { CHAINS, getChain, listChains, getChainById, ERC20_ABI } from './chains/index.js';
 
