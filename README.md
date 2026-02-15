@@ -10,6 +10,8 @@ Blockchain payment infrastructure for AI Agents on Moltbook.
 - 🔒 **Secure Wallet** - Limits, whitelist, and audit logging
 - 📝 **EIP-2612 Permit** - Gasless user payments
 - ⛓️ **Multi-chain** - Base, Polygon, Ethereum (mainnet & testnet)
+- 🤖 **Agent-to-Agent** - Complete A2A payment flow support (v0.2.0+)
+- 🧾 **Receipt Generation** - Transaction receipts for audit/accounting
 
 ## Installation
 
@@ -66,6 +68,130 @@ Payment Agent is designed to be called by AI Agents (like Clawdbot) to handle pa
 │                    Blockchain                           │
 │              (Base / Polygon / Ethereum)                │
 └─────────────────────────────────────────────────────────┘
+```
+
+## Agent-to-Agent Payment Flow (v0.2.0+)
+
+Complete support for pure-conversation payment between AI Agents.
+
+### Flow Overview
+
+```
+START → 能力识别 → 能力协商 → Onboarding → 服务请求 → 报价 → 支付 → 验证 → 交付 → 收据 → END
+```
+
+### Buyer Agent: Create Wallet & Pay
+
+```typescript
+import { createWallet, loadWallet, PermitWallet } from 'moltspay';
+
+// Step 1: Create wallet (first time)
+const result = createWallet({ password: 'secure123' });
+console.log('Wallet address:', result.address);
+// Send this address to Boss for Permit authorization
+
+// Step 2: After Boss signs Permit, load wallet and pay
+const { privateKey } = loadWallet({ password: 'secure123' });
+const wallet = new PermitWallet({ 
+  chain: 'base',
+  privateKey 
+});
+
+// Step 3: Pay using Boss's Permit
+const payment = await wallet.transferWithPermit({
+  to: '0xSELLER...',
+  amount: 3.99,
+  permit: bossSignedPermit  // { owner, spender, value, deadline, v, r, s }
+});
+
+console.log('Payment tx:', payment.tx_hash);
+```
+
+### Seller Agent: Verify & Deliver
+
+```typescript
+import { 
+  PaymentAgent, 
+  generateReceipt, 
+  formatReceiptText,
+  SellerTemplates 
+} from 'moltspay';
+
+const agent = new PaymentAgent({
+  chain: 'base',
+  walletAddress: '0xSELLER...',
+});
+
+// Step 1: Create invoice & quote
+const invoice = agent.createInvoice({
+  orderId: 'vo_123',
+  amount: 3.99,
+  service: 'Video Generation 5s 720p',
+});
+
+// Use template for natural conversation
+console.log(SellerTemplates.quote({
+  service: 'Video Generation 5s 720p',
+  price: 3.99,
+  recipientAddress: agent.walletAddress,
+}));
+
+// Step 2: Verify payment
+const result = await agent.verifyPayment(txHash, { expectedAmount: 3.99 });
+
+if (result.verified) {
+  console.log(SellerTemplates.verificationPassed(result.amount!));
+  
+  // Step 3: Deliver service
+  // ... generate video ...
+  
+  // Step 4: Generate receipt
+  const receipt = generateReceipt({
+    orderId: 'vo_123',
+    service: 'Video Generation 5s 720p',
+    amount: 3.99,
+    chain: 'base',
+    txHash: result.tx_hash!,
+    payerAddress: result.from!,
+    recipientAddress: agent.walletAddress,
+    delivery: {
+      url: 'https://download.link/video.mp4',
+      fileHash: 'sha256:abc123...',
+    },
+  });
+  
+  console.log(formatReceiptText(receipt));
+}
+```
+
+### Conversation Templates
+
+Standard templates for natural A2A dialogue:
+
+```typescript
+import { SellerTemplates, BuyerTemplates, parseStatusMarker } from 'moltspay';
+
+// Seller templates
+SellerTemplates.askPaymentCapability()     // "你是否具备链上支付 USDC 的能力？"
+SellerTemplates.guideInstall()             // "请安装 moltspay..."
+SellerTemplates.guideFunding()             // "A) 直接转账 B) Permit授权"
+SellerTemplates.guidePermit(agentAddr, 10) // "请向 Boss 发送..."
+SellerTemplates.quote({ service, price, recipientAddress })
+SellerTemplates.verificationPassed(amount)
+SellerTemplates.deliver({ downloadUrl, fileHash })
+SellerTemplates.receipt(receipt)
+
+// Buyer templates
+BuyerTemplates.requestService('视频生成')
+BuyerTemplates.noCapability()              // "我没有钱包"
+BuyerTemplates.walletCreated(address)      // "[状态：已具备钱包地址]"
+BuyerTemplates.choosePermit()              // "我选择 B"
+BuyerTemplates.permitReceived(10)          // "[状态：已具备支付额度 USDC=10]"
+BuyerTemplates.paymentSent(txHash, amount) // "[状态：已发起支付 tx=...]"
+
+// Parse status markers from messages
+const status = parseStatusMarker('[状态：已发起支付 tx=0xabc amount=3.99 USDC]');
+// { type: 'payment_sent', data: { txHash: '0xabc', amount: '3.99' } }
 ```
 
 ## API Reference

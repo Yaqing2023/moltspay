@@ -10,6 +10,23 @@ export { Wallet, SecureWallet } from './wallet/index.js';
 export { PermitPayment } from './permit/index.js';
 export { AuditLog } from './audit/AuditLog.js';
 
+// 钱包创建与 Permit 钱包
+export {
+  createWallet,
+  loadWallet,
+  getWalletAddress,
+  walletExists,
+  PermitWallet,
+  formatPermitRequest,
+  type CreateWalletOptions,
+  type CreateWalletResult,
+  type WalletData,
+  type PermitWalletConfig,
+  type PermitData,
+  type TransferWithPermitParams,
+  type TransferWithPermitResult,
+} from './wallet/index.js';
+
 // 订单管理
 export { 
   OrderManager, 
@@ -38,6 +55,25 @@ export {
   hasTransactionHash,
   type PaymentGuideParams,
 } from './guide/index.js';
+
+// 收据
+export {
+  generateReceipt,
+  generateReceiptFromInvoice,
+  formatReceiptMessage,
+  formatReceiptText,
+  formatReceiptJson,
+  type ReceiptParams,
+  type Receipt,
+} from './receipt/index.js';
+
+// 对话模板
+export {
+  SellerTemplates,
+  BuyerTemplates,
+  StatusMarkers,
+  parseStatusMarker,
+} from './templates/index.js';
 
 // 链配置
 export { CHAINS, getChain, listChains, getChainById, ERC20_ABI } from './chains/index.js';
