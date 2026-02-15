@@ -1,83 +1,83 @@
 /**
- * Receipt - 交易收据生成
+ * Receipt - Transaction receipt generation
  * 
- * 用于生成标准化的交易收据，便于对账/报销/审计
+ * Generate standardized transaction receipts for reconciliation/reimbursement/audit
  */
 
 import { getChain } from '../chains/index.js';
 import type { ChainName, Invoice, VerifyResult } from '../types/index.js';
 
 export interface ReceiptParams {
-  /** 发票号（自动生成或指定） */
+  /** Invoice ID (auto-generated or specified) */
   invoiceId?: string;
-  /** 订单号 */
+  /** Order ID */
   orderId: string;
-  /** 服务名称 */
+  /** Service name */
   service: string;
-  /** 服务描述 */
+  /** Service description */
   description?: string;
-  /** 金额 */
+  /** Amount */
   amount: number;
   /** Token */
   token?: 'USDC' | 'USDT' | 'ETH';
-  /** 链 */
+  /** Chain */
   chain: ChainName;
-  /** 交易 hash */
+  /** Transaction hash */
   txHash: string;
-  /** 付款方地址 */
+  /** Payer address */
   payerAddress: string;
-  /** 收款方地址 */
+  /** Recipient address */
   recipientAddress: string;
-  /** 交付信息 */
+  /** Delivery info */
   delivery?: {
-    /** 交付物 URL */
+    /** Delivery URL */
     url?: string;
-    /** 文件 hash */
+    /** File hash */
     fileHash?: string;
-    /** 交付时间 */
+    /** Delivery timestamp */
     deliveredAt?: string;
   };
-  /** 额外元数据 */
+  /** Additional metadata */
   metadata?: Record<string, unknown>;
 }
 
 export interface Receipt {
   type: 'receipt';
   version: '1.0';
-  /** 发票号 */
+  /** Invoice ID */
   invoiceId: string;
-  /** 订单号 */
+  /** Order ID */
   orderId: string;
-  /** 服务 */
+  /** Service */
   service: string;
   description?: string;
-  /** 金额 */
+  /** Amount */
   amount: string;
   token: string;
-  /** 链信息 */
+  /** Chain info */
   chain: string;
   chainId: number;
-  /** 交易信息 */
+  /** Transaction info */
   txHash: string;
   txUrl: string;
-  /** 参与方 */
+  /** Parties */
   payer: string;
   recipient: string;
-  /** 时间 */
+  /** Timestamps */
   paidAt: string;
   issuedAt: string;
-  /** 交付信息 */
+  /** Delivery info */
   delivery?: {
     url?: string;
     fileHash?: string;
     deliveredAt?: string;
   };
-  /** 额外元数据 */
+  /** Additional metadata */
   metadata?: Record<string, unknown>;
 }
 
 /**
- * 生成发票号
+ * Generate invoice ID
  */
 function generateInvoiceId(): string {
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
@@ -86,7 +86,7 @@ function generateInvoiceId(): string {
 }
 
 /**
- * 生成交易收据
+ * Generate transaction receipt
  */
 export function generateReceipt(params: ReceiptParams): Receipt {
   const chainConfig = getChain(params.chain);
@@ -114,7 +114,7 @@ export function generateReceipt(params: ReceiptParams): Receipt {
 }
 
 /**
- * 从 Invoice + VerifyResult 生成收据
+ * Generate receipt from Invoice + VerifyResult
  */
 export function generateReceiptFromInvoice(
   invoice: Invoice,
@@ -140,72 +140,72 @@ export function generateReceiptFromInvoice(
 }
 
 /**
- * 格式化收据为人类可读消息
+ * Format receipt as human-readable message (Markdown)
  */
 export function formatReceiptMessage(receipt: Receipt): string {
-  let msg = `🧾 **交易收据**
+  let msg = `🧾 **Transaction Receipt**
 
-**发票号:** \`${receipt.invoiceId}\`
-**订单号:** \`${receipt.orderId}\`
-
----
-
-**服务:** ${receipt.service}
-${receipt.description ? `**描述:** ${receipt.description}\n` : ''}
-**金额:** ${receipt.amount} ${receipt.token}
-**链:** ${receipt.chain} (Chain ID: ${receipt.chainId})
+**Invoice:** \`${receipt.invoiceId}\`
+**Order:** \`${receipt.orderId}\`
 
 ---
 
-**付款方:** \`${receipt.payer}\`
-**收款方:** \`${receipt.recipient}\`
-**交易:** [\`${receipt.txHash.slice(0, 10)}...${receipt.txHash.slice(-8)}\`](${receipt.txUrl})
-**支付时间:** ${receipt.paidAt}`;
+**Service:** ${receipt.service}
+${receipt.description ? `**Description:** ${receipt.description}\n` : ''}
+**Amount:** ${receipt.amount} ${receipt.token}
+**Chain:** ${receipt.chain} (Chain ID: ${receipt.chainId})
+
+---
+
+**Payer:** \`${receipt.payer}\`
+**Recipient:** \`${receipt.recipient}\`
+**Transaction:** [\`${receipt.txHash.slice(0, 10)}...${receipt.txHash.slice(-8)}\`](${receipt.txUrl})
+**Paid at:** ${receipt.paidAt}`;
 
   if (receipt.delivery) {
-    msg += `\n\n---\n\n**交付信息:**`;
+    msg += `\n\n---\n\n**Delivery Info:**`;
     if (receipt.delivery.url) {
-      msg += `\n- 下载链接: ${receipt.delivery.url}`;
+      msg += `\n- Download: ${receipt.delivery.url}`;
     }
     if (receipt.delivery.fileHash) {
-      msg += `\n- 文件校验: \`${receipt.delivery.fileHash}\``;
+      msg += `\n- Checksum: \`${receipt.delivery.fileHash}\``;
     }
     if (receipt.delivery.deliveredAt) {
-      msg += `\n- 交付时间: ${receipt.delivery.deliveredAt}`;
+      msg += `\n- Delivered at: ${receipt.delivery.deliveredAt}`;
     }
   }
 
-  msg += `\n\n---\n\n_收据生成时间: ${receipt.issuedAt}_`;
+  msg += `\n\n---\n\n_Receipt issued: ${receipt.issuedAt}_`;
 
   return msg;
 }
 
 /**
- * 格式化收据为纯文本（适合飞书/WhatsApp）
+ * Format receipt as plain text (for Feishu/WhatsApp)
  */
 export function formatReceiptText(receipt: Receipt): string {
-  let msg = `🧾 交易收据
+  let msg = `🧾 Transaction Receipt
 
-发票号: ${receipt.invoiceId}
-订单号: ${receipt.orderId}
+Invoice: ${receipt.invoiceId}
+Order: ${receipt.orderId}
 
-服务: ${receipt.service}
-金额: ${receipt.amount} ${receipt.token}
-链: ${receipt.chain}
+Service: ${receipt.service}
+Amount: ${receipt.amount} ${receipt.token}
+Chain: ${receipt.chain}
 
-付款方: ${receipt.payer}
-收款方: ${receipt.recipient}
-交易: ${receipt.txHash}
-查看: ${receipt.txUrl}
-支付时间: ${receipt.paidAt}`;
+Payer: ${receipt.payer}
+Recipient: ${receipt.recipient}
+Tx: ${receipt.txHash}
+Explorer: ${receipt.txUrl}
+Paid at: ${receipt.paidAt}`;
 
   if (receipt.delivery) {
-    msg += `\n\n交付信息:`;
+    msg += `\n\nDelivery:`;
     if (receipt.delivery.url) {
-      msg += `\n下载: ${receipt.delivery.url}`;
+      msg += `\nDownload: ${receipt.delivery.url}`;
     }
     if (receipt.delivery.fileHash) {
-      msg += `\n校验: ${receipt.delivery.fileHash}`;
+      msg += `\nChecksum: ${receipt.delivery.fileHash}`;
     }
   }
 
@@ -213,7 +213,7 @@ export function formatReceiptText(receipt: Receipt): string {
 }
 
 /**
- * 格式化收据为 JSON（适合 Agent 解析）
+ * Format receipt as JSON (for Agent parsing)
  */
 export function formatReceiptJson(receipt: Receipt): string {
   return JSON.stringify(receipt, null, 2);

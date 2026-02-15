@@ -1,10 +1,10 @@
 /**
- * PermitWallet - 使用 Boss 授权的 Permit 进行支付
+ * PermitWallet - Pay using Boss's Permit authorization
  * 
- * 场景：
- * - Agent 没有自己的 USDC，但 Boss 给了 Permit 授权
- * - Agent 使用 Permit 签名 + 自己的钱包执行 transferFrom
- * - Agent 只需要少量 ETH 付 gas，USDC 从 Boss 钱包扣除
+ * Scenario:
+ * - Agent doesn't have USDC, but Boss gave a Permit authorization
+ * - Agent uses Permit signature + own wallet to execute transferFrom
+ * - Agent only needs small amount of ETH for gas, USDC is deducted from Boss's wallet
  */
 
 import { ethers } from 'ethers';
@@ -18,50 +18,50 @@ import type {
 } from '../types/index.js';
 
 export interface PermitData {
-  /** Boss 的钱包地址（USDC 持有者） */
+  /** Boss's wallet address (USDC holder) */
   owner: string;
-  /** Agent 的钱包地址（被授权者） */
+  /** Agent's wallet address (authorized spender) */
   spender: string;
-  /** 授权金额（USDC，6位小数的原始值） */
+  /** Authorized amount (USDC, raw 6 decimal value) */
   value: string;
-  /** 过期时间戳 */
+  /** Expiration timestamp */
   deadline: number;
-  /** 签名 v */
+  /** Signature v */
   v: number;
-  /** 签名 r */
+  /** Signature r */
   r: string;
-  /** 签名 s */
+  /** Signature s */
   s: string;
 }
 
 export interface PermitWalletConfig {
   chain?: ChainName;
-  /** Agent 的私钥（用于执行交易） */
+  /** Agent's private key (for executing transactions) */
   privateKey?: string;
-  /** 从文件加载私钥 */
+  /** Load private key from file */
   walletPath?: string;
-  /** 解密密码 */
+  /** Decryption password */
   walletPassword?: string;
   rpcUrl?: string;
 }
 
 export interface TransferWithPermitParams {
-  /** 收款地址 */
+  /** Recipient address */
   to: string;
-  /** 金额（USDC） */
+  /** Amount (USDC) */
   amount: number;
-  /** Boss 签署的 Permit 数据 */
+  /** Boss-signed Permit data */
   permit: PermitData;
 }
 
 export interface TransferWithPermitResult extends TransferResult {
-  /** Permit 交易 hash */
+  /** Permit transaction hash */
   permitTxHash?: string;
-  /** Transfer 交易 hash */
+  /** Transfer transaction hash */
   transferTxHash?: string;
 }
 
-// 扩展 ABI 以支持 permit 和 transferFrom
+// Extended ABI to support permit and transferFrom
 const PERMIT_ABI = [
   ...ERC20_ABI,
   'function permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s)',
@@ -82,10 +82,10 @@ export class PermitWallet {
     this.chain = config.chain || 'base_sepolia';
     this.chainConfig = getChain(this.chain);
     
-    // 获取私钥
+    // Get private key
     let privateKey = config.privateKey || process.env.PAYMENT_AGENT_PRIVATE_KEY;
     
-    // 或从文件加载
+    // Or load from file
     if (!privateKey && config.walletPath) {
       const loaded = loadWallet({ 
         storagePath: config.walletPath, 
@@ -114,7 +114,7 @@ export class PermitWallet {
   }
 
   /**
-   * 检查 Permit 是否有效
+   * Check if Permit is valid (current allowance)
    */
   async checkPermitAllowance(owner: string): Promise<string> {
     const allowance = await this.usdcContract.allowance(owner, this.address);
@@ -122,17 +122,17 @@ export class PermitWallet {
   }
 
   /**
-   * 使用 Permit 授权进行支付
+   * Pay using Permit authorization
    * 
-   * 流程：
-   * 1. 调用 permit() 让合约记录 Boss 的授权
-   * 2. 调用 transferFrom() 从 Boss 钱包转账到收款方
+   * Flow:
+   * 1. Call permit() to record Boss's authorization in the contract
+   * 2. Call transferFrom() to transfer from Boss's wallet to recipient
    * 
    * @example
    * ```typescript
    * const wallet = new PermitWallet({ chain: 'base' });
    * 
-   * // Boss 签署的 permit 数据
+   * // Boss-signed permit data
    * const permit = {
    *   owner: '0xBOSS...',
    *   spender: wallet.address,
@@ -154,11 +154,11 @@ export class PermitWallet {
     const { to, amount, permit } = params;
 
     try {
-      // 验证地址
+      // Validate addresses
       const toAddress = ethers.getAddress(to);
       const ownerAddress = ethers.getAddress(permit.owner);
       
-      // 验证 spender 是本钱包
+      // Verify spender is this wallet
       if (ethers.getAddress(permit.spender).toLowerCase() !== this.address.toLowerCase()) {
         return {
           success: false,
@@ -166,7 +166,7 @@ export class PermitWallet {
         };
       }
 
-      // 检查 deadline
+      // Check deadline
       const now = Math.floor(Date.now() / 1000);
       if (permit.deadline < now) {
         return {
@@ -175,11 +175,11 @@ export class PermitWallet {
         };
       }
 
-      // 转换金额
+      // Convert amount
       const amountWei = BigInt(Math.floor(amount * 1e6));
       const permitValue = BigInt(permit.value);
       
-      // 检查授权金额是否足够
+      // Check if authorized amount is sufficient
       if (amountWei > permitValue) {
         return {
           success: false,
@@ -187,12 +187,12 @@ export class PermitWallet {
         };
       }
 
-      // 检查现有 allowance
+      // Check existing allowance
       const currentAllowance = await this.usdcContract.allowance(ownerAddress, this.address);
       
       let permitTxHash: string | undefined;
       
-      // 如果 allowance 不足，先执行 permit
+      // If allowance insufficient, execute permit first
       if (BigInt(currentAllowance) < amountWei) {
         console.log('Executing permit...');
         const permitTx = await this.usdcContract.permit(
@@ -217,7 +217,7 @@ export class PermitWallet {
         console.log('Permit executed:', permitTxHash);
       }
 
-      // 执行 transferFrom
+      // Execute transferFrom
       console.log('Executing transferFrom...');
       const transferTx = await this.usdcContract.transferFrom(
         ownerAddress,
@@ -250,7 +250,7 @@ export class PermitWallet {
     } catch (error) {
       const message = (error as Error).message;
       
-      // 解析常见错误
+      // Parse common errors
       if (message.includes('ERC20InsufficientAllowance')) {
         return {
           success: false,
@@ -278,7 +278,7 @@ export class PermitWallet {
   }
 
   /**
-   * 获取 ETH 余额（用于支付 gas）
+   * Get ETH balance (for gas)
    */
   async getGasBalance(): Promise<string> {
     const balance = await this.provider.getBalance(this.address);
@@ -286,7 +286,7 @@ export class PermitWallet {
   }
 
   /**
-   * 检查是否有足够的 gas
+   * Check if there's enough gas
    */
   async hasEnoughGas(minEth: number = 0.001): Promise<boolean> {
     const balance = await this.getGasBalance();
@@ -295,7 +295,7 @@ export class PermitWallet {
 }
 
 /**
- * 格式化 Permit 请求消息（发给 Boss）
+ * Format Permit request message (to send to Boss)
  */
 export function formatPermitRequest(params: {
   agentAddress: string;
@@ -309,16 +309,16 @@ export function formatPermitRequest(params: {
   const deadline = Math.floor(Date.now() / 1000) + deadlineHours * 3600;
   const value = BigInt(Math.floor(amount * 1e6)).toString();
 
-  return `🔐 **USDC 支付额度授权请求**
+  return `🔐 **USDC Spending Allowance Request**
 
-${reason ? `**用途:** ${reason}\n` : ''}
-**授权详情:**
-- 被授权地址 (Agent): \`${agentAddress}\`
-- 授权金额: ${amount} USDC
-- 有效期: ${deadlineHours} 小时
-- 链: ${chainConfig.name}
+${reason ? `**Purpose:** ${reason}\n` : ''}
+**Authorization Details:**
+- Authorized address (Agent): \`${agentAddress}\`
+- Amount: ${amount} USDC
+- Valid for: ${deadlineHours} hours
+- Chain: ${chainConfig.name}
 
-**请使用钱包签署以下 EIP-2612 Permit:**
+**Please sign the following EIP-2612 Permit with your wallet:**
 
 \`\`\`json
 {
@@ -348,7 +348,7 @@ ${reason ? `**用途:** ${reason}\n` : ''}
 }
 \`\`\`
 
-签名后，请将 { v, r, s, deadline } 发给 Agent。
+After signing, send { v, r, s, deadline } to the Agent.
 
-⚠️ 注意：此授权仅允许 Agent 从您的钱包支付最多 ${amount} USDC，不会泄露私钥。`;
+⚠️ Note: This authorization only allows the Agent to spend up to ${amount} USDC from your wallet. Your private key is never exposed.`;
 }

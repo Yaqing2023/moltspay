@@ -1,87 +1,87 @@
 /**
- * Agent 对话模板
+ * Agent Conversation Templates
  * 
- * 标准化的 Agent-to-Agent 支付对话模板
- * 可直接嵌入 prompt 或用于生成对话
+ * Standardized Agent-to-Agent payment conversation templates
+ * Can be embedded in prompts or used for dialogue generation
  */
 
 import { getChain } from '../chains/index.js';
-import type { ChainName, Invoice, VerifyResult } from '../types/index.js';
+import type { ChainName } from '../types/index.js';
 import { Receipt } from '../receipt/index.js';
 
-// ============ 卖方模板 ============
+// ============ Seller Templates ============
 
 export const SellerTemplates = {
   /**
-   * 1. 能力识别 - 询问买方是否有支付能力
+   * 1. Capability Check - Ask if buyer has payment capability
    */
   askPaymentCapability(): string {
-    return `可以。我先确认一下：你现在是否已经具备链上支付 USDC 的能力（有可用钱包和可用资金/额度）？`;
+    return `Sure. First, let me confirm: do you currently have the ability to pay USDC on-chain (have a wallet and available funds/allowance)?`;
   },
 
   /**
-   * 2. 能力协商 - 说明结算方式
+   * 2. Settlement Method - Explain how we settle
    */
   explainSettlement(chain: ChainName = 'base'): string {
     const chainConfig = getChain(chain);
-    return `我们的结算方式是：USDC（${chainConfig.name} 链上）。你这边只要满足两点就行：
-1）有一个钱包地址；
-2）钱包里有 USDC，或拥有者给你一个可用额度授权（更推荐额度授权）。
-你可以按我引导完成吗？`;
+    return `Our settlement method is: USDC (on-chain, ${chainConfig.name}). You just need two things:
+1) A wallet address;
+2) USDC in your wallet, or a spending allowance from your owner (allowance is recommended).
+Can you follow my guidance to set this up?`;
   },
 
   /**
-   * 3.1 引导安装 - 第一步安装 SDK
+   * 3.1 Installation Guide - First step: install SDK
    */
   guideInstall(): string {
-    return `第一步：请在你的运行环境安装支付模块。执行：\`npm install moltspay ethers\`。
-安装完成后，创建一个钱包地址，并把地址发给我（只发地址，不要发私钥/助记词）。`;
+    return `Step 1: Install the payment module in your environment. Run: \`npm install moltspay ethers\`.
+After installation, create a wallet address and send it to me (address only, never send private key/mnemonic).`;
   },
 
   /**
-   * 3.2 确认钱包地址
+   * 3.2 Confirm Wallet Address
    */
   confirmWalletAddress(address: string): string {
-    return `收到。提醒：任何情况下都不要把私钥/助记词发给任何人（包括我）。
-你的钱包地址是 \`${address}\`。
-第二步：你需要让你的拥有者（Boss）给你支付能力。`;
+    return `Got it. Reminder: never send your private key/mnemonic to anyone (including me).
+Your wallet address is \`${address}\`.
+Step 2: You need your owner (Boss) to give you payment capability.`;
   },
 
   /**
-   * 3.3 引导获取资金 - 选择方式
+   * 3.3 Funding Options - Choose method
    */
   guideFunding(): string {
-    return `你现在有两种方式获得支付能力：
-A）让 Boss 直接转 USDC 到你的钱包（简单，但你会持有资金）；
-B）让 Boss 给你一个"USDC 支付额度授权"（推荐：你不持有资金，只能在额度内付款）。
-你更方便用哪种？`;
+    return `You now have two ways to get payment capability:
+A) Have Boss transfer USDC directly to your wallet (simple, but you'll hold the funds);
+B) Have Boss give you a "USDC spending allowance" (recommended: you don't hold funds, can only pay within the allowance).
+Which works better for you?`;
   },
 
   /**
-   * 3.4 引导 Permit 授权
+   * 3.4 Guide Permit Authorization
    */
   guidePermit(agentAddress: string, suggestedAmount: number = 10): string {
-    return `好的。请你向 Boss 发送这句话（你可以原样复制）：
-"我需要用于购买服务的 USDC 支付额度授权（Permit）。请给我 ${suggestedAmount} USDC 的可用额度，授权对象是我的钱包 ${agentAddress}，授权有效期 24 小时。"
-完成后把"已获得额度"告诉我即可。`;
+    return `OK. Please send this message to your Boss (you can copy it directly):
+"I need a USDC spending allowance (Permit) for purchasing services. Please authorize ${suggestedAmount} USDC to my wallet ${agentAddress}, valid for 24 hours."
+Let me know when you've received the allowance.`;
   },
 
   /**
-   * 3.5 确认能力就绪
+   * 3.5 Confirm Capability Ready
    */
   confirmCapabilityReady(): string {
-    return `很好。你现在已经具备完成交易的支付能力。我们进入服务需求确认。`;
+    return `Great. You now have the payment capability to complete transactions. Let's confirm your service requirements.`;
   },
 
   /**
-   * 4. 询问服务需求
+   * 4. Ask Service Requirements
    */
-  askServiceRequirements(serviceName: string = '视频'): string {
-    return `请告诉我你要生成的${serviceName}规格：主题/风格、时长、分辨率、是否需要字幕或配音。`;
+  askServiceRequirements(serviceName: string = 'video'): string {
+    return `Please tell me your ${serviceName} specifications: theme/style, duration, resolution, subtitles or voiceover needed?`;
   },
 
   /**
-   * 5. 报价
+   * 5. Quote
    */
   quote(params: {
     service: string;
@@ -91,179 +91,179 @@ B）让 Boss 给你一个"USDC 支付额度授权"（推荐：你不持有资金
   }): string {
     const { service, price, recipientAddress, chain = 'base' } = params;
     const chainConfig = getChain(chain);
-    return `报价如下：
-- 服务：${service}
-- 价格：${price} USDC
-- 链：${chainConfig.name}
-- 收款地址：\`${recipientAddress}\`
-- 付款后请把交易哈希（tx hash）发我用于链上确认
+    return `Quote:
+- Service: ${service}
+- Price: ${price} USDC
+- Chain: ${chainConfig.name}
+- Recipient: \`${recipientAddress}\`
+- After payment, send me the transaction hash (tx hash) for on-chain verification
 
-请问你现在确认购买并立即付款吗？`;
+Do you confirm the purchase and pay now?`;
   },
 
   /**
-   * 7. 验证中
+   * 7. Verifying
    */
   verifying(): string {
-    return `我正在链上验证该交易是否到账与金额是否正确。`;
+    return `I'm verifying the transaction on-chain to confirm receipt and amount.`;
   },
 
   /**
-   * 7. 验证通过
+   * 7. Verification Passed
    */
   verificationPassed(amount: string): string {
-    return `验证通过：已收到 ${amount} USDC。现在开始处理你的请求。
-[状态：已确认收款]`;
+    return `Verification passed: received ${amount} USDC. Starting to process your request now.
+[status:payment_confirmed]`;
   },
 
   /**
-   * 7. 验证失败
+   * 7. Verification Failed
    */
   verificationFailed(error: string): string {
-    return `验证失败：${error}
-请检查交易是否正确，或重新发送正确的交易 hash。`;
+    return `Verification failed: ${error}
+Please check if the transaction is correct, or resend the correct tx hash.`;
   },
 
   /**
-   * 8. 交付
+   * 8. Delivery
    */
   deliver(params: {
     downloadUrl: string;
     fileHash?: string;
   }): string {
     const { downloadUrl, fileHash } = params;
-    let msg = `服务已完成。交付如下：
-- 下载链接：${downloadUrl}`;
+    let msg = `Service completed. Delivery details:
+- Download link: ${downloadUrl}`;
     if (fileHash) {
-      msg += `\n- 文件校验：SHA256=${fileHash}`;
+      msg += `\n- File checksum: SHA256=${fileHash}`;
     }
-    msg += `\n\n如果你下载有问题告诉我，我会提供备用链接。
-[状态：已交付]`;
+    msg += `\n\nLet me know if you have any download issues, I'll provide a backup link.
+[status:delivered]`;
     return msg;
   },
 
   /**
-   * 9. 收据
+   * 9. Receipt
    */
   receipt(receipt: Receipt): string {
-    return `这里是本次交易收据（你可转发给 Boss 对账）：
-- 发票号：${receipt.invoiceId}
-- 服务：${receipt.service}
-- 金额：${receipt.amount} ${receipt.token}
-- 交易哈希：${receipt.txHash}
-- 收款地址：${receipt.recipient}
-${receipt.delivery?.url ? `- 交付链接：${receipt.delivery.url}` : ''}
-[状态：收据已出 invoice=${receipt.invoiceId}]`;
+    return `Here's your transaction receipt (you can forward to Boss for reconciliation):
+- Invoice: ${receipt.invoiceId}
+- Service: ${receipt.service}
+- Amount: ${receipt.amount} ${receipt.token}
+- Tx Hash: ${receipt.txHash}
+- Recipient: ${receipt.recipient}
+${receipt.delivery?.url ? `- Delivery: ${receipt.delivery.url}` : ''}
+[status:receipt_issued invoice=${receipt.invoiceId}]`;
   },
 
   /**
-   * 10. 结束
+   * 10. End
    */
   end(): string {
-    return `感谢购买。本次交易已结束。如需追加修改或新服务，随时发需求。`;
+    return `Thank you for your purchase. This transaction is complete. Feel free to reach out if you need modifications or new services.`;
   },
 };
 
-// ============ 买方模板 ============
+// ============ Buyer Templates ============
 
 export const BuyerTemplates = {
   /**
-   * 0. 发起请求
+   * 0. Request Service
    */
   requestService(service: string): string {
-    return `我想购买一个${service}服务。`;
+    return `I'd like to purchase a ${service} service.`;
   },
 
   /**
-   * 1. 回复无能力
+   * 1. No Capability
    */
   noCapability(): string {
-    return `我不确定。我目前没有安装任何支付工具，也没有钱包。`;
+    return `I'm not sure. I currently don't have any payment tools installed, and no wallet.`;
   },
 
   /**
-   * 1. 回复有能力
+   * 1. Has Capability
    */
   hasCapability(balance?: string): string {
-    return `是的，我有钱包和可用的 USDC${balance ? ` (余额: ${balance})` : ''}。`;
+    return `Yes, I have a wallet and available USDC${balance ? ` (balance: ${balance})` : ''}.`;
   },
 
   /**
-   * 2. 同意引导
+   * 2. Agree to Guide
    */
   agreeToGuide(): string {
-    return `可以，请引导我。`;
+    return `Sure, please guide me.`;
   },
 
   /**
-   * 3.1 报告钱包创建完成
+   * 3.1 Report Wallet Created
    */
   walletCreated(address: string): string {
-    return `我已创建钱包地址：${address}。
-[状态：已具备钱包地址]`;
+    return `I've created my wallet address: ${address}.
+[status:wallet_ready]`;
   },
 
   /**
-   * 3.3 选择 Permit 方式
+   * 3.3 Choose Permit Method
    */
   choosePermit(): string {
-    return `我选择 B：让 Boss 给我额度授权（Permit）。`;
+    return `I choose B: have Boss give me an allowance (Permit).`;
   },
 
   /**
-   * 3.3 选择直接转账方式
+   * 3.3 Choose Direct Transfer
    */
   chooseDirectTransfer(): string {
-    return `我选择 A：让 Boss 直接转 USDC 到我的钱包。`;
+    return `I choose A: have Boss transfer USDC directly to my wallet.`;
   },
 
   /**
-   * 3.4 报告获得授权
+   * 3.4 Report Permit Received
    */
   permitReceived(amount: number): string {
-    return `Boss 已完成授权。我现在有 ${amount} USDC 的可用额度。
-[状态：已具备支付额度 USDC=${amount}]`;
+    return `Boss has completed the authorization. I now have ${amount} USDC allowance.
+[status:permit_ready USDC=${amount}]`;
   },
 
   /**
-   * 4. 提交需求
+   * 4. Submit Requirements
    */
   submitRequirements(requirements: string): string {
-    return `需求如下：
+    return `Requirements:
 ${requirements}`;
   },
 
   /**
-   * 5. 确认购买
+   * 5. Confirm Purchase
    */
   confirmPurchase(): string {
-    return `确认购买，我现在付款。`;
+    return `Confirmed. I'll pay now.`;
   },
 
   /**
-   * 6. 报告已支付
+   * 6. Report Payment Sent
    */
   paymentSent(txHash: string, amount: number): string {
-    return `已付款完成。交易哈希是：${txHash}。
-[状态：已发起支付 tx=${txHash} amount=${amount} USDC]`;
+    return `Payment complete. Transaction hash: ${txHash}.
+[status:payment_sent tx=${txHash} amount=${amount} USDC]`;
   },
 
   /**
-   * 8. 确认收到交付
+   * 8. Confirm Delivery Received
    */
   deliveryReceived(): string {
-    return `收到，我正在下载检查。`;
+    return `Received, I'm downloading and checking now.`;
   },
 
   /**
-   * 9. 确认收据
+   * 9. Confirm Receipt
    */
   receiptReceived(): string {
-    return `收据收到，服务完成。谢谢！`;
+    return `Receipt received, service complete. Thanks!`;
   },
 
   /**
-   * 向 Boss 请求 Permit
+   * Request Permit from Boss
    */
   requestPermitFromBoss(params: {
     amount: number;
@@ -272,39 +272,39 @@ ${requirements}`;
     reason?: string;
   }): string {
     const { amount, agentAddress, deadlineHours = 24, reason } = params;
-    return `Boss，我需要用于${reason || '购买服务'}的 USDC 支付额度授权（Permit）。
-请给我 ${amount} USDC 的可用额度，授权对象是我的钱包 ${agentAddress}，授权有效期 ${deadlineHours} 小时。`;
+    return `Boss, I need a USDC spending allowance (Permit) for ${reason || 'purchasing services'}.
+Please authorize ${amount} USDC to my wallet ${agentAddress}, valid for ${deadlineHours} hours.`;
   },
 };
 
-// ============ 状态标记 ============
+// ============ Status Markers ============
 
 export const StatusMarkers = {
-  walletReady: '[状态：已具备钱包地址]',
-  permitReady: (amount: number) => `[状态：已具备支付额度 USDC=${amount}]`,
-  paymentSent: (txHash: string, amount: number) => `[状态：已发起支付 tx=${txHash} amount=${amount} USDC]`,
-  paymentConfirmed: (txHash: string) => `[状态：已确认收款 tx=${txHash}]`,
-  delivered: (url: string, hash?: string) => `[状态：已交付 delivery_url=${url}${hash ? ` hash=${hash}` : ''}]`,
-  receiptIssued: (invoiceId: string, txHash: string) => `[状态：收据已出 invoice=${invoiceId} tx=${txHash}]`,
+  walletReady: '[status:wallet_ready]',
+  permitReady: (amount: number) => `[status:permit_ready USDC=${amount}]`,
+  paymentSent: (txHash: string, amount: number) => `[status:payment_sent tx=${txHash} amount=${amount} USDC]`,
+  paymentConfirmed: (txHash: string) => `[status:payment_confirmed tx=${txHash}]`,
+  delivered: (url: string, hash?: string) => `[status:delivered url=${url}${hash ? ` hash=${hash}` : ''}]`,
+  receiptIssued: (invoiceId: string, txHash: string) => `[status:receipt_issued invoice=${invoiceId} tx=${txHash}]`,
 };
 
-// ============ 状态解析 ============
+// ============ Status Parser ============
 
 export function parseStatusMarker(message: string): {
   type: string;
   data: Record<string, string>;
 } | null {
-  const match = message.match(/\[状态：([^\]]+)\]/);
+  const match = message.match(/\[status:([^\]]+)\]/);
   if (!match) return null;
 
   const content = match[1];
   
-  // 解析不同类型的状态
-  if (content === '已具备钱包地址') {
+  // Parse different status types
+  if (content === 'wallet_ready') {
     return { type: 'wallet_ready', data: {} };
   }
   
-  if (content.startsWith('已具备支付额度')) {
+  if (content.startsWith('permit_ready')) {
     const amountMatch = content.match(/USDC=(\d+(?:\.\d+)?)/);
     return { 
       type: 'permit_ready', 
@@ -312,7 +312,7 @@ export function parseStatusMarker(message: string): {
     };
   }
   
-  if (content.startsWith('已发起支付')) {
+  if (content.startsWith('payment_sent')) {
     const txMatch = content.match(/tx=(\S+)/);
     const amountMatch = content.match(/amount=(\d+(?:\.\d+)?)/);
     return {
@@ -324,7 +324,7 @@ export function parseStatusMarker(message: string): {
     };
   }
   
-  if (content.startsWith('已确认收款')) {
+  if (content.startsWith('payment_confirmed')) {
     const txMatch = content.match(/tx=(\S+)/);
     return {
       type: 'payment_confirmed',
@@ -332,8 +332,8 @@ export function parseStatusMarker(message: string): {
     };
   }
   
-  if (content.startsWith('已交付')) {
-    const urlMatch = content.match(/delivery_url=(\S+)/);
+  if (content.startsWith('delivered')) {
+    const urlMatch = content.match(/url=(\S+)/);
     const hashMatch = content.match(/hash=(\S+)/);
     return {
       type: 'delivered',
@@ -344,7 +344,7 @@ export function parseStatusMarker(message: string): {
     };
   }
   
-  if (content.startsWith('收据已出')) {
+  if (content.startsWith('receipt_issued')) {
     const invoiceMatch = content.match(/invoice=(\S+)/);
     const txMatch = content.match(/tx=(\S+)/);
     return {

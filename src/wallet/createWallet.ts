@@ -1,10 +1,10 @@
 /**
- * createWallet - 为 Agent 创建新钱包
+ * createWallet - Create a new wallet for Agent
  * 
- * 功能：
- * - 生成新的以太坊钱包
- * - 安全存储私钥（加密或明文，取决于配置）
- * - 返回钱包地址（不返回私钥）
+ * Features:
+ * - Generate new Ethereum wallet
+ * - Securely store private key (encrypted or plaintext, depending on config)
+ * - Return wallet address (never return private key)
  */
 
 import { ethers } from 'ethers';
@@ -13,13 +13,13 @@ import { join, dirname } from 'path';
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'crypto';
 
 export interface CreateWalletOptions {
-  /** 存储路径，默认 ~/.moltspay/wallet.json */
+  /** Storage path, default ~/.moltspay/wallet.json */
   storagePath?: string;
-  /** 加密密码（可选，不提供则明文存储） */
+  /** Encryption password (optional, plaintext if not provided) */
   password?: string;
-  /** 钱包标签/名称 */
+  /** Wallet label/name */
   label?: string;
-  /** 如果钱包已存在，是否覆盖 */
+  /** Overwrite if wallet exists */
   overwrite?: boolean;
 }
 
@@ -28,11 +28,11 @@ export interface WalletData {
   label?: string;
   createdAt: string;
   encrypted: boolean;
-  /** 加密后的私钥或明文私钥 */
+  /** Encrypted or plaintext private key */
   privateKey: string;
-  /** 加密用的 IV */
+  /** Encryption IV */
   iv?: string;
-  /** 加密用的 salt */
+  /** Encryption salt */
   salt?: string;
 }
 
@@ -41,7 +41,7 @@ export interface CreateWalletResult {
   address?: string;
   storagePath?: string;
   error?: string;
-  /** 是否是新创建的（false 表示加载了已有钱包） */
+  /** Whether newly created (false means loaded existing) */
   isNew?: boolean;
 }
 
@@ -49,7 +49,7 @@ const DEFAULT_STORAGE_DIR = join(process.env.HOME || '~', '.moltspay');
 const DEFAULT_STORAGE_FILE = 'wallet.json';
 
 /**
- * 加密私钥
+ * Encrypt private key
  */
 function encryptPrivateKey(privateKey: string, password: string): { encrypted: string; iv: string; salt: string } {
   const salt = randomBytes(16);
@@ -68,7 +68,7 @@ function encryptPrivateKey(privateKey: string, password: string): { encrypted: s
 }
 
 /**
- * 解密私钥
+ * Decrypt private key
  */
 function decryptPrivateKey(encrypted: string, password: string, iv: string, salt: string): string {
   const key = scryptSync(password, Buffer.from(salt, 'hex'), 32);
@@ -81,27 +81,27 @@ function decryptPrivateKey(encrypted: string, password: string, iv: string, salt
 }
 
 /**
- * 创建新钱包
+ * Create new wallet
  * 
  * @example
  * ```typescript
- * // 创建未加密钱包
+ * // Create unencrypted wallet
  * const result = await createWallet();
- * console.log('钱包地址:', result.address);
+ * console.log('Wallet address:', result.address);
  * 
- * // 创建加密钱包
+ * // Create encrypted wallet
  * const result = await createWallet({ password: 'mySecurePassword' });
  * 
- * // 指定存储路径
+ * // Specify storage path
  * const result = await createWallet({ storagePath: './my-wallet.json' });
  * ```
  */
 export function createWallet(options: CreateWalletOptions = {}): CreateWalletResult {
   const storagePath = options.storagePath || join(DEFAULT_STORAGE_DIR, DEFAULT_STORAGE_FILE);
   
-  // 检查是否已存在
+  // Check if exists
   if (existsSync(storagePath) && !options.overwrite) {
-    // 加载已有钱包
+    // Load existing wallet
     try {
       const existing = JSON.parse(readFileSync(storagePath, 'utf8')) as WalletData;
       return {
@@ -119,10 +119,10 @@ export function createWallet(options: CreateWalletOptions = {}): CreateWalletRes
   }
 
   try {
-    // 创建新钱包
+    // Create new wallet
     const wallet = ethers.Wallet.createRandom();
     
-    // 准备存储数据
+    // Prepare storage data
     const walletData: WalletData = {
       address: wallet.address,
       label: options.label,
@@ -132,23 +132,23 @@ export function createWallet(options: CreateWalletOptions = {}): CreateWalletRes
     };
 
     if (options.password) {
-      // 加密存储
+      // Encrypted storage
       const { encrypted, iv, salt } = encryptPrivateKey(wallet.privateKey, options.password);
       walletData.privateKey = encrypted;
       walletData.iv = iv;
       walletData.salt = salt;
     } else {
-      // 明文存储（不推荐，但对于测试/开发方便）
+      // Plaintext storage (not recommended, but convenient for testing/dev)
       walletData.privateKey = wallet.privateKey;
     }
 
-    // 确保目录存在
+    // Ensure directory exists
     const dir = dirname(storagePath);
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
 
-    // 写入文件
+    // Write file
     writeFileSync(storagePath, JSON.stringify(walletData, null, 2), { mode: 0o600 });
 
     return {
@@ -166,7 +166,7 @@ export function createWallet(options: CreateWalletOptions = {}): CreateWalletRes
 }
 
 /**
- * 加载已有钱包
+ * Load existing wallet
  */
 export function loadWallet(options: { storagePath?: string; password?: string } = {}): {
   success: boolean;
@@ -198,7 +198,7 @@ export function loadWallet(options: { storagePath?: string; password?: string } 
 }
 
 /**
- * 获取钱包地址（不需要密码）
+ * Get wallet address (no password required)
  */
 export function getWalletAddress(storagePath?: string): string | null {
   const path = storagePath || join(DEFAULT_STORAGE_DIR, DEFAULT_STORAGE_FILE);
@@ -216,7 +216,7 @@ export function getWalletAddress(storagePath?: string): string | null {
 }
 
 /**
- * 检查钱包是否存在
+ * Check if wallet exists
  */
 export function walletExists(storagePath?: string): boolean {
   const path = storagePath || join(DEFAULT_STORAGE_DIR, DEFAULT_STORAGE_FILE);
