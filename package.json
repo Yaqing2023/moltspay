@@ -1,6 +1,6 @@
 {
   "name": "moltspay",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Blockchain payment infrastructure for AI Agents on Moltbook",
   "keywords": [
     "moltbook",
@@ -40,18 +40,17 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "commander": "^12.0.0"
+    "commander": "^12.0.0",
+    "ethers": "^6.11.0",
+    "@x402/fetch": "^2.3.0",
+    "@x402/evm": "^2.3.1",
+    "viem": "^2.0.0"
   },
   "peerDependencies": {
-    "ethers": "^6.0.0",
-    "@coinbase/cdp-sdk": "^1.0.0",
-    "@x402/fetch": "^2.3.0",
-    "@x402/evm": "^2.3.1"
+    "@coinbase/cdp-sdk": "^1.0.0"
   },
   "peerDependenciesMeta": {
-    "@coinbase/cdp-sdk": { "optional": true },
-    "@x402/fetch": { "optional": true },
-    "@x402/evm": { "optional": true }
+    "@coinbase/cdp-sdk": { "optional": true }
   },
   "devDependencies": {
     "@coinbase/cdp-sdk": "^1.0.0",
