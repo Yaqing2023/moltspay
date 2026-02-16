@@ -347,6 +347,7 @@ program
   .argument('<url>', 'URL to request')
   .option('-X, --method <method>', 'HTTP method', 'GET')
   .option('-d, --data <json>', 'Request body (JSON)')
+  .option('-i, --image <path>', 'Image file to include (reads file and sends as base64)')
   .option('-H, --header <header...>', 'Additional headers (key:value)')
   .option('-c, --chain <chain>', 'Chain name', 'base')
   .option('--cdp', 'Use CDP wallet')
@@ -398,8 +399,40 @@ program
         headers,
       };
       
-      if (options.data && ['POST', 'PUT', 'PATCH'].includes(init.method as string)) {
-        init.body = options.data;
+      // Handle request body
+      let bodyData: Record<string, unknown> = {};
+      
+      if (options.data) {
+        try {
+          bodyData = JSON.parse(options.data);
+        } catch {
+          bodyData = { data: options.data };
+        }
+      }
+      
+      // Read image file if provided
+      if (options.image) {
+        const fs = await import('fs');
+        const path = await import('path');
+        
+        const imagePath = path.resolve(options.image);
+        if (!fs.existsSync(imagePath)) {
+          console.error(`❌ Image file not found: ${imagePath}`);
+          process.exit(1);
+        }
+        
+        const imageBuffer = fs.readFileSync(imagePath);
+        const imageBase64 = imageBuffer.toString('base64');
+        
+        if (options.verbose) {
+          console.error(`📷 Image: ${imagePath} (${Math.round(imageBuffer.length / 1024)}KB)`);
+        }
+        
+        bodyData.image_base64 = imageBase64;
+      }
+      
+      if (['POST', 'PUT', 'PATCH'].includes(init.method as string) && Object.keys(bodyData).length > 0) {
+        init.body = JSON.stringify(bodyData);
       }
       
       if (options.verbose) {
