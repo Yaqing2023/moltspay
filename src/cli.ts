@@ -340,6 +340,112 @@ program
     process.exit(result.success ? 0 : 1);
   });
 
+// ============ x402 ============
+program
+  .command('x402')
+  .description('Make HTTP request with automatic x402 payment')
+  .argument('<url>', 'URL to request')
+  .option('-X, --method <method>', 'HTTP method', 'GET')
+  .option('-d, --data <json>', 'Request body (JSON)')
+  .option('-H, --header <header...>', 'Additional headers (key:value)')
+  .option('-c, --chain <chain>', 'Chain name', 'base')
+  .option('--cdp', 'Use CDP wallet')
+  .option('-o, --output <file>', 'Save response to file')
+  .option('-v, --verbose', 'Show payment details')
+  .action(async (url, options) => {
+    const { createX402Client, isX402Available } = await import('./x402/client.js');
+    
+    // Check if x402 packages are available
+    if (!isX402Available()) {
+      console.error('❌ x402 packages not installed.');
+      console.error('');
+      console.error('Install them with:');
+      console.error('  npm install @x402/fetch @x402/evm viem');
+      process.exit(1);
+    }
+    
+    try {
+      // Create x402 client
+      if (options.verbose) {
+        console.error(`🔄 Initializing x402 client (chain: ${options.chain})...`);
+      }
+      
+      const client = await createX402Client({
+        chain: options.chain,
+        useCDP: options.cdp,
+      });
+      
+      if (options.verbose) {
+        console.error(`   Wallet: ${client.address}`);
+        console.error(`   Chain: ${client.chain}`);
+        console.error('');
+      }
+      
+      // Build request
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      
+      if (options.header) {
+        for (const h of options.header) {
+          const [key, ...valueParts] = h.split(':');
+          headers[key.trim()] = valueParts.join(':').trim();
+        }
+      }
+      
+      const init: RequestInit = {
+        method: options.method.toUpperCase(),
+        headers,
+      };
+      
+      if (options.data && ['POST', 'PUT', 'PATCH'].includes(init.method as string)) {
+        init.body = options.data;
+      }
+      
+      if (options.verbose) {
+        console.error(`📤 ${init.method} ${url}`);
+        if (options.data) {
+          console.error(`   Body: ${options.data.substring(0, 100)}${options.data.length > 100 ? '...' : ''}`);
+        }
+        console.error('');
+      }
+      
+      // Make request with automatic payment
+      const response = await client.fetch(url, init);
+      
+      if (options.verbose) {
+        console.error(`📥 Response: ${response.status} ${response.statusText}`);
+        console.error('');
+      }
+      
+      // Handle response
+      const contentType = response.headers.get('content-type') || '';
+      let body: string;
+      
+      if (contentType.includes('application/json')) {
+        const json = await response.json();
+        body = JSON.stringify(json, null, 2);
+      } else {
+        body = await response.text();
+      }
+      
+      // Output
+      if (options.output) {
+        const fs = await import('fs');
+        fs.writeFileSync(options.output, body);
+        console.error(`✅ Saved to ${options.output}`);
+      } else {
+        console.log(body);
+      }
+      
+      process.exit(response.ok ? 0 : 1);
+      
+    } catch (error) {
+      console.error('❌ Error:', (error as Error).message);
+      process.exit(1);
+    }
+  });
+
 // ============ status ============
 program
   .command('status')
