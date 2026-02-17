@@ -461,6 +461,38 @@ moltspay transfer --to 0x... --amount 10 --secure
 moltspay chains
 ```
 
+### x402 CLI Examples (Cross-Platform)
+
+The x402 command sends JSON payloads. Quote handling differs by shell:
+
+**Linux / Mac (bash/zsh):**
+```bash
+npx moltspay x402 https://example.com/api \
+  -X POST \
+  -d '{"prompt": "your text here"}' \
+  -v
+```
+
+**Windows PowerShell:**
+```powershell
+# Option 1: Use a JSON file (recommended)
+echo '{"prompt": "your text here"}' > request.json
+npx moltspay x402 https://example.com/api -X POST -d "@request.json" -v
+
+# Option 2: Escape with backtick
+npx moltspay x402 https://example.com/api -X POST -d "{`"prompt`": `"your text`"}" -v
+
+# Option 3: Use cmd /c wrapper
+cmd /c "npx moltspay x402 https://example.com/api -X POST -d ""{\""prompt\"": \""your text\""}"" -v"
+```
+
+**Windows CMD:**
+```cmd
+npx moltspay x402 https://example.com/api -X POST -d "{\"prompt\": \"your text\"}" -v
+```
+
+**Cross-platform tip:** For complex JSON, save to a file and use `-d @filename.json` - works on all systems!
+
 ## Environment Variables
 
 ```bash
