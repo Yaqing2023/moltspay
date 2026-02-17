@@ -132,3 +132,40 @@ export {
   type CDPWalletData,
   type CDPInitResult,
 } from './cdp/index.js';
+
+// Deferred Payment (Credit-based / Pay Later)
+export {
+  // Manager
+  DeferredPaymentManager,
+  type DeferredPaymentManagerConfig,
+  type ChargeResult,
+  type SettlementResult,
+  type AccountSummary,
+  // Stores
+  MemoryDeferredStore,
+  JsonDeferredStore,
+  type JsonDeferredStoreConfig,
+  // Templates
+  DeferredStatusMarkers,
+  DeferredSellerTemplates,
+  DeferredBuyerTemplates,
+  parseDeferredStatusMarker,
+  type ParsedDeferredStatus,
+  // Types
+  type CreditAccount,
+  type CreditAccountStatus,
+  type PaymentTerms,
+  type SettlementFrequency,
+  type CreditTransaction,
+  type CreditTransactionType,
+  type DeferredPayment,
+  type DeferredPaymentStatus,
+  type PaymentPlan,
+  type Installment,
+  type Settlement,
+  type CreateCreditAccountParams,
+  type CreateDeferredPaymentParams,
+  type RecordSettlementParams,
+  type DeferredPaymentStore,
+  type PaymentFilter,
+} from './deferred/index.js';
