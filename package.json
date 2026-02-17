@@ -1,6 +1,6 @@
 {
   "name": "moltspay",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Blockchain payment infrastructure for AI Agents on Moltbook",
   "keywords": [
     "moltbook",
@@ -50,7 +50,9 @@
     "@coinbase/cdp-sdk": "^1.0.0"
   },
   "peerDependenciesMeta": {
-    "@coinbase/cdp-sdk": { "optional": true }
+    "@coinbase/cdp-sdk": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@coinbase/cdp-sdk": "^1.0.0",
