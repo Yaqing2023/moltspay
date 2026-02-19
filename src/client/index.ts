@@ -209,12 +209,20 @@ export class MoltsPayClient {
     }
     const authorization = await this.signEIP3009(payTo, amount, chain);
 
-    // Step 5: Create x402 payment payload
+    // Step 5: Create x402 payment payload (v2 format requires 'accepted')
     const payload = {
       x402Version: X402_VERSION,
-      scheme: 'exact',
-      network,
       payload: authorization,
+      // v2 requires 'accepted' field with the requirements being fulfilled
+      accepted: {
+        scheme: 'exact',
+        network,
+        asset: req.asset || chain.usdc,
+        amount: amountRaw,
+        payTo,
+        maxTimeoutSeconds: req.maxTimeoutSeconds || 300,
+        extra: req.extra || { name: 'USD Coin', version: '2' },
+      },
     };
     const paymentHeader = Buffer.from(JSON.stringify(payload)).toString('base64');
 
