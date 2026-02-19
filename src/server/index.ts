@@ -40,6 +40,18 @@ const PAYMENT_RESPONSE_HEADER = 'x-payment-response';
 const FACILITATOR_TESTNET = 'https://www.x402.org/facilitator';
 const FACILITATOR_MAINNET = 'https://api.cdp.coinbase.com/platform/v2/x402';
 
+// USDC contract addresses
+const USDC_ADDRESSES: Record<string, string> = {
+  'eip155:8453': '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',   // Base mainnet
+  'eip155:84532': '0x036CbD53842c5426634e7929541eC2318f3dCF7e', // Base Sepolia
+};
+
+// EIP-712 domain info for USDC (required for signature verification)
+const USDC_DOMAIN = {
+  name: 'USD Coin',
+  version: '2',
+};
+
 interface X402PaymentPayload {
   x402Version: number;
   scheme: string;
@@ -369,19 +381,8 @@ export class MoltsPayServer {
    * Return 402 with x402 payment requirements
    */
   private sendPaymentRequired(config: ServiceConfig, res: ServerResponse): void {
-    const amountInUnits = Math.floor(config.price * 1e6).toString();
-
-    const requirements = [{
-      scheme: 'exact',
-      network: this.networkId,
-      maxAmountRequired: amountInUnits,
-      resource: this.manifest.provider.wallet,
-      description: `${config.name} - $${config.price} ${config.currency}`,
-      extra: JSON.stringify({ 
-        facilitator: this.cdpConfig.useMainnet ? 'cdp' : 'x402.org',
-        mainnet: this.cdpConfig.useMainnet,
-      }),
-    }];
+    const requirements = [this.buildPaymentRequirements(config)];
+    requirements[0].description = `${config.name} - $${config.price} ${config.currency}`;
 
     const encoded = Buffer.from(JSON.stringify(requirements)).toString('base64');
 
@@ -419,6 +420,25 @@ export class MoltsPayServer {
   }
 
   /**
+   * Build complete payment requirements for facilitator
+   */
+  private buildPaymentRequirements(config: ServiceConfig): Record<string, any> {
+    const amountInUnits = Math.floor(config.price * 1e6).toString();
+    const usdcAddress = USDC_ADDRESSES[this.networkId];
+
+    return {
+      scheme: 'exact',
+      network: this.networkId,
+      maxAmountRequired: amountInUnits,
+      amount: amountInUnits,
+      asset: usdcAddress,
+      payTo: this.manifest.provider.wallet,
+      maxTimeoutSeconds: 300,
+      extra: USDC_DOMAIN,
+    };
+  }
+
+  /**
    * Verify payment with facilitator (testnet or CDP)
    */
   private async verifyWithFacilitator(
@@ -426,20 +446,14 @@ export class MoltsPayServer {
     config: ServiceConfig
   ): Promise<{ valid: boolean; error?: string }> {
     try {
-      const amountInUnits = Math.floor(config.price * 1e6).toString();
-
-      const requirements = {
-        scheme: 'exact',
-        network: this.networkId,
-        maxAmountRequired: amountInUnits,
-        resource: this.manifest.provider.wallet,
-        payTo: this.manifest.provider.wallet,
-      };
+      const requirements = this.buildPaymentRequirements(config);
 
       const requestBody = {
         paymentPayload: payment,
         paymentRequirements: requirements,
       };
+
+      console.log('[MoltsPay] Verify request:', JSON.stringify(requestBody, null, 2));
 
       // Build headers
       let headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -461,6 +475,7 @@ export class MoltsPayServer {
       });
 
       const result = await response.json() as any;
+      console.log('[MoltsPay] Verify response:', JSON.stringify(result, null, 2));
 
       if (!response.ok || !result.isValid) {
         return { valid: false, error: result.invalidReason || result.error || 'Verification failed' };
@@ -479,15 +494,7 @@ export class MoltsPayServer {
     payment: X402PaymentPayload,
     config: ServiceConfig
   ): Promise<{ transaction?: string; status: string }> {
-    const amountInUnits = Math.floor(config.price * 1e6).toString();
-
-    const requirements = {
-      scheme: 'exact',
-      network: this.networkId,
-      maxAmountRequired: amountInUnits,
-      resource: this.manifest.provider.wallet,
-      payTo: this.manifest.provider.wallet,
-    };
+    const requirements = this.buildPaymentRequirements(config);
 
     const requestBody = {
       paymentPayload: payment,
