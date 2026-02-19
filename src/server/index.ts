@@ -408,12 +408,17 @@ export class MoltsPayServer {
    */
   private sendPaymentRequired(config: ServiceConfig, res: ServerResponse): void {
     const requirements = this.buildPaymentRequirements(config);
-    requirements.description = `${config.name} - $${config.price} ${config.currency}`;
 
     // x402 v2 format: PaymentRequired object with accepts array
+    // Note: description goes in resource.description, not in requirements
     const paymentRequired = {
       x402Version: X402_VERSION,
       accepts: [requirements],
+      resource: {
+        url: `/execute?service=${config.id}`,
+        description: `${config.name} - $${config.price} ${config.currency}`,
+        mimeType: 'application/json',
+      },
     };
 
     const encoded = Buffer.from(JSON.stringify(paymentRequired)).toString('base64');
@@ -462,12 +467,12 @@ export class MoltsPayServer {
     const amountInUnits = Math.floor(config.price * 1e6).toString();
     const usdcAddress = USDC_ADDRESSES[this.networkId];
 
+    // x402 v2 PaymentRequirements - exact field names per official spec
     return {
       scheme: 'exact',
       network: this.networkId,
-      maxAmountRequired: amountInUnits,
-      amount: amountInUnits,
       asset: usdcAddress,
+      amount: amountInUnits,
       payTo: this.manifest.provider.wallet,
       maxTimeoutSeconds: 300,
       extra: USDC_DOMAIN,
