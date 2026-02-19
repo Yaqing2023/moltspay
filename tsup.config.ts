@@ -1,20 +1,20 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: {
-    index: 'src/index.ts',
-    cli: 'src/cli.ts',
-    'wallet/index': 'src/wallet/index.ts',
-    'permit/index': 'src/permit/index.ts',
-    'chains/index': 'src/chains/index.ts',
-    'orders/index': 'src/orders/index.ts',
-    'verify/index': 'src/verify/index.ts',
-    'guide/index': 'src/guide/index.ts',
-  },
+  entry: [
+    'src/index.ts',
+    'src/server/index.ts',
+    'src/client/index.ts',
+    'src/cli/index.ts',
+    'src/chains/index.ts',
+    'src/wallet/index.ts',
+    'src/verify/index.ts',
+    'src/cdp/index.ts',
+  ],
   format: ['cjs', 'esm'],
   dts: true,
+  clean: true,
   splitting: false,
   sourcemap: true,
-  clean: true,
-  external: ['ethers'],
+  shims: true,
 });

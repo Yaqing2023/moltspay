@@ -1,17 +1,15 @@
 {
   "name": "moltspay",
-  "version": "0.5.4",
-  "description": "Blockchain payment infrastructure for AI Agents on Moltbook",
+  "version": "0.8.0",
+  "description": "Payment infrastructure for AI Agents - Server & Client SDK",
   "keywords": [
-    "moltbook",
-    "blockchain",
+    "ai-agent",
     "payment",
     "usdc",
-    "ai-agent",
-    "web3",
-    "eip-2612",
+    "blockchain",
     "base",
     "ethereum",
+    "web3",
     "moltspay"
   ],
   "main": "dist/index.js",
@@ -23,12 +21,21 @@
       "import": "./dist/index.mjs",
       "types": "./dist/index.d.ts"
     },
-    "./wallet": "./dist/wallet/index.js",
-    "./permit": "./dist/permit/index.js",
-    "./chains": "./dist/chains/index.js"
+    "./server": {
+      "require": "./dist/server/index.js",
+      "import": "./dist/server/index.mjs",
+      "types": "./dist/server/index.d.ts"
+    },
+    "./client": {
+      "require": "./dist/client/index.js",
+      "import": "./dist/client/index.mjs",
+      "types": "./dist/client/index.d.ts"
+    },
+    "./chains": "./dist/chains/index.js",
+    "./wallet": "./dist/wallet/index.js"
   },
   "bin": {
-    "moltspay": "./dist/cli.js"
+    "moltspay": "./dist/cli/index.js"
   },
   "scripts": {
     "build": "tsup",
@@ -41,10 +48,7 @@
   },
   "dependencies": {
     "commander": "^12.0.0",
-    "ethers": "^6.11.0",
-    "@x402/fetch": "^2.3.0",
-    "@x402/evm": "^2.3.1",
-    "viem": "^2.0.0"
+    "ethers": "^6.11.0"
   },
   "peerDependencies": {
     "@coinbase/cdp-sdk": "^1.0.0"
@@ -57,11 +61,7 @@
   "devDependencies": {
     "@coinbase/cdp-sdk": "^1.0.0",
     "@types/node": "^20.11.0",
-    "@x402/core": "^2.3.1",
-    "@x402/evm": "^2.3.1",
-    "@x402/fetch": "^2.3.0",
     "eslint": "^8.56.0",
-    "ethers": "^6.11.0",
     "tsup": "^8.0.0",
     "typescript": "^5.3.0",
     "vitest": "^1.2.0"
