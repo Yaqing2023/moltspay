@@ -330,9 +330,67 @@ Client Agent                    Server                     Facilitator (Coinbase
 - ❌ NO ETH/gas needed
 - ❌ NO API credentials needed
 
+## Server Setup (Selling Services)
+
+To run a MoltsPay server that accepts x402 payments:
+
+### 1. Configure CDP Credentials (Required for Mainnet)
+
+```bash
+# Copy the example config
+cp .env.example ~/.moltspay/.env
+
+# Edit with your CDP credentials (get from https://portal.cdp.coinbase.com/)
+nano ~/.moltspay/.env
+```
+
+```env
+# ~/.moltspay/.env
+USE_MAINNET=true
+CDP_API_KEY_ID=your-key-id
+CDP_API_KEY_SECRET=your-secret
+```
+
+**Important:** Server does NOT need a private key! The x402 facilitator handles all on-chain settlement.
+
+### 2. Create Services Manifest
+
+```json
+{
+  "provider": {
+    "name": "My AI Service",
+    "wallet": "0xYOUR_WALLET_ADDRESS",
+    "chain": "base"
+  },
+  "services": [
+    {
+      "id": "my-service",
+      "name": "My Service",
+      "price": 0.99,
+      "currency": "USDC",
+      "command": "./handlers/my-service.sh",
+      "input": { "prompt": { "type": "string", "required": true } },
+      "output": { "result": { "type": "string" } }
+    }
+  ]
+}
+```
+
+### 3. Start Server
+
+```bash
+npx moltspay start ./moltspay.services.json --port 3000
+```
+
+The server will:
+- Return 402 with payment requirements for unpaid requests
+- Verify signatures with CDP facilitator
+- Execute service only after payment verification
+- Settle payment on-chain (facilitator pays gas)
+
 ## CDP Wallet Support (Optional, Advanced)
 
-CDP wallet is an **optional alternative** for cases where you want Coinbase to host the wallet. Most users should use the simple local wallet above.
+CDP wallet is an **optional alternative** for **client agents** who want Coinbase to host their wallet. Most users should use the simple local wallet above.
 
 ```bash
 # Only if you have CDP credentials and want hosted wallet
