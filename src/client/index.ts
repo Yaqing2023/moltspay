@@ -9,7 +9,7 @@
  *   const result = await client.pay('http://provider:3000', 'text-to-video', { prompt: '...' });
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, chmodSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { Wallet, ethers } from 'ethers';
@@ -352,6 +352,19 @@ export class MoltsPayClient {
   private loadWallet(): WalletData | null {
     const walletPath = join(this.configDir, 'wallet.json');
     if (existsSync(walletPath)) {
+      // Security check: warn and fix if permissions are too open
+      try {
+        const stats = statSync(walletPath);
+        const mode = stats.mode & 0o777;
+        if (mode !== 0o600) {
+          console.warn(`[MoltsPay] WARNING: wallet.json has insecure permissions (${mode.toString(8)})`);
+          console.warn(`[MoltsPay] Fixing permissions to 0600...`);
+          chmodSync(walletPath, 0o600);
+        }
+      } catch (err) {
+        // Ignore permission check errors on Windows
+      }
+      
       const content = readFileSync(walletPath, 'utf-8');
       return JSON.parse(content);
     }
@@ -375,9 +388,9 @@ export class MoltsPayClient {
       createdAt: Date.now(),
     };
 
-    // Save wallet
+    // Save wallet with secure permissions (0o600 = owner read/write only)
     const walletPath = join(configDir, 'wallet.json');
-    writeFileSync(walletPath, JSON.stringify(walletData, null, 2));
+    writeFileSync(walletPath, JSON.stringify(walletData, null, 2), { mode: 0o600 });
 
     // Save config
     const config: ClientConfig = {
