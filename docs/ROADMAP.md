@@ -172,6 +172,55 @@ const server = new MoltsPayServer('./services.json', {
 
 ---
 
+## v0.10.0 - Performance & Async Jobs
+
+**Goal:** Handle long-running skills reliably while keeping "pay for success" promise
+
+### Current Issues
+
+| Issue | Impact |
+|-------|--------|
+| Synchronous execution | Client waits 30-60s for video gen |
+| No skill timeout | Stuck skill = stuck request forever |
+| Settle after execution | Settlement failure = free service |
+| No rate limiting | Could overwhelm server |
+
+### Proposed Solutions
+
+#### Async Job Queue
+```
+POST /execute → Returns job_id immediately
+GET /jobs/{id} → Poll for status/result
+```
+
+#### Hybrid Payment Model
+- **Fast tasks (<30s):** Pay after success (current)
+- **Long tasks (>30s):** Pre-pay + auto-refund if fails
+
+#### Implementation Plan
+- [ ] Add job queue (Redis or in-memory)
+- [ ] `GET /jobs/:id` endpoint for polling
+- [ ] Skill timeout configuration
+- [ ] Rate limiting per client
+- [ ] Health check endpoint `GET /health`
+- [ ] Auto-refund mechanism for failed pre-paid jobs
+- [ ] Webhook notifications for job completion
+
+#### Config Extension
+```json
+{
+  "services": [{
+    "id": "text-to-video",
+    "function": "textToVideo",
+    "price": 0.99,
+    "timeout": 120,
+    "async": true
+  }]
+}
+```
+
+---
+
 ## v1.0.0 - Hosted Skill Marketplace
 
 **Goal:** Zero-setup monetization for skill developers
