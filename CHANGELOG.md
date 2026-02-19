@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.8.15] - 2026-02-19
+
+### Changed
+- Entry point discovery now reads `package.json` `main` field
+- Falls back to `index.js` if no `main` specified
+- Providers no longer need to name their entry point `index.js`
+
+## [0.8.14] - 2026-02-19
+
+### Added
+- JSON Schema for `moltspay.services.json` validation
+- `npx moltspay validate <path>` command to validate manifests
+- Schema available at `schemas/moltspay.services.schema.json`
+
+## [0.8.13] - 2026-02-19
+
+### Changed
+- Skill-based architecture: providers add only `moltspay.services.json`
+- `function` field points to existing exports in skill's entry point
+- Server auto-discovers entry point from skill's `package.json`
+- No wrapper code needed - existing skill code stays untouched
+
+### Fixed
+- Various x402 flow improvements
+
 ## [0.5.4] - 2026-02-17
 
 ### Added
