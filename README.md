@@ -503,8 +503,33 @@ const result = await permit.executePermitAndTransfer(
 # Install globally
 npm install -g moltspay
 
-# Get balance
-moltspay balance --chain base
+# === Client Commands ===
+
+# Initialize wallet (first time setup)
+npx moltspay init --chain base
+
+# Check wallet status and balance
+npx moltspay status
+
+# Update spending limits
+npx moltspay config                              # Interactive
+npx moltspay config --max-per-tx 50 --max-per-day 500  # Direct
+
+# Pay for a service
+npx moltspay pay http://server:3000 service-id --prompt "your prompt"
+
+# List services from a provider
+npx moltspay services http://server:3000
+
+# === Server Commands ===
+
+# Start server from services manifest
+npx moltspay start ./moltspay.services.json --port 3000
+
+# Stop running server
+npx moltspay stop
+
+# === Legacy Commands ===
 
 # Generate invoice
 moltspay invoice --order order_123 --amount 2.0 --service video
