@@ -378,13 +378,19 @@ export class MoltsPayServer {
   }
 
   /**
-   * Return 402 with x402 payment requirements
+   * Return 402 with x402 payment requirements (v2 format)
    */
   private sendPaymentRequired(config: ServiceConfig, res: ServerResponse): void {
-    const requirements = [this.buildPaymentRequirements(config)];
-    requirements[0].description = `${config.name} - $${config.price} ${config.currency}`;
+    const requirements = this.buildPaymentRequirements(config);
+    requirements.description = `${config.name} - $${config.price} ${config.currency}`;
 
-    const encoded = Buffer.from(JSON.stringify(requirements)).toString('base64');
+    // x402 v2 format: PaymentRequired object with accepts array
+    const paymentRequired = {
+      x402Version: X402_VERSION,
+      accepts: [requirements],
+    };
+
+    const encoded = Buffer.from(JSON.stringify(paymentRequired)).toString('base64');
 
     res.writeHead(402, {
       'Content-Type': 'application/json',
@@ -393,7 +399,7 @@ export class MoltsPayServer {
     res.end(JSON.stringify({
       error: 'Payment required',
       message: `Service requires $${config.price} ${config.currency}`,
-      x402: requirements[0],
+      x402: paymentRequired,
     }, null, 2));
   }
 
