@@ -1,0 +1,134 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://moltspay.dev/schemas/services.json",
+  "title": "MoltsPay Services Manifest",
+  "description": "Configuration file for MoltsPay x402 service providers",
+  "type": "object",
+  "required": ["provider", "services"],
+  "properties": {
+    "provider": {
+      "type": "object",
+      "description": "Service provider information",
+      "required": ["name", "wallet"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Provider display name",
+          "examples": ["Zen7 Video Generation"]
+        },
+        "description": {
+          "type": "string",
+          "description": "Provider description"
+        },
+        "wallet": {
+          "type": "string",
+          "pattern": "^0x[a-fA-F0-9]{40}$",
+          "description": "Ethereum address to receive payments"
+        },
+        "chain": {
+          "type": "string",
+          "enum": ["base", "ethereum", "polygon"],
+          "default": "base",
+          "description": "Blockchain network for payments"
+        }
+      }
+    },
+    "services": {
+      "type": "array",
+      "description": "List of available services",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "price", "currency"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]+$",
+            "description": "Unique service identifier (lowercase, hyphens allowed)",
+            "examples": ["text-to-video", "image-to-video"]
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable service name"
+          },
+          "description": {
+            "type": "string",
+            "description": "Service description"
+          },
+          "function": {
+            "type": "string",
+            "pattern": "^[a-zA-Z][a-zA-Z0-9]*$",
+            "description": "Function name exported from index.js",
+            "examples": ["textToVideo", "imageToVideo"]
+          },
+          "price": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Price in currency units (e.g., 0.99 for $0.99)"
+          },
+          "currency": {
+            "type": "string",
+            "enum": ["USDC", "USDT", "DAI"],
+            "default": "USDC",
+            "description": "Payment currency"
+          },
+          "input": {
+            "type": "object",
+            "description": "Input parameters schema",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": ["string", "number", "boolean", "object", "array"]
+                },
+                "required": {
+                  "type": "boolean",
+                  "default": false
+                },
+                "description": {
+                  "type": "string"
+                },
+                "default": {},
+                "enum": {
+                  "type": "array"
+                }
+              }
+            }
+          },
+          "output": {
+            "type": "object",
+            "description": "Output schema",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "provider": {
+        "name": "Zen7 Video Generation",
+        "wallet": "0xb8d6f2441e8f8dfB6288A74Cf73804cDd0484E0C"
+      },
+      "services": [
+        {
+          "id": "text-to-video",
+          "function": "textToVideo",
+          "price": 0.99,
+          "currency": "USDC"
+        }
+      ]
+    }
+  ]
+}

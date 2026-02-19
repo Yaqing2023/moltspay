@@ -613,4 +613,83 @@ program
     }
   });
 
+/**
+ * npx moltspay validate <path>
+ */
+program
+  .command('validate <path>')
+  .description('Validate a moltspay.services.json file against the schema')
+  .action(async (inputPath) => {
+    const resolvedPath = resolve(inputPath);
+    
+    // Find manifest file
+    let manifestPath: string;
+    if (existsSync(join(resolvedPath, 'moltspay.services.json'))) {
+      manifestPath = join(resolvedPath, 'moltspay.services.json');
+    } else if (resolvedPath.endsWith('.json') && existsSync(resolvedPath)) {
+      manifestPath = resolvedPath;
+    } else {
+      console.error(`❌ Not found: ${resolvedPath}`);
+      process.exit(1);
+    }
+
+    console.log(`\n📋 Validating: ${manifestPath}\n`);
+
+    try {
+      const content = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+      const errors: string[] = [];
+
+      // Validate provider
+      if (!content.provider) {
+        errors.push('Missing required field: provider');
+      } else {
+        if (!content.provider.name) errors.push('Missing provider.name');
+        if (!content.provider.wallet) errors.push('Missing provider.wallet');
+        else if (!/^0x[a-fA-F0-9]{40}$/.test(content.provider.wallet)) {
+          errors.push('Invalid provider.wallet (must be Ethereum address)');
+        }
+      }
+
+      // Validate services
+      if (!content.services || !Array.isArray(content.services)) {
+        errors.push('Missing required field: services (array)');
+      } else if (content.services.length === 0) {
+        errors.push('services array must have at least one service');
+      } else {
+        content.services.forEach((svc: any, i: number) => {
+          const prefix = `services[${i}]`;
+          if (!svc.id) errors.push(`${prefix}: missing id`);
+          else if (!/^[a-z0-9-]+$/.test(svc.id)) {
+            errors.push(`${prefix}: id must be lowercase with hyphens only`);
+          }
+          if (typeof svc.price !== 'number') errors.push(`${prefix}: missing or invalid price`);
+          if (!svc.currency) errors.push(`${prefix}: missing currency`);
+          if (!svc.function && !svc.command) {
+            errors.push(`${prefix}: must have either "function" or "command"`);
+          }
+        });
+      }
+
+      if (errors.length > 0) {
+        console.log('❌ Validation failed:\n');
+        errors.forEach(e => console.log(`   • ${e}`));
+        console.log('');
+        process.exit(1);
+      }
+
+      console.log('✅ Valid!\n');
+      console.log(`   Provider: ${content.provider.name}`);
+      console.log(`   Wallet: ${content.provider.wallet}`);
+      console.log(`   Services: ${content.services.length}`);
+      content.services.forEach((svc: any) => {
+        console.log(`     - ${svc.id} ($${svc.price} ${svc.currency})`);
+      });
+      console.log('');
+
+    } catch (err: any) {
+      console.error(`❌ Parse error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
 program.parse();
