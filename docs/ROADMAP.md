@@ -172,23 +172,139 @@ const server = new MoltsPayServer('./services.json', {
 
 ---
 
+## v1.0.0 - Hosted Skill Marketplace
+
+**Goal:** Zero-setup monetization for skill developers
+
+### The Vision
+
+Any developer can monetize their skill without running a server:
+
+```
+Developer: Upload skill + set wallet + set prices
+Platform: Hosts, scales, handles payments
+Users: Pay developer directly (P2P on-chain)
+```
+
+### Why This Matters
+
+**For Developers:**
+- No server to maintain
+- No CDP credentials needed
+- No DevOps knowledge required
+- Just upload and earn
+
+**For Users:**
+- One marketplace to discover skills
+- Consistent UX across all skills
+- Trust through transparency (on-chain payments)
+
+**Regulatory Advantage:**
+- Payments are P2P (buyer → seller wallet directly)
+- Platform never holds funds (non-custodial)
+- No money transmission = no MSB license
+- We're just infrastructure (like AWS/Vercel)
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│           MoltsPay Skill Marketplace                    │
+│                  (moltspay.com)                         │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐    │
+│  │ Skill A │  │ Skill B │  │ Skill C │  │ Skill D │    │
+│  │ @dev1   │  │ @dev2   │  │ @dev3   │  │ @dev4   │    │
+│  │ 0x111   │  │ 0x222   │  │ 0x333   │  │ 0x444   │    │
+│  │ $0.50   │  │ $1.00   │  │ $2.00   │  │ $0.25   │    │
+│  └─────────┘  └─────────┘  └─────────┘  └─────────┘    │
+│                                                         │
+│  Payment flow: Client → Developer wallet (direct)       │
+│  Platform fee: 0% or minimal (sustainability)          │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Developer Experience
+
+```bash
+# Upload skill to marketplace
+npx moltspay publish ./my-skill --wallet 0xMyWallet
+
+# Update pricing
+npx moltspay pricing my-skill --price 1.99
+
+# View earnings dashboard
+npx moltspay dashboard
+```
+
+### User Experience
+
+```bash
+# Discover skills
+npx moltspay search "video generation"
+
+# Use skill (pays developer directly)
+npx moltspay pay moltspay.com/skills/video-gen text-to-video --prompt "..."
+
+# Or via web UI at moltspay.com/marketplace
+```
+
+### Implementation Plan
+
+#### Phase 1: Skill Registry
+- [ ] Skill upload endpoint
+- [ ] Skill validation (runs, exports correct functions)
+- [ ] Skill storage (S3/GCS)
+- [ ] Developer dashboard (earnings, usage)
+
+#### Phase 2: Execution Runtime
+- [ ] Isolated skill execution (Docker/Firecracker)
+- [ ] Auto-scaling
+- [ ] Timeout handling
+- [ ] Output storage
+
+#### Phase 3: Marketplace UI
+- [ ] Browse/search skills
+- [ ] Skill detail pages
+- [ ] Developer profiles
+- [ ] Usage analytics
+
+#### Phase 4: Monetization
+- [ ] Optional platform fee (e.g., 5%)
+- [ ] Featured listings
+- [ ] Enterprise tier
+
+### Business Model Options
+
+| Model | Platform Cut | Developer Cut | Notes |
+|-------|-------------|---------------|-------|
+| **Free** | 0% | 100% | Growth phase |
+| **Sustainable** | 5% | 95% | Cover infra costs |
+| **Premium** | 10% | 90% | + featured listings |
+
+Platform fee is transparent and on-chain - developers always know exactly what they earn.
+
+---
+
 ## Future Releases
 
-### v0.10.0 - Multi-Chain
+### v1.1.0 - Multi-Chain
 - [ ] Polygon support
 - [ ] Ethereum mainnet support
 - [ ] Chain-specific facilitator selection
 
-### v0.11.0 - Escrow
+### v1.2.0 - Escrow & Trust
 - [ ] Smart contract escrow for high-value transactions
 - [ ] Dispute resolution
 - [ ] Timeout refunds
+- [ ] On-chain reputation system
 
-### v1.0.0 - Production Ready
-- [ ] On-chain service registry
-- [ ] Reputation system
+### v1.3.0 - Advanced Features
 - [ ] Subscription payments
-- [ ] Full audit
+- [ ] Usage-based pricing (per-token, per-minute)
+- [ ] Team wallets (multi-sig)
+- [ ] API key management
 
 ---
 
