@@ -54,8 +54,19 @@ const USDC_DOMAIN = {
 
 interface X402PaymentPayload {
   x402Version: number;
-  scheme: string;
-  network: string;
+  // v1 fields (top-level)
+  scheme?: string;
+  network?: string;
+  // v2 fields
+  accepted?: {
+    scheme: string;
+    network: string;
+    asset: string;
+    amount: string;
+    payTo: string;
+    maxTimeoutSeconds: number;
+    extra?: Record<string, unknown>;
+  };
   payload: any;
 }
 
@@ -429,12 +440,16 @@ export class MoltsPayServer {
       return { valid: false, error: `Unsupported x402 version: ${payment.x402Version}` };
     }
 
-    if (payment.scheme !== 'exact') {
-      return { valid: false, error: `Unsupported scheme: ${payment.scheme}` };
+    // v2 format: scheme and network are in 'accepted' field
+    const scheme = payment.accepted?.scheme || payment.scheme;
+    const network = payment.accepted?.network || payment.network;
+
+    if (scheme !== 'exact') {
+      return { valid: false, error: `Unsupported scheme: ${scheme}` };
     }
 
-    if (payment.network !== this.networkId) {
-      return { valid: false, error: `Network mismatch: expected ${this.networkId}, got ${payment.network}` };
+    if (network !== this.networkId) {
+      return { valid: false, error: `Network mismatch: expected ${this.networkId}, got ${network}` };
     }
 
     return { valid: true };
