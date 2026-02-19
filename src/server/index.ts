@@ -66,28 +66,43 @@ interface CDPConfig {
 }
 
 /**
- * Load environment from .env files
+ * Load environment from .env files (works in both ESM and CJS)
  */
 function loadEnvFiles(): void {
-  // Try to load dotenv
-  try {
-    const dotenv = require('dotenv');
-    
-    // Priority: current dir > ~/.moltspay/
-    const envPaths = [
-      path.join(process.cwd(), '.env'),
-      path.join(process.env.HOME || '', '.moltspay', '.env'),
-    ];
-    
-    for (const envPath of envPaths) {
-      if (existsSync(envPath)) {
-        dotenv.config({ path: envPath });
+  // Priority: current dir > ~/.moltspay/
+  const envPaths = [
+    path.join(process.cwd(), '.env'),
+    path.join(process.env.HOME || '', '.moltspay', '.env'),
+  ];
+  
+  for (const envPath of envPaths) {
+    if (existsSync(envPath)) {
+      try {
+        // Read and parse .env file manually (works in ESM)
+        const content = readFileSync(envPath, 'utf-8');
+        for (const line of content.split('\n')) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith('#')) continue;
+          const eqIndex = trimmed.indexOf('=');
+          if (eqIndex === -1) continue;
+          const key = trimmed.slice(0, eqIndex).trim();
+          let value = trimmed.slice(eqIndex + 1).trim();
+          // Remove surrounding quotes if present
+          if ((value.startsWith('"') && value.endsWith('"')) ||
+              (value.startsWith("'") && value.endsWith("'"))) {
+            value = value.slice(1, -1);
+          }
+          // Only set if not already set (env vars take precedence)
+          if (!process.env[key]) {
+            process.env[key] = value;
+          }
+        }
         console.log(`[MoltsPay] Loaded config from ${envPath}`);
         break;
+      } catch (err) {
+        console.warn(`[MoltsPay] Failed to load ${envPath}:`, err);
       }
     }
-  } catch {
-    // dotenv not installed, use process.env only
   }
 }
 
