@@ -73,7 +73,7 @@ export class MoltsPayServer {
     if (!config) {
       throw new Error(`Service '${serviceId}' not found in manifest`);
     }
-    this.skills.set(serviceId, { config, handler });
+    this.skills.set(serviceId, { id: serviceId, config, handler });
     return this;
   }
 
