@@ -72,6 +72,7 @@
   },
   "files": [
     "dist",
+    ".env.example",
     "README.md",
     "LICENSE"
   ],
