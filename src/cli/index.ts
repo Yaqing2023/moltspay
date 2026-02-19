@@ -237,100 +237,193 @@ program
   });
 
 /**
- * npx moltspay start <manifest>
+ * npx moltspay start <paths...>
  * 
- * Start server from moltspay.services.json
- * Services with "command" field are auto-registered as skills.
+ * Start server from skill directories or manifest files.
+ * 
+ * Supports:
+ * - Skill directory: ./skills/video_gen/ (with moltspay.services.json + index.js)
+ * - Legacy manifest: ./moltspay.services.json (with optional command field)
+ * - Multiple paths: ./skills/video_gen/ ./skills/translation/
+ * 
+ * Services with "function" field load from skill's index.js
+ * Services with "command" field execute shell commands (legacy)
  */
 program
-  .command('start <manifest>')
-  .description('Start MoltsPay server from services manifest')
+  .command('start <paths...>')
+  .description('Start MoltsPay server from skill directories or manifest files')
   .option('-p, --port <port>', 'Port to listen on', '3000')
   .option('--host <host>', 'Host to bind', '0.0.0.0')
   .option('--facilitator <url>', 'x402 facilitator URL (default: https://x402.org/facilitator)')
-  .action(async (manifest, options) => {
-    const manifestPath = resolve(manifest);
-    
-    if (!existsSync(manifestPath)) {
-      console.error(`❌ Manifest not found: ${manifestPath}`);
-      process.exit(1);
-    }
-
+  .action(async (paths, options) => {
     const port = parseInt(options.port, 10);
     const host = options.host;
     const facilitatorUrl = options.facilitator;
 
+    // Support comma-separated paths
+    const allPaths = paths.flatMap((p: string) => p.split(',').map(s => s.trim())).filter(Boolean);
+
     console.log(`\n🚀 Starting MoltsPay Server (x402 protocol)\n`);
-    console.log(`   Manifest: ${manifestPath}`);
+
+    // Collect all services and handlers from all paths
+    const allServices: any[] = [];
+    const handlers: Map<string, (params: any) => Promise<any>> = new Map();
+    let provider: any = null;
+
+    for (const inputPath of allPaths) {
+      const resolvedPath = resolve(inputPath);
+      
+      // Determine if it's a directory (skill) or file (manifest)
+      let manifestPath: string;
+      let skillDir: string;
+      let isSkillDir = false;
+
+      if (existsSync(join(resolvedPath, 'moltspay.services.json'))) {
+        // It's a skill directory
+        manifestPath = join(resolvedPath, 'moltspay.services.json');
+        skillDir = resolvedPath;
+        isSkillDir = true;
+      } else if (existsSync(resolvedPath) && resolvedPath.endsWith('.json')) {
+        // It's a manifest file
+        manifestPath = resolvedPath;
+        skillDir = dirname(resolvedPath);
+      } else if (existsSync(resolvedPath)) {
+        // Directory without moltspay.services.json
+        console.error(`❌ No moltspay.services.json found in: ${resolvedPath}`);
+        continue;
+      } else {
+        console.error(`❌ Path not found: ${resolvedPath}`);
+        continue;
+      }
+
+      console.log(`📦 Loading: ${manifestPath}`);
+
+      try {
+        const manifestContent = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+        
+        // Use first provider found, or merge
+        if (!provider) {
+          provider = manifestContent.provider;
+        }
+
+        // Load skill module if it's a skill directory
+        let skillModule: any = null;
+        if (isSkillDir) {
+          const indexPath = join(skillDir, 'index.js');
+          if (existsSync(indexPath)) {
+            try {
+              skillModule = await import(indexPath);
+              console.log(`   ✅ Loaded module: ${indexPath}`);
+            } catch (err: any) {
+              console.error(`   ⚠️  Failed to load module: ${err.message}`);
+            }
+          }
+        }
+
+        // Register each service
+        for (const service of manifestContent.services) {
+          allServices.push(service);
+
+          // Priority: function > command
+          if (service.function && skillModule) {
+            // New skill-based approach: import function from index.js
+            const fn = skillModule[service.function] || skillModule.default?.[service.function];
+            if (fn && typeof fn === 'function') {
+              handlers.set(service.id, fn);
+              console.log(`   ✅ ${service.id} → ${service.function}()`);
+            } else {
+              console.error(`   ❌ Function '${service.function}' not found in index.js`);
+            }
+          } else if (service.command) {
+            // Legacy command-based approach
+            const workdir = skillDir;
+            handlers.set(service.id, async (params) => {
+              return new Promise((resolvePromise, reject) => {
+                const proc = spawn('sh', ['-c', service.command], {
+                  cwd: workdir,
+                  stdio: ['pipe', 'pipe', 'pipe'],
+                });
+
+                let stdout = '';
+                let stderr = '';
+
+                proc.stdout.on('data', (data) => {
+                  stdout += data.toString();
+                });
+
+                proc.stderr.on('data', (data) => {
+                  stderr += data.toString();
+                  process.stderr.write(data);
+                });
+
+                proc.stdin.write(JSON.stringify(params));
+                proc.stdin.end();
+
+                proc.on('close', (code) => {
+                  if (code !== 0) {
+                    reject(new Error(`Command failed (exit ${code}): ${stderr || 'Unknown error'}`));
+                    return;
+                  }
+                  try {
+                    resolvePromise(JSON.parse(stdout.trim()));
+                  } catch {
+                    resolvePromise({ output: stdout.trim() });
+                  }
+                });
+
+                proc.on('error', (err) => {
+                  reject(new Error(`Failed to spawn command: ${err.message}`));
+                });
+              });
+            });
+            console.log(`   ✅ ${service.id} → command`);
+          } else {
+            console.warn(`   ⚠️  ${service.id}: no function or command defined`);
+          }
+        }
+      } catch (err: any) {
+        console.error(`❌ Failed to load ${manifestPath}: ${err.message}`);
+        continue;
+      }
+    }
+
+    if (allServices.length === 0) {
+      console.error('\n❌ No services loaded. Exiting.');
+      process.exit(1);
+    }
+
+    if (!provider) {
+      console.error('\n❌ No provider config found. Exiting.');
+      process.exit(1);
+    }
+
+    // Create combined manifest for server
+    const combinedManifest = {
+      provider,
+      services: allServices,
+    };
+
+    // Write temporary manifest for server
+    const tempManifestPath = join(DEFAULT_CONFIG_DIR, 'combined-manifest.json');
+    writeFileSync(tempManifestPath, JSON.stringify(combinedManifest, null, 2));
+
+    console.log(`\n📋 Combined manifest: ${allServices.length} services`);
+    console.log(`   Provider: ${provider.name}`);
+    console.log(`   Wallet: ${provider.wallet}`);
     console.log(`   Port: ${port}`);
     console.log('');
 
     try {
-      const server = new MoltsPayServer(manifestPath, { port, host, facilitatorUrl });
+      const server = new MoltsPayServer(tempManifestPath, { port, host, facilitatorUrl });
 
-      // Get manifest to check for command-based skills
-      const manifestContent = await import('fs').then(fs => 
-        JSON.parse(fs.readFileSync(manifestPath, 'utf-8'))
-      );
-
-      // Auto-register skills that have a "command" field
-      for (const service of manifestContent.services) {
-        if (service.command) {
-          const workdir = dirname(manifestPath);
-          
-          server.skill(service.id, async (params) => {
-            return new Promise((resolve, reject) => {
-              const proc = spawn('sh', ['-c', service.command], {
-                cwd: workdir,
-                stdio: ['pipe', 'pipe', 'pipe'],
-              });
-
-              let stdout = '';
-              let stderr = '';
-
-              proc.stdout.on('data', (data) => {
-                stdout += data.toString();
-              });
-
-              proc.stderr.on('data', (data) => {
-                stderr += data.toString();
-                // Log stderr in real-time for debugging
-                process.stderr.write(data);
-              });
-
-              // Send params as JSON to stdin
-              proc.stdin.write(JSON.stringify(params));
-              proc.stdin.end();
-
-              proc.on('close', (code) => {
-                if (code !== 0) {
-                  reject(new Error(`Command failed (exit ${code}): ${stderr || 'Unknown error'}`));
-                  return;
-                }
-
-                // Try to parse output as JSON
-                try {
-                  const result = JSON.parse(stdout.trim());
-                  resolve(result);
-                } catch {
-                  // If not JSON, return as raw output
-                  resolve({ output: stdout.trim() });
-                }
-              });
-
-              proc.on('error', (err) => {
-                reject(new Error(`Failed to spawn command: ${err.message}`));
-              });
-            });
-          });
-        }
+      // Register all handlers
+      for (const [serviceId, handler] of handlers) {
+        server.skill(serviceId, handler);
       }
 
       // Write PID file
-      const pidData = { pid: process.pid, port, manifest: manifestPath };
+      const pidData = { pid: process.pid, port, paths: allPaths };
       writeFileSync(PID_FILE, JSON.stringify(pidData, null, 2));
-      console.log(`   PID file: ${PID_FILE}`);
-      console.log('');
 
       // Start listening
       server.listen(port);
@@ -338,13 +431,11 @@ program
       // Cleanup function
       const cleanup = () => {
         try {
-          if (existsSync(PID_FILE)) {
-            unlinkSync(PID_FILE);
-          }
+          if (existsSync(PID_FILE)) unlinkSync(PID_FILE);
+          if (existsSync(tempManifestPath)) unlinkSync(tempManifestPath);
         } catch {}
       };
 
-      // Handle graceful shutdown
       process.on('SIGINT', () => {
         console.log('\n\n👋 Shutting down...');
         cleanup();

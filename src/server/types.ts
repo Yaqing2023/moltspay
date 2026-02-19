@@ -13,6 +13,8 @@ export interface ServiceConfig {
   output: Record<string, OutputField>;
   /** Shell command to execute for this service. Params passed as JSON to stdin. */
   command?: string;
+  /** Function name to import from skill's index.js (new skill-based approach) */
+  function?: string;
 }
 
 export interface InputField {
