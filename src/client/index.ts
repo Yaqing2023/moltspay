@@ -157,9 +157,18 @@ export class MoltsPayClient {
     let requirements: X402PaymentRequirements[];
     try {
       const decoded = Buffer.from(paymentRequiredHeader, 'base64').toString('utf-8');
-      requirements = JSON.parse(decoded);
-      if (!Array.isArray(requirements)) {
-        requirements = [requirements];
+      const parsed = JSON.parse(decoded);
+      
+      // Handle both v1 (array) and v2 (object with accepts) formats
+      if (Array.isArray(parsed)) {
+        // v1 format: direct array of requirements
+        requirements = parsed;
+      } else if (parsed.accepts && Array.isArray(parsed.accepts)) {
+        // v2 format: { x402Version: 2, accepts: [...] }
+        requirements = parsed.accepts;
+      } else {
+        // Single requirement object
+        requirements = [parsed];
       }
     } catch {
       throw new Error('Invalid x-payment-required header');
