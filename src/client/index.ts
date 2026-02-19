@@ -72,6 +72,7 @@ export class MoltsPayClient {
     this.configDir = options.configDir || join(homedir(), '.moltspay');
     this.config = this.loadConfig();
     this.walletData = this.loadWallet();
+    this.loadSpending(); // Load persisted spending data
     
     if (this.walletData) {
       this.wallet = new Wallet(this.walletData.privateKey);
@@ -315,6 +316,7 @@ export class MoltsPayClient {
     if (today > this.lastSpendingReset) {
       this.todaySpending = 0;
       this.lastSpendingReset = today;
+      this.saveSpending(); // Persist reset
     }
 
     // Check daily limit
@@ -326,10 +328,11 @@ export class MoltsPayClient {
   }
 
   /**
-   * Record spending
+   * Record spending and persist to disk
    */
   private recordSpending(amount: number): void {
     this.todaySpending += amount;
+    this.saveSpending();
   }
 
   // --- Config & Wallet Management ---
@@ -347,6 +350,47 @@ export class MoltsPayClient {
     mkdirSync(this.configDir, { recursive: true });
     const configPath = join(this.configDir, 'config.json');
     writeFileSync(configPath, JSON.stringify(this.config, null, 2));
+  }
+
+  /**
+   * Load spending data from disk
+   */
+  private loadSpending(): void {
+    const spendingPath = join(this.configDir, 'spending.json');
+    if (existsSync(spendingPath)) {
+      try {
+        const data = JSON.parse(readFileSync(spendingPath, 'utf-8'));
+        const today = new Date().setHours(0, 0, 0, 0);
+        
+        // Only load if it's from today
+        if (data.date && data.date === today) {
+          this.todaySpending = data.amount || 0;
+          this.lastSpendingReset = data.date;
+        } else {
+          // Data is from a previous day, reset
+          this.todaySpending = 0;
+          this.lastSpendingReset = today;
+        }
+      } catch {
+        // Ignore parse errors, start fresh
+        this.todaySpending = 0;
+        this.lastSpendingReset = new Date().setHours(0, 0, 0, 0);
+      }
+    }
+  }
+
+  /**
+   * Save spending data to disk
+   */
+  private saveSpending(): void {
+    mkdirSync(this.configDir, { recursive: true });
+    const spendingPath = join(this.configDir, 'spending.json');
+    const data = {
+      date: this.lastSpendingReset || new Date().setHours(0, 0, 0, 0),
+      amount: this.todaySpending,
+      updatedAt: Date.now(),
+    };
+    writeFileSync(spendingPath, JSON.stringify(data, null, 2));
   }
 
   private loadWallet(): WalletData | null {
