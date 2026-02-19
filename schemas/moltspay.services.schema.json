@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://moltspay.dev/schemas/services.json",
+  "$id": "https://moltspay.com/schemas/services.json",
   "title": "MoltsPay Services Manifest",
   "description": "Configuration file for MoltsPay x402 service providers",
   "type": "object",

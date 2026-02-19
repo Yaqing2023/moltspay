@@ -309,14 +309,30 @@ program
         // Load skill module if it's a skill directory
         let skillModule: any = null;
         if (isSkillDir) {
-          const indexPath = join(skillDir, 'index.js');
-          if (existsSync(indexPath)) {
+          // Determine entry point: check package.json main, fallback to index.js
+          let entryPoint = 'index.js';
+          const pkgJsonPath = join(skillDir, 'package.json');
+          if (existsSync(pkgJsonPath)) {
             try {
-              skillModule = await import(indexPath);
-              console.log(`   ✅ Loaded module: ${indexPath}`);
+              const pkgJson = JSON.parse(readFileSync(pkgJsonPath, 'utf-8'));
+              if (pkgJson.main) {
+                entryPoint = pkgJson.main;
+              }
+            } catch {
+              // Ignore package.json parse errors
+            }
+          }
+
+          const modulePath = join(skillDir, entryPoint);
+          if (existsSync(modulePath)) {
+            try {
+              skillModule = await import(modulePath);
+              console.log(`   ✅ Loaded module: ${modulePath}`);
             } catch (err: any) {
               console.error(`   ⚠️  Failed to load module: ${err.message}`);
             }
+          } else {
+            console.error(`   ⚠️  Entry point not found: ${modulePath}`);
           }
         }
 
