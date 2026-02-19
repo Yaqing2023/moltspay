@@ -485,6 +485,7 @@ export class MoltsPayServer {
       const requirements = this.buildPaymentRequirements(config);
 
       const requestBody = {
+        x402Version: X402_VERSION,  // Required at top level for CDP
         paymentPayload: payment,
         paymentRequirements: requirements,
       };
@@ -533,6 +534,7 @@ export class MoltsPayServer {
     const requirements = this.buildPaymentRequirements(config);
 
     const requestBody = {
+      x402Version: X402_VERSION,  // Required at top level for CDP
       paymentPayload: payment,
       paymentRequirements: requirements,
     };
