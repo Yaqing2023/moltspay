@@ -31,8 +31,15 @@ const PAYMENT_HEADER = 'x-payment';
 interface X402PaymentRequirements {
   scheme: string;
   network: string;
-  maxAmountRequired: string;
-  resource: string;
+  // v2 fields
+  amount?: string;
+  asset?: string;
+  payTo?: string;
+  maxTimeoutSeconds?: number;
+  extra?: Record<string, unknown>;
+  // v1 fields (legacy)
+  maxAmountRequired?: string;
+  resource?: string;
   description?: string;
 }
 
@@ -184,13 +191,23 @@ export class MoltsPayClient {
     }
 
     // Step 3: Check limits
-    const amount = Number(req.maxAmountRequired) / 1e6;
+    // v2 uses 'amount', v1 uses 'maxAmountRequired'
+    const amountRaw = req.amount || req.maxAmountRequired;
+    if (!amountRaw) {
+      throw new Error('Missing amount in payment requirements');
+    }
+    const amount = Number(amountRaw) / 1e6;
     this.checkLimits(amount);
 
     console.log(`[MoltsPay] Signing payment: $${amount} USDC (gasless)`);
 
     // Step 4: Sign EIP-3009 authorization (GASLESS - just signing)
-    const authorization = await this.signEIP3009(req.resource, amount, chain);
+    // payTo is the recipient address (v2 format)
+    const payTo = req.payTo || req.resource; // fallback for v1 compatibility
+    if (!payTo) {
+      throw new Error('Missing payTo address in payment requirements');
+    }
+    const authorization = await this.signEIP3009(payTo, amount, chain);
 
     // Step 5: Create x402 payment payload
     const payload = {
