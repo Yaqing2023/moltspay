@@ -101,10 +101,10 @@ const server = new MoltsPayServer('./services.json', {
 
 ### Implementation Plan
 
-#### Phase 1: Abstraction Layer
-- [ ] Create `Facilitator` interface
-- [ ] Refactor CDP into `CDPFacilitator` class
-- [ ] Add facilitator registry
+#### Phase 1: Abstraction Layer ✅
+- [x] Create `Facilitator` interface
+- [x] Refactor CDP into `CDPFacilitator` class
+- [x] Add facilitator registry
 
 #### Phase 2: ChaosChain Integration
 - [ ] Implement `ChaosChainFacilitator`

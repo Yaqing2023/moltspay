@@ -10,6 +10,7 @@ export default defineConfig({
     'src/wallet/index.ts',
     'src/verify/index.ts',
     'src/cdp/index.ts',
+    'src/facilitators/index.ts',
   ],
   format: ['cjs', 'esm'],
   dts: true,

@@ -70,3 +70,25 @@ export {
   isCDPAvailable,
   CDPWallet,
 } from './cdp/index.js';
+
+// Facilitators (v0.9.0+)
+export {
+  Facilitator,
+  BaseFacilitator,
+  FacilitatorRegistry,
+  CDPFacilitator,
+  getDefaultRegistry,
+  createRegistry,
+} from './facilitators/index.js';
+export type {
+  FacilitatorConfig,
+  FacilitatorSelection,
+  SelectionStrategy,
+  X402PaymentPayload,
+  X402PaymentRequirements,
+  VerifyResult,
+  SettleResult,
+  HealthCheckResult,
+  FacilitatorFee,
+  CDPFacilitatorConfig,
+} from './facilitators/index.js';

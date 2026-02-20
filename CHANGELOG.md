@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.9.0-alpha.1] - 2026-02-20
+
+### Added
+- **Facilitator Abstraction Layer** (Phase 1 of v0.9.0)
+  - `Facilitator` interface for pluggable payment facilitators
+  - `CDPFacilitator` class (extracted from server logic)
+  - `FacilitatorRegistry` with selection strategies (failover, cheapest, fastest, random, roundrobin)
+  - New `/health` endpoint showing facilitator status
+- Exports: `moltspay/facilitators` subpath for direct access
+- Server now accepts `facilitators` config option
+
+### Changed
+- Server refactored to use `FacilitatorRegistry` instead of hardcoded CDP logic
+- `/services` endpoint now includes facilitator configuration in response
+
+### Migration
+- Fully backward compatible - default behavior unchanged
+- New facilitator config is opt-in:
+  ```typescript
+  const server = new MoltsPayServer('./services.json', {
+    facilitators: {
+      primary: 'cdp',
+      fallback: ['chaoschain'],  // Coming soon
+      strategy: 'failover'
+    }
+  });
+  ```
+
 ## [0.8.15] - 2026-02-19
 
 ### Changed

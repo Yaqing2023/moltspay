@@ -1,8 +1,7 @@
 /**
  * MoltsPay Server - Payment infrastructure for AI Agents
  * 
- * Supports both testnet (x402.org) and mainnet (CDP) facilitators.
- * Server does NOT need private key - facilitator handles on-chain settlement.
+ * Now uses pluggable Facilitator abstraction for payment verification/settlement.
  * 
  * Environment variables (from ~/.moltspay/.env or process.env):
  *   USE_MAINNET=true          - Use Base mainnet (requires CDP keys)
@@ -18,8 +17,12 @@
 import { readFileSync, existsSync } from 'fs';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import * as path from 'path';
-import { getChain } from '../chains/index.js';
-import type { ChainName } from '../chains/index.js';
+import {
+  FacilitatorRegistry,
+  FacilitatorSelection,
+  X402PaymentPayload,
+  X402PaymentRequirements,
+} from '../facilitators/index.js';
 import {
   ServicesManifest,
   ServiceConfig,
@@ -36,146 +39,35 @@ const PAYMENT_REQUIRED_HEADER = 'x-payment-required';
 const PAYMENT_HEADER = 'x-payment';
 const PAYMENT_RESPONSE_HEADER = 'x-payment-response';
 
-// Facilitator URLs
-const FACILITATOR_TESTNET = 'https://www.x402.org/facilitator';
-const FACILITATOR_MAINNET = 'https://api.cdp.coinbase.com/platform/v2/x402';
-
 // USDC contract addresses
 const USDC_ADDRESSES: Record<string, string> = {
   'eip155:8453': '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',   // Base mainnet
   'eip155:84532': '0x036CbD53842c5426634e7929541eC2318f3dCF7e', // Base Sepolia
 };
 
-// EIP-712 domain info for USDC (required for signature verification)
+// EIP-712 domain info for USDC
 const USDC_DOMAIN = {
   name: 'USD Coin',
   version: '2',
 };
 
-interface X402PaymentPayload {
-  x402Version: number;
-  // v1 fields (top-level)
-  scheme?: string;
-  network?: string;
-  // v2 fields
-  accepted?: {
-    scheme: string;
-    network: string;
-    asset: string;
-    amount: string;
-    payTo: string;
-    maxTimeoutSeconds: number;
-    extra?: Record<string, unknown>;
-  };
-  payload: any;
-}
-
-interface CDPConfig {
-  useMainnet: boolean;
-  apiKeyId?: string;
-  apiKeySecret?: string;
-}
-
 /**
- * Load environment from .env files (works in both ESM and CJS)
+ * Extended server options with facilitator config
  */
-function loadEnvFiles(): void {
-  // Priority: current dir > ~/.moltspay/
-  const envPaths = [
-    path.join(process.cwd(), '.env'),
-    path.join(process.env.HOME || '', '.moltspay', '.env'),
-  ];
-  
-  for (const envPath of envPaths) {
-    if (existsSync(envPath)) {
-      try {
-        // Read and parse .env file manually (works in ESM)
-        const content = readFileSync(envPath, 'utf-8');
-        for (const line of content.split('\n')) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed.startsWith('#')) continue;
-          const eqIndex = trimmed.indexOf('=');
-          if (eqIndex === -1) continue;
-          const key = trimmed.slice(0, eqIndex).trim();
-          let value = trimmed.slice(eqIndex + 1).trim();
-          // Remove surrounding quotes if present
-          if ((value.startsWith('"') && value.endsWith('"')) ||
-              (value.startsWith("'") && value.endsWith("'"))) {
-            value = value.slice(1, -1);
-          }
-          // Only set if not already set (env vars take precedence)
-          if (!process.env[key]) {
-            process.env[key] = value;
-          }
-        }
-        console.log(`[MoltsPay] Loaded config from ${envPath}`);
-        break;
-      } catch (err) {
-        console.warn(`[MoltsPay] Failed to load ${envPath}:`, err);
-      }
-    }
-  }
-}
-
-/**
- * Get CDP configuration from environment
- */
-function getCDPConfig(): CDPConfig {
-  loadEnvFiles();
-  
-  return {
-    useMainnet: process.env.USE_MAINNET?.toLowerCase() === 'true',
-    apiKeyId: process.env.CDP_API_KEY_ID,
-    apiKeySecret: process.env.CDP_API_KEY_SECRET,
-  };
-}
-
-/**
- * Generate CDP auth headers for API requests
- */
-async function getCDPAuthHeaders(
-  method: string,
-  urlPath: string,
-  body?: any
-): Promise<Record<string, string>> {
-  const config = getCDPConfig();
-  
-  if (!config.apiKeyId || !config.apiKeySecret) {
-    throw new Error('CDP_API_KEY_ID and CDP_API_KEY_SECRET required for mainnet');
-  }
-  
-  try {
-    // Import CDP SDK auth
-    const { getAuthHeaders } = await import('@coinbase/cdp-sdk/auth');
-    
-    const headers = await getAuthHeaders({
-      apiKeyId: config.apiKeyId,
-      apiKeySecret: config.apiKeySecret,
-      requestMethod: method,
-      requestHost: 'api.cdp.coinbase.com',
-      requestPath: urlPath,
-      requestBody: body,
-    });
-    
-    return headers;
-  } catch (err: any) {
-    console.error('[MoltsPay] Failed to generate CDP auth headers:', err.message);
-    throw err;
-  }
+export interface MoltsPayServerOptionsExtended extends MoltsPayServerOptions {
+  /** Facilitator selection configuration */
+  facilitators?: FacilitatorSelection;
 }
 
 export class MoltsPayServer {
   private manifest: ServicesManifest;
   private skills: Map<string, RegisteredSkill> = new Map();
-  private options: MoltsPayServerOptions;
-  private cdpConfig: CDPConfig;
-  private facilitatorUrl: string;
+  private options: MoltsPayServerOptionsExtended;
+  private registry: FacilitatorRegistry;
   private networkId: string;
+  private useMainnet: boolean;
 
-  constructor(servicesPath: string, options: MoltsPayServerOptions = {}) {
-    // Load CDP config first
-    this.cdpConfig = getCDPConfig();
-    
+  constructor(servicesPath: string, options: MoltsPayServerOptionsExtended = {}) {
     // Load services manifest
     const content = readFileSync(servicesPath, 'utf-8');
     this.manifest = JSON.parse(content) as ServicesManifest;
@@ -183,32 +75,32 @@ export class MoltsPayServer {
     this.options = {
       port: options.port || 3000,
       host: options.host || '0.0.0.0',
+      ...options,
     };
 
-    // Determine facilitator and network based on config
-    if (this.cdpConfig.useMainnet) {
-      if (!this.cdpConfig.apiKeyId || !this.cdpConfig.apiKeySecret) {
-        console.warn('[MoltsPay] WARNING: USE_MAINNET=true but CDP keys not set!');
-        console.warn('[MoltsPay] Set CDP_API_KEY_ID and CDP_API_KEY_SECRET in ~/.moltspay/.env');
-      }
-      this.facilitatorUrl = FACILITATOR_MAINNET;
-      this.networkId = 'eip155:8453'; // Base mainnet
-    } else {
-      this.facilitatorUrl = options.facilitatorUrl || FACILITATOR_TESTNET;
-      this.networkId = 'eip155:84532'; // Base Sepolia testnet
-    }
+    // Determine mainnet vs testnet from env
+    this.useMainnet = process.env.USE_MAINNET?.toLowerCase() === 'true';
+    this.networkId = this.useMainnet ? 'eip155:8453' : 'eip155:84532';
 
-    const networkName = this.cdpConfig.useMainnet ? 'Base mainnet' : 'Base Sepolia (testnet)';
-    const facilitatorName = this.cdpConfig.useMainnet ? 'CDP' : 'x402.org';
+    // Create facilitator registry with config
+    const facilitatorConfig: FacilitatorSelection = options.facilitators || {
+      primary: 'cdp',
+      strategy: 'failover',
+      config: {
+        cdp: { useMainnet: this.useMainnet },
+      },
+    };
+    this.registry = new FacilitatorRegistry(facilitatorConfig);
+
+    // Get primary facilitator for logging
+    const primaryFacilitator = this.registry.get(facilitatorConfig.primary);
+    const networkName = this.useMainnet ? 'Base mainnet' : 'Base Sepolia (testnet)';
     
     console.log(`[MoltsPay] Loaded ${this.manifest.services.length} services from ${servicesPath}`);
     console.log(`[MoltsPay] Provider: ${this.manifest.provider.name}`);
     console.log(`[MoltsPay] Receive wallet: ${this.manifest.provider.wallet}`);
     console.log(`[MoltsPay] Network: ${this.networkId} (${networkName})`);
-    console.log(`[MoltsPay] Facilitator: ${facilitatorName} (${this.facilitatorUrl})`);
-    if (this.cdpConfig.useMainnet && this.cdpConfig.apiKeyId) {
-      console.log(`[MoltsPay] CDP API Key: ${this.cdpConfig.apiKeyId.slice(0, 8)}...`);
-    }
+    console.log(`[MoltsPay] Facilitator: ${primaryFacilitator.displayName} (${facilitatorConfig.strategy || 'failover'})`);
     console.log(`[MoltsPay] Protocol: x402 (gasless for both client AND server)`);
   }
 
@@ -237,6 +129,7 @@ export class MoltsPayServer {
       console.log(`[MoltsPay] Endpoints:`);
       console.log(`  GET  /services     - List available services`);
       console.log(`  POST /execute      - Execute service (x402 payment)`);
+      console.log(`  GET  /health       - Health check (incl. facilitators)`);
     });
   }
 
@@ -261,6 +154,10 @@ export class MoltsPayServer {
       
       if (url.pathname === '/services' && req.method === 'GET') {
         return this.handleGetServices(res);
+      }
+
+      if (url.pathname === '/health' && req.method === 'GET') {
+        return await this.handleHealthCheck(res);
       }
 
       if (url.pathname === '/execute' && req.method === 'POST') {
@@ -292,6 +189,8 @@ export class MoltsPayServer {
       available: this.skills.has(s.id),
     }));
 
+    const selection = this.registry.getSelection();
+    
     this.sendJson(res, 200, {
       provider: this.manifest.provider,
       services,
@@ -299,9 +198,30 @@ export class MoltsPayServer {
         version: X402_VERSION,
         network: this.networkId,
         schemes: ['exact'],
-        facilitator: this.cdpConfig.useMainnet ? 'cdp' : 'x402.org',
-        mainnet: this.cdpConfig.useMainnet,
+        facilitators: {
+          primary: selection.primary,
+          fallback: selection.fallback,
+          strategy: selection.strategy,
+        },
+        mainnet: this.useMainnet,
       },
+    });
+  }
+
+  /**
+   * GET /health - Health check endpoint
+   */
+  private async handleHealthCheck(res: ServerResponse): Promise<void> {
+    const facilitatorHealth = await this.registry.healthCheckAll();
+    
+    const allHealthy = Object.values(facilitatorHealth).every(h => h.healthy);
+    
+    this.sendJson(res, allHealthy ? 200 : 503, {
+      status: allHealthy ? 'healthy' : 'degraded',
+      network: this.networkId,
+      facilitators: facilitatorHealth,
+      services: this.manifest.services.length,
+      registered: this.skills.size,
     });
   }
 
@@ -351,12 +271,19 @@ export class MoltsPayServer {
       return this.sendJson(res, 402, { error: validation.error });
     }
 
-    // Verify payment with facilitator
-    console.log(`[MoltsPay] Verifying payment with facilitator...`);
-    const verifyResult = await this.verifyWithFacilitator(payment, skill.config);
+    // Build requirements for facilitator
+    const requirements = this.buildPaymentRequirements(skill.config);
+
+    // Verify payment with facilitator (via registry)
+    console.log(`[MoltsPay] Verifying payment...`);
+    const verifyResult = await this.registry.verify(payment, requirements);
     if (!verifyResult.valid) {
-      return this.sendJson(res, 402, { error: `Payment verification failed: ${verifyResult.error}` });
+      return this.sendJson(res, 402, { 
+        error: `Payment verification failed: ${verifyResult.error}`,
+        facilitator: verifyResult.facilitator,
+      });
     }
+    console.log(`[MoltsPay] Verified by ${verifyResult.facilitator}`);
 
     // Execute skill FIRST (pay-for-success)
     console.log(`[MoltsPay] Executing skill: ${service}`);
@@ -375,19 +302,20 @@ export class MoltsPayServer {
     console.log(`[MoltsPay] Skill succeeded, settling payment...`);
     let settlement: any = null;
     try {
-      settlement = await this.settleWithFacilitator(payment, skill.config);
-      console.log(`[MoltsPay] Payment settled: ${settlement.transaction || 'pending'}`);
+      settlement = await this.registry.settle(payment, requirements);
+      console.log(`[MoltsPay] Payment settled by ${settlement.facilitator}: ${settlement.transaction || 'pending'}`);
     } catch (err: any) {
       console.error('[MoltsPay] Settlement failed:', err.message);
     }
 
     // Build response
     const responseHeaders: Record<string, string> = {};
-    if (settlement) {
+    if (settlement?.success) {
       const responsePayload = {
         success: true,
         transaction: settlement.transaction,
-        network: payment.network,
+        network: payment.network || payment.accepted?.network,
+        facilitator: settlement.facilitator,
       };
       responseHeaders[PAYMENT_RESPONSE_HEADER] = Buffer.from(
         JSON.stringify(responsePayload)
@@ -397,8 +325,8 @@ export class MoltsPayServer {
     this.sendJson(res, 200, {
       success: true,
       result,
-      payment: settlement 
-        ? { transaction: settlement.transaction, status: 'settled' }
+      payment: settlement?.success 
+        ? { transaction: settlement.transaction, status: 'settled', facilitator: settlement.facilitator }
         : { status: 'pending' },
     }, responseHeaders);
   }
@@ -409,8 +337,6 @@ export class MoltsPayServer {
   private sendPaymentRequired(config: ServiceConfig, res: ServerResponse): void {
     const requirements = this.buildPaymentRequirements(config);
 
-    // x402 v2 format: PaymentRequired object with accepts array
-    // Note: description goes in resource.description, not in requirements
     const paymentRequired = {
       x402Version: X402_VERSION,
       accepts: [requirements],
@@ -445,7 +371,6 @@ export class MoltsPayServer {
       return { valid: false, error: `Unsupported x402 version: ${payment.x402Version}` };
     }
 
-    // v2 format: scheme and network are in 'accepted' field
     const scheme = payment.accepted?.scheme || payment.scheme;
     const network = payment.accepted?.network || payment.network;
 
@@ -461,13 +386,12 @@ export class MoltsPayServer {
   }
 
   /**
-   * Build complete payment requirements for facilitator
+   * Build payment requirements for facilitator
    */
-  private buildPaymentRequirements(config: ServiceConfig): Record<string, any> {
+  private buildPaymentRequirements(config: ServiceConfig): X402PaymentRequirements {
     const amountInUnits = Math.floor(config.price * 1e6).toString();
     const usdcAddress = USDC_ADDRESSES[this.networkId];
 
-    // x402 v2 PaymentRequirements - exact field names per official spec
     return {
       scheme: 'exact',
       network: this.networkId,
@@ -476,102 +400,6 @@ export class MoltsPayServer {
       payTo: this.manifest.provider.wallet,
       maxTimeoutSeconds: 300,
       extra: USDC_DOMAIN,
-    };
-  }
-
-  /**
-   * Verify payment with facilitator (testnet or CDP)
-   */
-  private async verifyWithFacilitator(
-    payment: X402PaymentPayload,
-    config: ServiceConfig
-  ): Promise<{ valid: boolean; error?: string }> {
-    try {
-      const requirements = this.buildPaymentRequirements(config);
-
-      const requestBody = {
-        x402Version: X402_VERSION,  // Required at top level for CDP
-        paymentPayload: payment,
-        paymentRequirements: requirements,
-      };
-
-      console.log('[MoltsPay] Verify request:', JSON.stringify(requestBody, null, 2));
-
-      // Build headers
-      let headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      
-      if (this.cdpConfig.useMainnet) {
-        // Add CDP auth headers for mainnet
-        const authHeaders = await getCDPAuthHeaders(
-          'POST',
-          '/platform/v2/x402/verify',
-          requestBody
-        );
-        headers = { ...headers, ...authHeaders };
-      }
-
-      const response = await fetch(`${this.facilitatorUrl}/verify`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(requestBody),
-      });
-
-      const result = await response.json() as any;
-      console.log('[MoltsPay] Verify response:', JSON.stringify(result, null, 2));
-
-      if (!response.ok || !result.isValid) {
-        return { valid: false, error: result.invalidReason || result.error || 'Verification failed' };
-      }
-
-      return { valid: true };
-    } catch (err: any) {
-      return { valid: false, error: `Facilitator error: ${err.message}` };
-    }
-  }
-
-  /**
-   * Settle payment with facilitator (execute on-chain transfer)
-   */
-  private async settleWithFacilitator(
-    payment: X402PaymentPayload,
-    config: ServiceConfig
-  ): Promise<{ transaction?: string; status: string }> {
-    const requirements = this.buildPaymentRequirements(config);
-
-    const requestBody = {
-      x402Version: X402_VERSION,  // Required at top level for CDP
-      paymentPayload: payment,
-      paymentRequirements: requirements,
-    };
-
-    // Build headers
-    let headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    
-    if (this.cdpConfig.useMainnet) {
-      // Add CDP auth headers for mainnet
-      const authHeaders = await getCDPAuthHeaders(
-        'POST',
-        '/platform/v2/x402/settle',
-        requestBody
-      );
-      headers = { ...headers, ...authHeaders };
-    }
-
-    const response = await fetch(`${this.facilitatorUrl}/settle`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(requestBody),
-    });
-
-    const result = await response.json() as any;
-
-    if (!response.ok || !result.success) {
-      throw new Error(result.error || result.errorReason || 'Settlement failed');
-    }
-
-    return {
-      transaction: result.transaction,
-      status: result.status || 'settled',
     };
   }
 

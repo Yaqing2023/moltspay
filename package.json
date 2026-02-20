@@ -32,7 +32,12 @@
       "types": "./dist/client/index.d.ts"
     },
     "./chains": "./dist/chains/index.js",
-    "./wallet": "./dist/wallet/index.js"
+    "./wallet": "./dist/wallet/index.js",
+    "./facilitators": {
+      "require": "./dist/facilitators/index.js",
+      "import": "./dist/facilitators/index.mjs",
+      "types": "./dist/facilitators/index.d.ts"
+    }
   },
   "bin": {
     "moltspay": "./dist/cli/index.js"
