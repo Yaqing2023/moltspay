@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.9.1] - 2026-02-20
+
+### Added
+- Facilitator selection via environment variables:
+  - `FACILITATOR_PRIMARY` - Primary facilitator (default: cdp)
+  - `FACILITATOR_FALLBACK` - Comma-separated fallback list
+  - `FACILITATOR_STRATEGY` - Selection strategy (failover/cheapest/fastest/random/roundrobin)
+- Updated `.env.example` with all facilitator config options
+- Placeholder sections for upcoming ChaosChain and Questflow facilitators
+
+### Fixed
+- Users no longer need to modify code to configure facilitators
+
 ## [0.9.0] - 2026-02-20
 
 ### Added

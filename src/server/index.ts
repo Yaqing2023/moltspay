@@ -122,10 +122,11 @@ export class MoltsPayServer {
     this.useMainnet = process.env.USE_MAINNET?.toLowerCase() === 'true';
     this.networkId = this.useMainnet ? 'eip155:8453' : 'eip155:84532';
 
-    // Create facilitator registry with config
+    // Create facilitator registry with config (env vars take precedence)
     const facilitatorConfig: FacilitatorSelection = options.facilitators || {
-      primary: 'cdp',
-      strategy: 'failover',
+      primary: process.env.FACILITATOR_PRIMARY || 'cdp',
+      fallback: process.env.FACILITATOR_FALLBACK?.split(',').filter(Boolean),
+      strategy: (process.env.FACILITATOR_STRATEGY as any) || 'failover',
       config: {
         cdp: { useMainnet: this.useMainnet },
       },
