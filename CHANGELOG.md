@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.9.0-alpha.1] - 2026-02-20
+## [0.9.0] - 2026-02-20
 
 ### Added
 - **Facilitator Abstraction Layer** (Phase 1 of v0.9.0)
@@ -14,6 +14,9 @@
 ### Changed
 - Server refactored to use `FacilitatorRegistry` instead of hardcoded CDP logic
 - `/services` endpoint now includes facilitator configuration in response
+
+### Fixed
+- Server now loads `.env` file before reading `USE_MAINNET` (was ignoring env file)
 
 ### Migration
 - Fully backward compatible - default behavior unchanged

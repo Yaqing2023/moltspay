@@ -52,6 +52,43 @@ const USDC_DOMAIN = {
 };
 
 /**
+ * Load environment from .env files
+ */
+function loadEnvFile(): void {
+  const envPaths = [
+    path.join(process.cwd(), '.env'),
+    path.join(process.env.HOME || '', '.moltspay', '.env'),
+  ];
+  
+  for (const envPath of envPaths) {
+    if (existsSync(envPath)) {
+      try {
+        const content = readFileSync(envPath, 'utf-8');
+        for (const line of content.split('\n')) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith('#')) continue;
+          const eqIndex = trimmed.indexOf('=');
+          if (eqIndex === -1) continue;
+          const key = trimmed.slice(0, eqIndex).trim();
+          let value = trimmed.slice(eqIndex + 1).trim();
+          if ((value.startsWith('"') && value.endsWith('"')) ||
+              (value.startsWith("'") && value.endsWith("'"))) {
+            value = value.slice(1, -1);
+          }
+          if (!process.env[key]) {
+            process.env[key] = value;
+          }
+        }
+        console.log(`[MoltsPay] Loaded config from ${envPath}`);
+        break;
+      } catch {
+        // Ignore errors
+      }
+    }
+  }
+}
+
+/**
  * Extended server options with facilitator config
  */
 export interface MoltsPayServerOptionsExtended extends MoltsPayServerOptions {
@@ -68,6 +105,9 @@ export class MoltsPayServer {
   private useMainnet: boolean;
 
   constructor(servicesPath: string, options: MoltsPayServerOptionsExtended = {}) {
+    // Load env files FIRST (before reading USE_MAINNET)
+    loadEnvFile();
+    
     // Load services manifest
     const content = readFileSync(servicesPath, 'utf-8');
     this.manifest = JSON.parse(content) as ServicesManifest;
