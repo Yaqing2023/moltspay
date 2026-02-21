@@ -170,6 +170,7 @@ export class MoltsPayServer {
       console.log(`[MoltsPay] Endpoints:`);
       console.log(`  GET  /services     - List available services`);
       console.log(`  POST /execute      - Execute service (x402 payment)`);
+      console.log(`  POST /proxy        - Proxy payment for external services`);
       console.log(`  GET  /health       - Health check (incl. facilitators)`);
     });
   }
@@ -205,6 +206,19 @@ export class MoltsPayServer {
         const body = await this.readBody(req);
         const paymentHeader = req.headers[PAYMENT_HEADER] as string | undefined;
         return await this.handleExecute(body, paymentHeader, res);
+      }
+
+      if (url.pathname === '/proxy' && req.method === 'POST') {
+        // Check IP whitelist
+        const clientIP = (req.headers['x-real-ip'] as string) || 
+                         (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+                         req.socket.remoteAddress || '';
+        if (!this.isProxyAllowed(clientIP)) {
+          return this.sendJson(res, 403, { error: 'Forbidden: IP not allowed' });
+        }
+        const body = await this.readBody(req);
+        const paymentHeader = req.headers[PAYMENT_HEADER] as string | undefined;
+        return await this.handleProxy(body, paymentHeader, res);
       }
 
       // Not found
@@ -471,5 +485,267 @@ export class MoltsPayServer {
     }
     res.writeHead(status, headers);
     res.end(JSON.stringify(data, null, 2));
+  }
+
+  /**
+   * Check if IP is allowed for /proxy endpoint
+   */
+  private isProxyAllowed(clientIP: string): boolean {
+    const allowedIPs = process.env.PROXY_ALLOWED_IPS?.split(',').map(ip => ip.trim()) || [];
+    
+    // If no whitelist configured, deny all (secure by default)
+    if (allowedIPs.length === 0) {
+      console.log(`[MoltsPay] /proxy denied: no PROXY_ALLOWED_IPS configured`);
+      return false;
+    }
+    
+    // Normalize IPv6 localhost
+    const normalizedIP = clientIP === '::1' ? '127.0.0.1' : clientIP.replace('::ffff:', '');
+    
+    const allowed = allowedIPs.includes(normalizedIP) || allowedIPs.includes(clientIP);
+    if (!allowed) {
+      console.log(`[MoltsPay] /proxy denied for IP: ${clientIP} (normalized: ${normalizedIP})`);
+    }
+    return allowed;
+  }
+
+  /**
+   * POST /proxy - Handle payment for external services (moltspay-creators)
+   * 
+   * This endpoint allows other services to delegate x402 payment handling.
+   * It does NOT execute any skill - just handles payment verification/settlement.
+   * 
+   * Request body:
+   *   { wallet, amount, currency, chain, memo, serviceId, description }
+   * 
+   * Without X-Payment header: returns 402 with payment requirements
+   * With X-Payment header: verifies payment and returns result
+   */
+  private async handleProxy(
+    body: any,
+    paymentHeader: string | undefined,
+    res: ServerResponse
+  ): Promise<void> {
+    const { wallet, amount, currency, chain, memo, serviceId, description } = body;
+
+    // Validate required fields
+    if (!wallet || !amount) {
+      return this.sendJson(res, 400, { error: 'Missing required fields: wallet, amount' });
+    }
+
+    // Validate wallet format
+    if (!/^0x[a-fA-F0-9]{40}$/.test(wallet)) {
+      return this.sendJson(res, 400, { error: 'Invalid wallet address format' });
+    }
+
+    // Validate amount
+    const amountNum = parseFloat(amount);
+    if (isNaN(amountNum) || amountNum <= 0) {
+      return this.sendJson(res, 400, { error: 'Invalid amount' });
+    }
+
+    // Build a synthetic service config for payment
+    const proxyConfig: ServiceConfig = {
+      id: serviceId || 'proxy',
+      name: description || 'Proxy Payment',
+      description: description || '',
+      price: amountNum,
+      currency: currency || 'USDC',
+      function: '', // Not used
+      input: {},
+      output: {},
+    };
+
+    // Build payment requirements with the provided wallet
+    const requirements = this.buildProxyPaymentRequirements(proxyConfig, wallet);
+
+    // If no payment header, return 402 with payment requirements
+    if (!paymentHeader) {
+      return this.sendProxyPaymentRequired(proxyConfig, wallet, memo, res);
+    }
+
+    // Parse payment payload
+    let payment: X402PaymentPayload;
+    try {
+      const decoded = Buffer.from(paymentHeader, 'base64').toString('utf-8');
+      payment = JSON.parse(decoded);
+    } catch {
+      return this.sendJson(res, 400, { error: 'Invalid X-Payment header' });
+    }
+
+    // Validate basic payment fields
+    if (payment.x402Version !== X402_VERSION) {
+      return this.sendJson(res, 402, { error: `Unsupported x402 version: ${payment.x402Version}` });
+    }
+
+    const scheme = payment.accepted?.scheme || payment.scheme;
+    const network = payment.accepted?.network || payment.network;
+
+    if (scheme !== 'exact') {
+      return this.sendJson(res, 402, { error: `Unsupported scheme: ${scheme}` });
+    }
+
+    if (network !== this.networkId) {
+      return this.sendJson(res, 402, { error: `Network mismatch: expected ${this.networkId}, got ${network}` });
+    }
+
+    // Verify payment with facilitator
+    console.log(`[MoltsPay] /proxy: Verifying payment for ${wallet}...`);
+    const verifyResult = await this.registry.verify(payment, requirements);
+    if (!verifyResult.valid) {
+      return this.sendJson(res, 402, { 
+        success: false,
+        error: `Payment verification failed: ${verifyResult.error}`,
+        facilitator: verifyResult.facilitator,
+      });
+    }
+    console.log(`[MoltsPay] /proxy: Verified by ${verifyResult.facilitator}`);
+
+    // Check if execution requested
+    const { execute, service, params } = body;
+    
+    // If execute requested, run skill BEFORE settling (pay on success)
+    if (execute && service) {
+      console.log(`[MoltsPay] /proxy: Executing skill first (pay on success): ${service}`);
+      const skill = this.skills.get(service);
+      if (!skill) {
+        // Service not found - don't settle, return error
+        console.log(`[MoltsPay] /proxy: Service not found: ${service} - NOT settling`);
+        return this.sendJson(res, 404, {
+          success: false,
+          paymentSettled: false,
+          error: `Service not found: ${service}`,
+        });
+      }
+
+      // Execute skill first
+      let result: any;
+      try {
+        result = await skill.handler(params || {});
+        console.log(`[MoltsPay] /proxy: Skill succeeded, now settling payment...`);
+      } catch (err: any) {
+        // Skill failed - don't settle, client keeps their money
+        console.error(`[MoltsPay] /proxy: Skill failed: ${err.message} - NOT settling`);
+        return this.sendJson(res, 500, {
+          success: false,
+          paymentSettled: false,
+          error: `Service execution failed: ${err.message}`,
+        });
+      }
+
+      // Skill succeeded - now settle payment
+      let settlement: any = null;
+      try {
+        settlement = await this.registry.settle(payment, requirements);
+        console.log(`[MoltsPay] /proxy: Payment settled by ${settlement.facilitator}: ${settlement.transaction || 'pending'}`);
+      } catch (err: any) {
+        console.error('[MoltsPay] /proxy: Settlement failed:', err.message);
+        // Skill succeeded but settlement failed - return result anyway with warning
+        return this.sendJson(res, 200, {
+          success: true,
+          verified: true,
+          settled: false,
+          settlementError: err.message,
+          paidTo: wallet,
+          amount: amountNum,
+          currency: currency || 'USDC',
+          memo,
+          result,
+        });
+      }
+
+      return this.sendJson(res, 200, {
+        success: true,
+        verified: true,
+        settled: settlement?.success || false,
+        txHash: settlement?.transaction,
+        paidTo: wallet,
+        amount: amountNum,
+        currency: currency || 'USDC',
+        facilitator: settlement?.facilitator,
+        memo,
+        result,
+      });
+    }
+
+    // No execution requested - settle immediately (payment-only mode)
+    console.log(`[MoltsPay] /proxy: Settling payment (no execution)...`);
+    let settlement: any = null;
+    try {
+      settlement = await this.registry.settle(payment, requirements);
+      console.log(`[MoltsPay] /proxy: Payment settled by ${settlement.facilitator}: ${settlement.transaction || 'pending'}`);
+    } catch (err: any) {
+      console.error('[MoltsPay] /proxy: Settlement failed:', err.message);
+      return this.sendJson(res, 500, {
+        success: false,
+        error: `Settlement failed: ${err.message}`,
+      });
+    }
+
+    // Return success (payment only, no execution)
+    this.sendJson(res, 200, {
+      success: true,
+      verified: true,
+      settled: settlement?.success || false,
+      txHash: settlement?.transaction,
+      paidTo: wallet,
+      amount: amountNum,
+      currency: currency || 'USDC',
+      facilitator: settlement?.facilitator,
+      memo,
+    });
+  }
+
+  /**
+   * Build payment requirements for proxy endpoint (uses provided wallet)
+   */
+  private buildProxyPaymentRequirements(config: ServiceConfig, wallet: string): X402PaymentRequirements {
+    const amountInUnits = Math.floor(config.price * 1e6).toString();
+    const usdcAddress = USDC_ADDRESSES[this.networkId];
+
+    return {
+      scheme: 'exact',
+      network: this.networkId,
+      asset: usdcAddress,
+      amount: amountInUnits,
+      payTo: wallet, // Use provided wallet, not manifest
+      maxTimeoutSeconds: 300,
+      extra: USDC_DOMAIN,
+    };
+  }
+
+  /**
+   * Return 402 with x402 payment requirements for proxy endpoint
+   */
+  private sendProxyPaymentRequired(
+    config: ServiceConfig, 
+    wallet: string,
+    memo: string | undefined,
+    res: ServerResponse
+  ): void {
+    const requirements = this.buildProxyPaymentRequirements(config, wallet);
+
+    const paymentRequired = {
+      x402Version: X402_VERSION,
+      accepts: [requirements],
+      resource: {
+        url: `/proxy`,
+        description: `${config.name} - $${config.price} ${config.currency}`,
+        mimeType: 'application/json',
+        memo,
+      },
+    };
+
+    const encoded = Buffer.from(JSON.stringify(paymentRequired)).toString('base64');
+
+    res.writeHead(402, {
+      'Content-Type': 'application/json',
+      [PAYMENT_REQUIRED_HEADER]: encoded,
+    });
+    res.end(JSON.stringify({
+      error: 'Payment required',
+      message: `Payment requires $${config.price} ${config.currency}`,
+      x402: paymentRequired,
+    }, null, 2));
   }
 }

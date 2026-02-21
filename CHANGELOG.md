@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.9.2] - 2026-02-21
+
+### Added
+- **Proxy Execute Mode** - `/proxy` endpoint now supports skill execution with pay-on-success
+  - Pass `execute: true` + `service` + `params` to execute a skill after payment verification
+  - Skill executes BEFORE settlement - if skill fails, payment is NOT settled (client keeps money)
+  - Perfect for platform integrations (e.g., moltspay.com marketplace)
+- IP whitelist for `/proxy` endpoint (`PROXY_ALLOWED_IPS` env var)
+
+### Changed
+- `/proxy` with `execute: true` now follows pay-on-success model:
+  1. Verify payment signature
+  2. Execute skill
+  3. If success → settle payment, return result
+  4. If fail → don't settle, return error
+- Improved logging for proxy execute flow
+
+### Fixed
+- Proxy execute now properly passes params to skill handler
+
+### Example Usage
+```bash
+# Platform calls /proxy with execute mode
+curl -X POST https://server.com/proxy \
+  -H "Content-Type: application/json" \
+  -H "X-Payment: <payment-header>" \
+  -d '{
+    "wallet": "0x...",
+    "amount": 0.99,
+    "execute": true,
+    "service": "text-to-video",
+    "params": {"prompt": "a cat dancing"}
+  }'
+```
+
 ## [0.9.1] - 2026-02-20
 
 ### Added
