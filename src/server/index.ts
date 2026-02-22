@@ -646,6 +646,7 @@ export class MoltsPayServer {
           verified: true,
           settled: false,
           settlementError: err.message,
+          from: payment.from,  // Buyer's wallet address
           paidTo: wallet,
           amount: amountNum,
           currency: currency || 'USDC',
@@ -659,6 +660,7 @@ export class MoltsPayServer {
         verified: true,
         settled: settlement?.success || false,
         txHash: settlement?.transaction,
+        from: payment.from,  // Buyer's wallet address
         paidTo: wallet,
         amount: amountNum,
         currency: currency || 'USDC',
@@ -688,6 +690,7 @@ export class MoltsPayServer {
       verified: true,
       settled: settlement?.success || false,
       txHash: settlement?.transaction,
+      from: payment.from,  // Buyer's wallet address
       paidTo: wallet,
       amount: amountNum,
       currency: currency || 'USDC',
