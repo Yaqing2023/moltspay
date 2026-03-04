@@ -198,6 +198,11 @@ export class MoltsPayServer {
         return this.handleGetServices(res);
       }
 
+      // Standard discovery endpoint
+      if (url.pathname === '/.well-known/agent-services.json' && req.method === 'GET') {
+        return this.handleAgentServicesDiscovery(res);
+      }
+
       if (url.pathname === '/health' && req.method === 'GET') {
         return await this.handleHealthCheck(res);
       }
@@ -227,6 +232,45 @@ export class MoltsPayServer {
       console.error('[MoltsPay] Error:', err);
       this.sendJson(res, 500, { error: err.message || 'Internal error' });
     }
+  }
+
+  /**
+   * GET /.well-known/agent-services.json - Standard discovery endpoint
+   */
+  private handleAgentServicesDiscovery(res: ServerResponse): void {
+    const services = this.manifest.services.map(s => ({
+      id: s.id,
+      name: s.name,
+      description: s.description,
+      price: s.price,
+      currency: s.currency,
+      input: s.input,
+      output: s.output,
+      available: this.skills.has(s.id),
+    }));
+
+    this.sendJson(res, 200, {
+      version: '1.0',
+      provider: {
+        name: this.manifest.provider.name,
+        description: this.manifest.provider.description,
+        wallet: this.manifest.provider.wallet,
+        chain: this.manifest.provider.chain || 'base',
+      },
+      services,
+      endpoints: {
+        services: '/services',
+        execute: '/execute',
+        health: '/health',
+      },
+      payment: {
+        protocol: 'x402',
+        version: X402_VERSION,
+        network: this.networkId,
+        schemes: ['exact'],
+        mainnet: this.useMainnet,
+      },
+    });
   }
 
   /**
@@ -340,11 +384,17 @@ export class MoltsPayServer {
     }
     console.log(`[MoltsPay] Verified by ${verifyResult.facilitator}`);
 
-    // Execute skill FIRST (pay-for-success)
-    console.log(`[MoltsPay] Executing skill: ${service}`);
+    // Execute skill FIRST (pay-for-success) with timeout
+    const timeoutSeconds = parseInt(process.env.SKILL_TIMEOUT_SECONDS || '1200');
+    console.log(`[MoltsPay] Executing skill: ${service} (timeout: ${timeoutSeconds}s)`);
     let result: any;
     try {
-      result = await skill.handler(params || {});
+      result = await Promise.race([
+        skill.handler(params || {}),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error(`Skill timeout after ${timeoutSeconds}s`)), timeoutSeconds * 1000)
+        )
+      ]);
     } catch (err: any) {
       console.error('[MoltsPay] Skill execution failed:', err.message);
       return this.sendJson(res, 500, {
@@ -618,13 +668,19 @@ export class MoltsPayServer {
         });
       }
 
-      // Execute skill first
+      // Execute skill first (with timeout)
+      const timeoutSeconds = parseInt(process.env.SKILL_TIMEOUT_SECONDS || '1200');
       let result: any;
       try {
-        result = await skill.handler(params || {});
+        result = await Promise.race([
+          skill.handler(params || {}),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error(`Skill timeout after ${timeoutSeconds}s`)), timeoutSeconds * 1000)
+          )
+        ]);
         console.log(`[MoltsPay] /proxy: Skill succeeded, now settling payment...`);
       } catch (err: any) {
-        // Skill failed - don't settle, client keeps their money
+        // Skill failed or timeout - don't settle, client keeps their money
         console.error(`[MoltsPay] /proxy: Skill failed: ${err.message} - NOT settling`);
         return this.sendJson(res, 500, {
           success: false,

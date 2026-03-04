@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.9.4] - 2026-03-04
+
+### Added
+- **Skill Execution Timeout** - Prevents hung skills from blocking requests forever
+  - Configurable via `SKILL_TIMEOUT_SECONDS` env var (default: 1200 = 20 minutes)
+  - Applies to both `/execute` and `/proxy` endpoints
+  - If skill times out, payment is NOT settled (client keeps money)
+
+### Example
+```env
+# In ~/.moltspay/.env
+SKILL_TIMEOUT_SECONDS=1200  # 20 minutes
+```
+
+## [0.9.3] - 2026-02-23
+
+### Fixed
+- Include buyer wallet address (`from`) in `/proxy` response
+
 ## [0.9.2] - 2026-02-21
 
 ### Added

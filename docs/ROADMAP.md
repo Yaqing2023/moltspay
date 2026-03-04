@@ -1,67 +1,58 @@
 # MoltsPay Roadmap
 
-## Next Release: v0.9.0 - Multi-Facilitator Support
+## Current Version: v0.9.4
 
-**Goal:** True decentralization - no single point of failure
+### v0.9.x Summary - Multi-Facilitator Foundation ✅
 
-### Why Multi-Facilitator?
+**Goal:** Pluggable facilitator architecture for future decentralization
 
-Currently MoltsPay depends on Coinbase CDP facilitator:
-- If Coinbase goes down → payments stop
-- Single entity controls execution
-- Not truly decentralized
+| Version | Release | Features |
+|---------|---------|----------|
+| v0.9.0 | 2026-02-20 | Facilitator abstraction layer, CDPFacilitator, FacilitatorRegistry, selection strategies |
+| v0.9.1 | 2026-02-20 | Env var configuration (`FACILITATOR_PRIMARY`, `FACILITATOR_FALLBACK`, `FACILITATOR_STRATEGY`) |
+| v0.9.2 | 2026-02-21 | Proxy execute mode (`/proxy` with `execute: true` for marketplace integration) |
+| v0.9.3 | 2026-02-23 | Include buyer address in proxy response |
+| v0.9.4 | 2026-03-04 | Skill execution timeout (`SKILL_TIMEOUT_SECONDS`, default 1200s) |
 
-With multi-facilitator:
-- One facilitator down → auto-switch to another
-- Competition drives down costs
-- True decentralized agent economy
+### What's Implemented ✅
+
+- [x] `Facilitator` interface for pluggable payment facilitators
+- [x] `CDPFacilitator` class (Coinbase Developer Platform)
+- [x] `FacilitatorRegistry` with selection strategies
+- [x] Selection strategies: failover, cheapest, fastest, random, roundrobin
+- [x] Env var configuration (no code changes to switch facilitators)
+- [x] `/health` endpoint showing facilitator status
+- [x] Proxy execute mode for marketplace integration
 
 ### Facilitator Ecosystem
 
-| Facilitator | Type | Pricing | Status |
-|-------------|------|---------|--------|
-| **Coinbase CDP** | Centralized | 1000/mo free, then $0.001/tx | ✅ Supported |
-| **ChaosChain** | Decentralized (Chainlink CRE) | Open source / TBD | 🔜 v0.9.0 |
-| **Questflow** | Centralized | TBD | 🔜 v0.9.0 |
-| **PayAI** | Centralized | $0.0028/tx (bulk) | 🔜 Future |
+| Facilitator | Type | Pricing | Mainnet | Status |
+|-------------|------|---------|---------|--------|
+| **Coinbase CDP** | Centralized | 1000/mo free, then $0.001/tx | ✅ Base | ✅ Production |
+| **ChaosChain** | Decentralized (Chainlink CRE) | 1% per tx | ❌ Testnet only | ⏸️ Deferred |
+| **Questflow** | Centralized | TBD | ❓ Unverified | ⏸️ Deferred |
+| **PayAI** | Centralized | $0.0028/tx (bulk) | ❓ Unknown | 🔜 Future |
 
-### Proposed API
+**Note:** ChaosChain and Questflow integration deferred until they have production mainnet support.
+- ChaosChain: Only Base Sepolia (testnet), mainnet "coming soon"
+- Questflow: Requires API key application, mainnet status unverified
 
-#### Server Configuration
-
-```typescript
-// moltspay.services.json
-{
-  "provider": {
-    "name": "My Service",
-    "wallet": "0x...",
-    "chain": "base"
-  },
-  "facilitators": {
-    "primary": "cdp",
-    "fallback": ["chaoschain", "questflow"],
-    "strategy": "failover"  // or "cheapest", "fastest", "random"
-  },
-  "services": [...]
-}
-```
+### Configuration
 
 #### Environment Variables
 
 ```env
 # ~/.moltspay/.env
 
-# Coinbase CDP (current)
+# Coinbase CDP (production-ready)
 CDP_API_KEY_ID=xxx
 CDP_API_KEY_SECRET=xxx
+USE_MAINNET=true
 
-# ChaosChain (new)
-CHAOSCHAIN_ENDPOINT=https://x402.chaoschain.io
-CHAOSCHAIN_API_KEY=xxx  # optional, for managed service
-
-# Questflow (new)  
-QUESTFLOW_ENDPOINT=https://facilitator.questflow.ai
-QUESTFLOW_API_KEY=xxx
+# Facilitator selection
+FACILITATOR_PRIMARY=cdp
+FACILITATOR_FALLBACK=              # Empty until alternatives have mainnet
+FACILITATOR_STRATEGY=failover
 ```
 
 #### SDK Usage
@@ -69,27 +60,20 @@ QUESTFLOW_API_KEY=xxx
 ```typescript
 import { MoltsPayServer } from 'moltspay';
 
+// Current recommended setup (CDP only)
+const server = new MoltsPayServer('./services.json');
+
+// Future: when alternatives have mainnet support
 const server = new MoltsPayServer('./services.json', {
   facilitators: {
     primary: 'cdp',
-    fallback: ['chaoschain'],
-    strategy: 'failover',
-    
-    // Optional: custom config per facilitator
-    config: {
-      cdp: {
-        apiKeyId: process.env.CDP_API_KEY_ID,
-        apiKeySecret: process.env.CDP_API_KEY_SECRET,
-      },
-      chaoschain: {
-        endpoint: 'https://x402.chaoschain.io',
-      }
-    }
+    fallback: ['chaoschain'],  // When available
+    strategy: 'failover'
   }
 });
 ```
 
-### Selection Strategies
+### Selection Strategies (Implemented)
 
 | Strategy | Behavior |
 |----------|----------|
@@ -99,240 +83,114 @@ const server = new MoltsPayServer('./services.json', {
 | `random` | Random selection (load balancing) |
 | `roundrobin` | Rotate through facilitators |
 
-### Implementation Plan
-
-#### Phase 1: Abstraction Layer ✅
-- [x] Create `Facilitator` interface
-- [x] Refactor CDP into `CDPFacilitator` class
-- [x] Add facilitator registry
-
-#### Phase 2: ChaosChain Integration
-- [ ] Implement `ChaosChainFacilitator`
-- [ ] Test with ChaosChain testnet
-- [ ] Add to facilitator registry
-
-#### Phase 3: Questflow Integration
-- [ ] Implement `QuestflowFacilitator`
-- [ ] Test integration
-- [ ] Add to registry
-
-#### Phase 4: Selection Strategies
-- [ ] Implement failover strategy
-- [ ] Implement cheapest strategy
-- [ ] Implement fastest strategy
-- [ ] Add health checking / circuit breaker
-
-#### Phase 5: CLI Updates
-- [ ] `npx moltspay facilitators` - list available
-- [ ] `npx moltspay facilitator add <name>` - configure new
-- [ ] `npx moltspay facilitator test` - test all configured
-
 ### Facilitator Interface
 
 ```typescript
 interface Facilitator {
   name: string;
+  displayName: string;
+  supportedNetworks: string[];
   
-  // Check if facilitator is available
-  healthCheck(): Promise<boolean>;
-  
-  // Verify payment signature
-  verify(
-    paymentPayload: X402PaymentPayload,
-    requirements: PaymentRequirements
-  ): Promise<VerifyResult>;
-  
-  // Settle payment on-chain
-  settle(
-    paymentPayload: X402PaymentPayload,
-    requirements: PaymentRequirements
-  ): Promise<SettleResult>;
-  
-  // Get current fee (for cheapest strategy)
-  getFee?(): Promise<{ perTx: number; currency: string }>;
+  healthCheck(): Promise<HealthCheckResult>;
+  verify(payload: X402PaymentPayload, requirements: X402PaymentRequirements): Promise<VerifyResult>;
+  settle(payload: X402PaymentPayload, requirements: X402PaymentRequirements): Promise<SettleResult>;
+  getFee?(): Promise<FacilitatorFee>;
+  supportsNetwork(network: string): boolean;
 }
-```
-
-### Migration Path
-
-**v0.8.x → v0.9.0:**
-- Fully backward compatible
-- If no `facilitators` config, defaults to CDP (current behavior)
-- New config is opt-in
-
-```typescript
-// Old (still works)
-const server = new MoltsPayServer('./services.json');
-
-// New (opt-in multi-facilitator)
-const server = new MoltsPayServer('./services.json', {
-  facilitators: { primary: 'cdp', fallback: ['chaoschain'] }
-});
 ```
 
 ---
 
-## v0.10.0 - Performance & Async Jobs
+## Future: v0.10.0 - Async Jobs (Deferred)
 
-**Goal:** Handle long-running skills reliably while keeping "pay for success" promise
+**Status:** Deferred - current sync model works for most use cases
 
-### Current Issues
+**Goal:** Handle long-running skills with async job queue
 
-| Issue | Impact |
-|-------|--------|
-| Synchronous execution | Client waits 30-60s for video gen |
-| No skill timeout | Stuck skill = stuck request forever |
-| Settle after execution | Settlement failure = free service |
-| No rate limiting | Could overwhelm server |
+### Original Issues - Status
 
-### Proposed Solutions
+| Issue | Status | Notes |
+|-------|--------|-------|
+| Synchronous execution | Acceptable | Video gen ~60-120s wait is tolerable |
+| No skill timeout | ✅ **Fixed in v0.9.4** | `SKILL_TIMEOUT_SECONDS` env var |
+| Settle after execution | ✅ Working correctly | Pay-for-success model |
+| No rate limiting | Low priority | Client spending limits exist |
 
-#### Async Job Queue
-```
-POST /execute → Returns job_id immediately
-GET /jobs/{id} → Poll for status/result
-```
+### Deferred Features
 
-#### Hybrid Payment Model
-- **Fast tasks (<30s):** Pay after success (current)
-- **Long tasks (>30s):** Pre-pay + auto-refund if fails
+If async becomes necessary in the future:
 
-#### Implementation Plan
-- [ ] Add job queue (Redis or in-memory)
+- [ ] Job queue (Redis or in-memory)
 - [ ] `GET /jobs/:id` endpoint for polling
-- [ ] Skill timeout configuration
-- [ ] Rate limiting per client
-- [ ] Health check endpoint `GET /health`
-- [ ] Auto-refund mechanism for failed pre-paid jobs
 - [ ] Webhook notifications for job completion
+- [ ] Pre-pay + auto-refund for long tasks
 
-#### Config Extension
+---
+
+## v1.0.0 - Hosted Skill Marketplace ✅
+
+**Status:** Complete (simplified approach)
+
+**Goal:** Enable skill developers to monetize their hosted skills via x402 payments.
+
+### What We Built
+
+Instead of a complex platform-hosted execution model, we implemented a simpler **"Hosted Skill"** approach:
+
+1. **Developer hosts their own skill** (on their server, Railway, etc.)
+2. **Developer adds `moltspay.services.json`** to configure pricing
+3. **Users pay per use** via x402 protocol
+4. **Payment goes directly to developer wallet** (P2P, non-custodial)
+
+### Implementation ✅
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| Skills Directory | ✅ | MoltsPay Creators - 16k+ skills indexed |
+| Skill Discovery | ✅ | GitHub + ClawHub auto-discovery |
+| Pricing Schema | ✅ | `moltspay.services.json` |
+| Products (Hosted Skill) | ✅ | MoltsPay Creators - Add Product |
+| x402 Payment | ✅ | MoltsPay SDK |
+| Developer Wallet | ✅ | Creator wallet in MoltsPay Creators |
+
+### How It Works
+
+```
+Developer:
+1. Hosts skill on their infrastructure
+2. Adds moltspay.services.json with pricing
+3. Runs: npx moltspay start ./skill --port 3000
+
+User:
+1. Discovers skill in MoltsPay Creators marketplace
+2. Calls skill API with x402 payment header
+3. Payment settles directly to developer wallet
+```
+
+### moltspay.services.json Schema
+
 ```json
 {
+  "provider": {
+    "name": "Developer Name",
+    "wallet": "0x...",
+    "chain": "base"
+  },
   "services": [{
-    "id": "text-to-video",
-    "function": "textToVideo",
+    "id": "my-service",
+    "function": "myFunction",
     "price": 0.99,
-    "timeout": 120,
-    "async": true
+    "currency": "USDC"
   }]
 }
 ```
 
----
+### Why This Approach
 
-## v1.0.0 - Hosted Skill Marketplace
-
-**Goal:** Zero-setup monetization for skill developers
-
-### The Vision
-
-Any developer can monetize their skill without running a server:
-
-```
-Developer: Upload skill + set wallet + set prices
-Platform: Hosts, scales, handles payments
-Users: Pay developer directly (P2P on-chain)
-```
-
-### Why This Matters
-
-**For Developers:**
-- No server to maintain
-- No CDP credentials needed
-- No DevOps knowledge required
-- Just upload and earn
-
-**For Users:**
-- One marketplace to discover skills
-- Consistent UX across all skills
-- Trust through transparency (on-chain payments)
-
-**Regulatory Advantage:**
-- Payments are P2P (buyer → seller wallet directly)
-- Platform never holds funds (non-custodial)
-- No money transmission = no MSB license
-- We're just infrastructure (like AWS/Vercel)
-
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────────┐
-│           MoltsPay Skill Marketplace                    │
-│                  (moltspay.com)                         │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐    │
-│  │ Skill A │  │ Skill B │  │ Skill C │  │ Skill D │    │
-│  │ @dev1   │  │ @dev2   │  │ @dev3   │  │ @dev4   │    │
-│  │ 0x111   │  │ 0x222   │  │ 0x333   │  │ 0x444   │    │
-│  │ $0.50   │  │ $1.00   │  │ $2.00   │  │ $0.25   │    │
-│  └─────────┘  └─────────┘  └─────────┘  └─────────┘    │
-│                                                         │
-│  Payment flow: Client → Developer wallet (direct)       │
-│  Platform fee: 0% or minimal (sustainability)          │
-└─────────────────────────────────────────────────────────┘
-```
-
-### Developer Experience
-
-```bash
-# Upload skill to marketplace
-npx moltspay publish ./my-skill --wallet 0xMyWallet
-
-# Update pricing
-npx moltspay pricing my-skill --price 1.99
-
-# View earnings dashboard
-npx moltspay dashboard
-```
-
-### User Experience
-
-```bash
-# Discover skills
-npx moltspay search "video generation"
-
-# Use skill (pays developer directly)
-npx moltspay pay moltspay.com/skills/video-gen text-to-video --prompt "..."
-
-# Or via web UI at moltspay.com/marketplace
-```
-
-### Implementation Plan
-
-#### Phase 1: Skill Registry
-- [ ] Skill upload endpoint
-- [ ] Skill validation (runs, exports correct functions)
-- [ ] Skill storage (S3/GCS)
-- [ ] Developer dashboard (earnings, usage)
-
-#### Phase 2: Execution Runtime
-- [ ] Isolated skill execution (Docker/Firecracker)
-- [ ] Auto-scaling
-- [ ] Timeout handling
-- [ ] Output storage
-
-#### Phase 3: Marketplace UI
-- [ ] Browse/search skills
-- [ ] Skill detail pages
-- [ ] Developer profiles
-- [ ] Usage analytics
-
-#### Phase 4: Monetization
-- [ ] Optional platform fee (e.g., 5%)
-- [ ] Featured listings
-- [ ] Enterprise tier
-
-### Business Model Options
-
-| Model | Platform Cut | Developer Cut | Notes |
-|-------|-------------|---------------|-------|
-| **Free** | 0% | 100% | Growth phase |
-| **Sustainable** | 5% | 95% | Cover infra costs |
-| **Premium** | 10% | 90% | + featured listings |
-
-Platform fee is transparent and on-chain - developers always know exactly what they earn.
+- **Simpler:** No complex platform-hosted execution
+- **Decentralized:** Developers control their own infrastructure
+- **Non-custodial:** Platform never holds funds
+- **Scalable:** Each developer scales their own service
 
 ---
 
@@ -355,6 +213,25 @@ Platform fee is transparent and on-chain - developers always know exactly what t
 - [ ] Team wallets (multi-sig)
 - [ ] API key management
 
+### Future: Additional Facilitators
+
+When these facilitators have mainnet support, implementation is straightforward:
+
+1. Create `src/facilitators/<name>.ts` implementing `Facilitator` interface
+2. Register in `FacilitatorRegistry`
+3. Add env var support
+
+**ChaosChain** (waiting for mainnet):
+- Endpoint: `https://facilitator.chaoscha.in`
+- No API key needed
+- 1% fee
+- Decentralized (BFT consensus)
+
+**Questflow** (waiting for verification):
+- Endpoint: `https://facilitator.questflow.ai`
+- Requires API key
+- Fee TBD
+
 ---
 
 ## Links
@@ -366,4 +243,4 @@ Platform fee is transparent and on-chain - developers always know exactly what t
 
 ---
 
-*Last updated: 2026-02-19*
+*Last updated: 2026-03-04*
