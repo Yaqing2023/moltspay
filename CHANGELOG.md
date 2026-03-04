@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.9.4] - 2026-03-04
+## [0.9.5] - 2026-03-04
 
 ### Added
 - **Skill Execution Timeout** - Prevents hung skills from blocking requests forever

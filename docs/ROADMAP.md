@@ -1,6 +1,6 @@
 # MoltsPay Roadmap
 
-## Current Version: v0.9.4
+## Current Version: v0.9.5
 
 ### v0.9.x Summary - Multi-Facilitator Foundation ✅
 
@@ -12,7 +12,7 @@
 | v0.9.1 | 2026-02-20 | Env var configuration (`FACILITATOR_PRIMARY`, `FACILITATOR_FALLBACK`, `FACILITATOR_STRATEGY`) |
 | v0.9.2 | 2026-02-21 | Proxy execute mode (`/proxy` with `execute: true` for marketplace integration) |
 | v0.9.3 | 2026-02-23 | Include buyer address in proxy response |
-| v0.9.4 | 2026-03-04 | Skill execution timeout (`SKILL_TIMEOUT_SECONDS`, default 1200s) |
+| v0.9.5 | 2026-03-04 | Skill execution timeout (`SKILL_TIMEOUT_SECONDS`, default 1200s) |
 
 ### What's Implemented ✅
 
