@@ -3,7 +3,7 @@
  */
 
 import { ethers } from 'ethers';
-import { getChain, getChainById, type ChainConfig, type ChainName } from '../chains';
+import { getChain, getChainById, type ChainConfig, type ChainName, type TokenSymbol } from '../chains';
 
 // ERC20 Transfer event signature
 const TRANSFER_EVENT_TOPIC = ethers.id('Transfer(address,address,uint256)');
@@ -13,11 +13,14 @@ export interface VerifyPaymentParams {
   expectedAmount: number;
   expectedTo?: string;
   chain?: string | number;
+  /** Expected token (if not specified, accepts both USDC and USDT) */
+  expectedToken?: TokenSymbol;
 }
 
 export interface VerifyPaymentResult {
   verified: boolean;
   amount?: number;
+  token?: TokenSymbol;
   from?: string;
   to?: string;
   txHash?: string;
@@ -27,9 +30,10 @@ export interface VerifyPaymentResult {
 
 /**
  * Verify on-chain payment
+ * Supports both USDC and USDT transfers
  */
 export async function verifyPayment(params: VerifyPaymentParams): Promise<VerifyPaymentResult> {
-  const { txHash, expectedAmount, expectedTo } = params;
+  const { txHash, expectedAmount, expectedTo, expectedToken } = params;
   
   // Get chain config
   let chain: ChainConfig | undefined;
@@ -60,15 +64,26 @@ export async function verifyPayment(params: VerifyPaymentParams): Promise<Verify
       return { verified: false, error: 'Transaction failed' };
     }
 
-    // Parse Transfer event
-    const usdcAddress = chain.usdc?.toLowerCase();
-    if (!usdcAddress) {
-      return { verified: false, error: `Chain ${chain.name} USDC address not configured` };
+    // Build map of accepted token addresses
+    const tokenAddresses: Record<string, TokenSymbol> = {};
+    
+    if (!expectedToken || expectedToken === 'USDC') {
+      tokenAddresses[chain.tokens.USDC.address.toLowerCase()] = 'USDC';
+    }
+    if (!expectedToken || expectedToken === 'USDT') {
+      tokenAddresses[chain.tokens.USDT.address.toLowerCase()] = 'USDT';
+    }
+
+    if (Object.keys(tokenAddresses).length === 0) {
+      return { verified: false, error: `No token addresses configured for ${chain.name}` };
     }
 
     for (const log of receipt.logs) {
-      // Check if USDC contract
-      if (log.address.toLowerCase() !== usdcAddress) {
+      const logAddress = log.address.toLowerCase();
+      
+      // Check if this is one of our accepted tokens
+      const detectedToken = tokenAddresses[logAddress];
+      if (!detectedToken) {
         continue;
       }
 
@@ -81,7 +96,8 @@ export async function verifyPayment(params: VerifyPaymentParams): Promise<Verify
       const from = '0x' + log.topics[1].slice(-40);
       const to = '0x' + log.topics[2].slice(-40);
       const amountRaw = BigInt(log.data);
-      const amount = Number(amountRaw) / 1e6; // USDC 6 decimals
+      const tokenConfig = chain.tokens[detectedToken];
+      const amount = Number(amountRaw) / (10 ** tokenConfig.decimals);
 
       // Verify recipient address
       if (expectedTo && to.toLowerCase() !== expectedTo.toLowerCase()) {
@@ -92,8 +108,9 @@ export async function verifyPayment(params: VerifyPaymentParams): Promise<Verify
       if (amount < expectedAmount) {
         return {
           verified: false,
-          error: `Insufficient amount: received ${amount} USDC, expected ${expectedAmount} USDC`,
+          error: `Insufficient amount: received ${amount} ${detectedToken}, expected ${expectedAmount}`,
           amount,
+          token: detectedToken,
           from,
           to,
           txHash,
@@ -105,6 +122,7 @@ export async function verifyPayment(params: VerifyPaymentParams): Promise<Verify
       return {
         verified: true,
         amount,
+        token: detectedToken,
         from,
         to,
         txHash,
@@ -112,7 +130,8 @@ export async function verifyPayment(params: VerifyPaymentParams): Promise<Verify
       };
     }
 
-    return { verified: false, error: 'No USDC transfer found' };
+    const tokenList = expectedToken ? expectedToken : 'USDC/USDT';
+    return { verified: false, error: `No ${tokenList} transfer found` };
 
   } catch (e: any) {
     return { verified: false, error: e.message || String(e) };

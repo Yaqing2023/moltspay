@@ -2,12 +2,24 @@
  * Payment Agent Type Definitions
  */
 
+// ============ Token Config ============
+
+export type TokenSymbol = 'USDC' | 'USDT';
+
+export interface TokenConfig {
+  address: string;
+  decimals: number;
+  symbol: TokenSymbol;
+}
+
 // ============ Chain Config ============
 
 export interface ChainConfig {
   name: string;
   chainId: number;
   rpc: string;
+  tokens: Record<TokenSymbol, TokenConfig>;
+  /** @deprecated Use tokens.USDC.address instead */
   usdc: string;
   explorer: string;
   explorerTx: string;
@@ -72,6 +84,7 @@ export interface WalletBalance {
   address: string;
   eth: string;
   usdc: string;
+  usdt: string;
   chain: string;
 }
 
@@ -81,6 +94,7 @@ export interface TransferResult {
   from?: string;
   to?: string;
   amount?: number;
+  token?: TokenSymbol;
   gas_used?: number;
   block_number?: number;
   explorer_url?: string;
@@ -90,6 +104,7 @@ export interface TransferResult {
 export interface TransferParams {
   to: string;
   amount: number;
+  token?: TokenSymbol;
   reason?: string;
   requester?: string;
 }
@@ -115,6 +130,7 @@ export interface PendingTransfer {
   id: string;
   to: string;
   amount: number;
+  token?: TokenSymbol;
   reason?: string;
   requester?: string;
   created_at: string;

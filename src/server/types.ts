@@ -2,6 +2,9 @@
  * MoltsPay Server Types
  */
 
+// Supported token types
+export type TokenSymbol = 'USDC' | 'USDT';
+
 // Service definition from moltspay.services.json
 export interface ServiceConfig {
   id: string;
@@ -9,6 +12,12 @@ export interface ServiceConfig {
   description?: string;
   price: number;
   currency: string;
+  /** 
+   * Tokens accepted for payment (optional).
+   * If not specified, defaults to [currency].
+   * Example: ["USDC", "USDT"]
+   */
+  acceptedCurrencies?: TokenSymbol[];
   input: Record<string, InputField>;
   output: Record<string, OutputField>;
   /** Shell command to execute for this service. Params passed as JSON to stdin. */

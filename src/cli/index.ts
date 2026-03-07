@@ -172,7 +172,7 @@ program
 
     const config = client.getConfig();
     
-    let balance = { usdc: 0, native: 0 };
+    let balance = { usdc: 0, usdt: 0, native: 0 };
     try {
       balance = await client.getBalance();
     } catch (err: any) {
@@ -190,7 +190,7 @@ program
       console.log('\n📊 MoltsPay Status\n');
       console.log(`   Wallet: ${client.address}`);
       console.log(`   Chain: ${config.chain}`);
-      console.log(`   Balance: ${balance.usdc.toFixed(2)} USDC`);
+      console.log(`   Balance: ${balance.usdc.toFixed(2)} USDC | ${balance.usdt.toFixed(2)} USDT`);
       console.log(`   Native: ${balance.native.toFixed(6)} ETH`);
       console.log('');
       console.log('   Limits:');
@@ -541,12 +541,15 @@ program
  * --image can be a URL or local file path:
  *   URL: https://example.com/image.jpg -> sends as image_url
  *   File: ./image.jpg or /path/to/image.jpg -> sends as image_base64
+ * 
+ * --token specifies which stablecoin to use (USDC or USDT)
  */
 program
   .command('pay <server> <service> [params]')
   .description('Pay for a service and get the result')
   .option('--prompt <text>', 'Prompt for the service')
   .option('--image <path>', 'Image URL or local file path')
+  .option('--token <token>', 'Token to pay with (USDC or USDT)', 'USDC')
   .option('--json', 'Output raw JSON only')
   .action(async (server, service, paramsJson, options) => {
     const client = new MoltsPayClient();
@@ -598,6 +601,7 @@ program
     }
 
     const imageDisplay = params.image_url || (params.image_base64 ? `[local file: ${options.image}]` : null);
+    const token = (options.token || 'USDC').toUpperCase();
 
     if (!options.json) {
       console.log(`\n💳 MoltsPay - Paying for service\n`);
@@ -605,12 +609,13 @@ program
       console.log(`   Service: ${service}`);
       console.log(`   Prompt: ${params.prompt}`);
       if (imageDisplay) console.log(`   Image: ${imageDisplay}`);
+      console.log(`   Token: ${token}`);
       console.log(`   Wallet: ${client.address}`);
       console.log('');
     }
 
     try {
-      const result = await client.pay(server, service, params);
+      const result = await client.pay(server, service, params, { token: token as 'USDC' | 'USDT' });
       
       if (options.json) {
         console.log(JSON.stringify(result));

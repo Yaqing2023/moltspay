@@ -68,9 +68,18 @@
           },
           "currency": {
             "type": "string",
-            "enum": ["USDC", "USDT", "DAI"],
+            "enum": ["USDC", "USDT"],
             "default": "USDC",
-            "description": "Payment currency"
+            "description": "Primary/display currency for pricing"
+          },
+          "acceptedCurrencies": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["USDC", "USDT"]
+            },
+            "description": "Tokens accepted for payment. If not specified, defaults to [currency].",
+            "examples": [["USDC", "USDT"]]
           },
           "input": {
             "type": "object",
@@ -126,7 +135,8 @@
           "id": "text-to-video",
           "function": "textToVideo",
           "price": 0.99,
-          "currency": "USDC"
+          "currency": "USDC",
+          "acceptedCurrencies": ["USDC", "USDT"]
         }
       ]
     }

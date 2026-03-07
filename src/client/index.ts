@@ -13,7 +13,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, chmodSync
 import { homedir } from 'os';
 import { join } from 'path';
 import { Wallet, ethers } from 'ethers';
-import { getChain, type ChainName } from '../chains/index.js';
+import { getChain, type ChainName, type TokenSymbol } from '../chains/index.js';
 import {
   ClientConfig,
   WalletData,
@@ -22,6 +22,13 @@ import {
 } from './types.js';
 
 export * from './types.js';
+
+export interface PayOptions {
+  /** Token to pay with (default: USDC, or auto-select based on balance) */
+  token?: TokenSymbol;
+  /** Auto-select token based on balance (default: false) */
+  autoSelect?: boolean;
+}
 
 // x402 constants
 const X402_VERSION = 2;
@@ -129,11 +136,17 @@ export class MoltsPayClient {
    * 
    * This is GASLESS for the client - server pays gas to claim payment.
    * This is PAY-FOR-SUCCESS - payment only claimed if service succeeds.
+   * 
+   * @param serverUrl - Server URL
+   * @param service - Service ID
+   * @param params - Service parameters
+   * @param options - Payment options (token selection)
    */
   async pay(
     serverUrl: string,
     service: string,
-    params: Record<string, any>
+    params: Record<string, any>,
+    options: PayOptions = {}
   ): Promise<Record<string, any>> {
     if (!this.wallet || !this.walletData) {
       throw new Error('Client not initialized. Run: npx moltspay init');
@@ -200,7 +213,22 @@ export class MoltsPayClient {
     const amount = Number(amountRaw) / 1e6;
     this.checkLimits(amount);
 
-    console.log(`[MoltsPay] Signing payment: $${amount} USDC (gasless)`);
+    // Determine which token to use
+    let token: TokenSymbol = options.token || 'USDC';
+    
+    // Auto-select token based on balance if requested
+    if (options.autoSelect) {
+      const balances = await this.getBalance();
+      if (balances.usdc >= amount) {
+        token = 'USDC';
+      } else if (balances.usdt >= amount) {
+        token = 'USDT';
+      } else {
+        throw new Error(`Insufficient balance: need $${amount}, have ${balances.usdc} USDC / ${balances.usdt} USDT`);
+      }
+    }
+
+    console.log(`[MoltsPay] Signing payment: $${amount} ${token} (gasless)`);
 
     // Step 4: Sign EIP-3009 authorization (GASLESS - just signing)
     // payTo is the recipient address (v2 format)
@@ -208,7 +236,11 @@ export class MoltsPayClient {
     if (!payTo) {
       throw new Error('Missing payTo address in payment requirements');
     }
-    const authorization = await this.signEIP3009(payTo, amount, chain);
+    const authorization = await this.signEIP3009(payTo, amount, chain, token);
+
+    // Get token-specific info
+    const tokenConfig = chain.tokens[token];
+    const tokenName = token === 'USDC' ? 'USD Coin' : 'Tether USD';
 
     // Step 5: Create x402 payment payload (v2 format requires 'accepted')
     const payload = {
@@ -218,11 +250,11 @@ export class MoltsPayClient {
       accepted: {
         scheme: 'exact',
         network,
-        asset: req.asset || chain.usdc,
+        asset: tokenConfig.address,
         amount: amountRaw,
         payTo,
         maxTimeoutSeconds: req.maxTimeoutSeconds || 300,
-        extra: req.extra || { name: 'USD Coin', version: '2' },
+        extra: req.extra || { name: tokenName, version: '2' },
       },
     };
     const paymentHeader = Buffer.from(JSON.stringify(payload)).toString('base64');
@@ -255,16 +287,20 @@ export class MoltsPayClient {
   /**
    * Sign EIP-3009 transferWithAuthorization (GASLESS)
    * This only signs - no on-chain transaction, no gas needed.
+   * Supports both USDC and USDT.
    */
   private async signEIP3009(
     to: string,
     amount: number,
-    chain: { chainId: number; usdc: string }
+    chain: { chainId: number; tokens: Record<TokenSymbol, { address: string; decimals: number }> },
+    token: TokenSymbol = 'USDC'
   ): Promise<{ authorization: EIP3009Authorization; signature: string }> {
     const validAfter = 0;
     const validBefore = Math.floor(Date.now() / 1000) + 3600; // 1 hour
     const nonce = ethers.hexlify(ethers.randomBytes(32));
-    const value = BigInt(Math.floor(amount * 1e6)).toString();
+    
+    const tokenConfig = chain.tokens[token];
+    const value = BigInt(Math.floor(amount * (10 ** tokenConfig.decimals))).toString();
 
     const authorization: EIP3009Authorization = {
       from: this.wallet!.address,
@@ -275,12 +311,13 @@ export class MoltsPayClient {
       nonce,
     };
 
-    // EIP-712 domain for USDC
+    // EIP-712 domain - token specific
+    const tokenName = token === 'USDC' ? 'USD Coin' : 'Tether USD';
     const domain = {
-      name: 'USD Coin',
+      name: tokenName,
       version: '2',
       chainId: chain.chainId,
-      verifyingContract: chain.usdc,
+      verifyingContract: tokenConfig.address,
     };
 
     // EIP-3009 types
@@ -451,9 +488,9 @@ export class MoltsPayClient {
   }
 
   /**
-   * Get wallet balance
+   * Get wallet balance (USDC, USDT, and native token)
    */
-  async getBalance(): Promise<{ usdc: number; native: number }> {
+  async getBalance(): Promise<{ usdc: number; usdt: number; native: number }> {
     if (!this.wallet) {
       throw new Error('Client not initialized');
     }
@@ -466,17 +503,18 @@ export class MoltsPayClient {
     }
 
     const provider = new ethers.JsonRpcProvider(chain.rpc);
+    const tokenAbi = ['function balanceOf(address) view returns (uint256)'];
 
-    // Get native balance
-    const nativeBalance = await provider.getBalance(this.wallet.address);
-
-    // Get USDC balance
-    const usdcAbi = ['function balanceOf(address) view returns (uint256)'];
-    const usdc = new ethers.Contract(chain.usdc, usdcAbi, provider);
-    const usdcBalance = await usdc.balanceOf(this.wallet.address);
+    // Get all balances in parallel
+    const [nativeBalance, usdcBalance, usdtBalance] = await Promise.all([
+      provider.getBalance(this.wallet.address),
+      new ethers.Contract(chain.tokens.USDC.address, tokenAbi, provider).balanceOf(this.wallet.address),
+      new ethers.Contract(chain.tokens.USDT.address, tokenAbi, provider).balanceOf(this.wallet.address),
+    ]);
 
     return {
-      usdc: parseFloat(ethers.formatUnits(usdcBalance, 6)),
+      usdc: parseFloat(ethers.formatUnits(usdcBalance, chain.tokens.USDC.decimals)),
+      usdt: parseFloat(ethers.formatUnits(usdtBalance, chain.tokens.USDT.decimals)),
       native: parseFloat(ethers.formatEther(nativeBalance)),
     };
   }

@@ -7,6 +7,7 @@
  * - Whitelist mechanism
  * - Audit logging
  * - Over-limit approval queue
+ * - Multi-token support (USDC, USDT)
  */
 
 import { Wallet, type WalletConfig } from './Wallet.js';
@@ -17,6 +18,7 @@ import type {
   TransferResult,
   TransferParams,
   PendingTransfer,
+  TokenSymbol,
 } from '../types/index.js';
 
 const DEFAULT_LIMITS: SecurityLimits = {
@@ -63,22 +65,23 @@ export class SecureWallet {
    * Secure transfer (with limit and whitelist checks)
    * 
    * Supports two calling methods:
-   * - transfer({ to, amount, reason?, requester? })
-   * - transfer(to, amount)
+   * - transfer({ to, amount, token?, reason?, requester? })
+   * - transfer(to, amount, token?)
    */
-  async transfer(paramsOrTo: TransferParams | string, amountArg?: number | string): Promise<TransferResult> {
+  async transfer(paramsOrTo: TransferParams | string, amountArg?: number | string, tokenArg?: TokenSymbol): Promise<TransferResult> {
     // Supports two calling methods
     let params: TransferParams;
     if (typeof paramsOrTo === 'string') {
       params = { 
         to: paramsOrTo, 
-        amount: typeof amountArg === 'string' ? parseFloat(amountArg) : (amountArg || 0)
+        amount: typeof amountArg === 'string' ? parseFloat(amountArg) : (amountArg || 0),
+        token: tokenArg,
       };
     } else {
       params = paramsOrTo;
     }
     
-    const { to, amount, reason, requester } = params;
+    const { to, amount, token = 'USDC', reason, requester } = params;
     const toAddress = to.toLowerCase();
     const requestId = `tr_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
@@ -110,6 +113,7 @@ export class SecureWallet {
         id: requestId,
         to,
         amount,
+        token,
         reason,
         requester,
         created_at: new Date().toISOString(),
@@ -120,11 +124,12 @@ export class SecureWallet {
       await this.auditLog.log({
         action: 'transfer_request',
         request_id: requestId,
-        metadata: { pending: true, reason: 'Exceeds single limit' },
+        metadata: { pending: true, reason: 'Exceeds single limit', token },
       });
       
       return {
         success: false,
+        token,
         error: `Amount ${amount} exceeds single limit ${this.limits.singleMax}. Pending approval: ${requestId}`,
       };
     }
@@ -136,6 +141,7 @@ export class SecureWallet {
         id: requestId,
         to,
         amount,
+        token,
         reason,
         requester,
         created_at: new Date().toISOString(),
@@ -146,17 +152,18 @@ export class SecureWallet {
       await this.auditLog.log({
         action: 'transfer_request',
         request_id: requestId,
-        metadata: { pending: true, reason: 'Exceeds daily limit' },
+        metadata: { pending: true, reason: 'Exceeds daily limit', token },
       });
       
       return {
         success: false,
+        token,
         error: `Daily limit would be exceeded (${this.dailyTotal} + ${amount} > ${this.limits.dailyMax}). Pending approval: ${requestId}`,
       };
     }
 
     // 4. Execute transfer
-    const result = await this.wallet.transfer(to, amount);
+    const result = await this.wallet.transfer(to, amount, token);
 
     // 5. Record result
     if (result.success) {
@@ -170,12 +177,13 @@ export class SecureWallet {
         tx_hash: result.tx_hash,
         reason,
         requester,
+        metadata: { token },
       });
     } else {
       await this.auditLog.log({
         action: 'transfer_failed',
         request_id: requestId,
-        metadata: { error: result.error },
+        metadata: { error: result.error, token },
       });
     }
 
@@ -195,16 +203,18 @@ export class SecureWallet {
       return { success: false, error: `Transfer already ${pending.status}` };
     }
 
+    const token = pending.token || 'USDC';
+
     await this.auditLog.log({
       action: 'transfer_approved',
       request_id: requestId,
-      metadata: { approver },
+      metadata: { approver, token },
     });
 
     pending.status = 'approved';
 
     // Execute transfer（Skip limit checks）
-    const result = await this.wallet.transfer(pending.to, pending.amount);
+    const result = await this.wallet.transfer(pending.to, pending.amount, token);
 
     if (result.success) {
       pending.status = 'executed';
@@ -219,13 +229,13 @@ export class SecureWallet {
         tx_hash: result.tx_hash,
         reason: pending.reason,
         requester: pending.requester,
-        metadata: { approved_by: approver },
+        metadata: { approved_by: approver, token },
       });
     } else {
       await this.auditLog.log({
         action: 'transfer_failed',
         request_id: requestId,
-        metadata: { error: result.error },
+        metadata: { error: result.error, token },
       });
     }
 

@@ -39,17 +39,28 @@ const PAYMENT_REQUIRED_HEADER = 'x-payment-required';
 const PAYMENT_HEADER = 'x-payment';
 const PAYMENT_RESPONSE_HEADER = 'x-payment-response';
 
-// USDC contract addresses
-const USDC_ADDRESSES: Record<string, string> = {
-  'eip155:8453': '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',   // Base mainnet
-  'eip155:84532': '0x036CbD53842c5426634e7929541eC2318f3dCF7e', // Base Sepolia
+// Token contract addresses by network
+const TOKEN_ADDRESSES: Record<string, Record<string, string>> = {
+  'eip155:8453': {
+    USDC: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+    USDT: '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2',
+  },
+  'eip155:84532': {
+    USDC: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+    USDT: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', // Same as USDC on testnet
+  },
 };
 
-// EIP-712 domain info for USDC
-const USDC_DOMAIN = {
-  name: 'USD Coin',
-  version: '2',
+// EIP-712 domain info for tokens
+const TOKEN_DOMAINS: Record<string, { name: string; version: string }> = {
+  USDC: { name: 'USD Coin', version: '2' },
+  USDT: { name: 'Tether USD', version: '2' },
 };
+
+// Helper to get accepted currencies with backward compatibility
+function getAcceptedCurrencies(config: ServiceConfig): string[] {
+  return config.acceptedCurrencies ?? [config.currency];
+}
 
 /**
  * Load environment from .env files
@@ -244,6 +255,7 @@ export class MoltsPayServer {
       description: s.description,
       price: s.price,
       currency: s.currency,
+      acceptedCurrencies: getAcceptedCurrencies(s),
       input: s.input,
       output: s.output,
       available: this.skills.has(s.id),
@@ -283,6 +295,7 @@ export class MoltsPayServer {
       description: s.description,
       price: s.price,
       currency: s.currency,
+      acceptedCurrencies: getAcceptedCurrencies(s),
       input: s.input,
       output: s.output,
       available: this.skills.has(s.id),
@@ -370,8 +383,17 @@ export class MoltsPayServer {
       return this.sendJson(res, 402, { error: validation.error });
     }
 
-    // Build requirements for facilitator
-    const requirements = this.buildPaymentRequirements(skill.config);
+    // Detect which token is being used
+    const paymentToken = this.detectPaymentToken(payment);
+    if (paymentToken && !this.isTokenAccepted(skill.config, paymentToken)) {
+      const accepted = getAcceptedCurrencies(skill.config);
+      return this.sendJson(res, 402, { 
+        error: `Token ${paymentToken} not accepted. Accepted: ${accepted.join(', ')}` 
+      });
+    }
+
+    // Build requirements for facilitator using the detected token
+    const requirements = this.buildPaymentRequirements(skill.config, paymentToken);
 
     // Verify payment with facilitator (via registry)
     console.log(`[MoltsPay] Verifying payment...`);
@@ -438,13 +460,18 @@ export class MoltsPayServer {
 
   /**
    * Return 402 with x402 payment requirements (v2 format)
+   * Includes requirements for all accepted currencies
    */
   private sendPaymentRequired(config: ServiceConfig, res: ServerResponse): void {
-    const requirements = this.buildPaymentRequirements(config);
+    const acceptedTokens = getAcceptedCurrencies(config);
+    
+    // Build requirements for each accepted token
+    const accepts = acceptedTokens.map(token => this.buildPaymentRequirements(config, token));
 
     const paymentRequired = {
       x402Version: X402_VERSION,
-      accepts: [requirements],
+      accepts,
+      acceptedCurrencies: acceptedTokens,
       resource: {
         url: `/execute?service=${config.id}`,
         description: `${config.name} - $${config.price} ${config.currency}`,
@@ -461,6 +488,7 @@ export class MoltsPayServer {
     res.end(JSON.stringify({
       error: 'Payment required',
       message: `Service requires $${config.price} ${config.currency}`,
+      acceptedCurrencies: acceptedTokens,
       x402: paymentRequired,
     }, null, 2));
   }
@@ -492,20 +520,52 @@ export class MoltsPayServer {
 
   /**
    * Build payment requirements for facilitator
+   * Returns requirements for the primary currency (USDC by default)
+   * Server accepts any of the acceptedCurrencies
    */
-  private buildPaymentRequirements(config: ServiceConfig): X402PaymentRequirements {
+  private buildPaymentRequirements(config: ServiceConfig, token?: string): X402PaymentRequirements {
     const amountInUnits = Math.floor(config.price * 1e6).toString();
-    const usdcAddress = USDC_ADDRESSES[this.networkId];
+    const acceptedTokens = getAcceptedCurrencies(config);
+    
+    // Use specified token or default to first accepted
+    const selectedToken = token && acceptedTokens.includes(token) ? token : acceptedTokens[0];
+    const tokenAddresses = TOKEN_ADDRESSES[this.networkId] || {};
+    const tokenAddress = tokenAddresses[selectedToken];
+    const tokenDomain = TOKEN_DOMAINS[selectedToken] || TOKEN_DOMAINS.USDC;
 
     return {
       scheme: 'exact',
       network: this.networkId,
-      asset: usdcAddress,
+      asset: tokenAddress,
       amount: amountInUnits,
       payTo: this.manifest.provider.wallet,
       maxTimeoutSeconds: 300,
-      extra: USDC_DOMAIN,
+      extra: tokenDomain,
     };
+  }
+
+  /**
+   * Detect which token is being used in the payment
+   */
+  private detectPaymentToken(payment: X402PaymentPayload): string | undefined {
+    const asset = payment.accepted?.asset || (payment.payload as any)?.asset;
+    if (!asset) return undefined;
+
+    const tokenAddresses = TOKEN_ADDRESSES[this.networkId] || {};
+    for (const [symbol, address] of Object.entries(tokenAddresses)) {
+      if (address.toLowerCase() === asset.toLowerCase()) {
+        return symbol;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Check if payment token is accepted for service
+   */
+  private isTokenAccepted(config: ServiceConfig, token: string): boolean {
+    const accepted = getAcceptedCurrencies(config);
+    return accepted.includes(token);
   }
 
   private async readBody(req: IncomingMessage): Promise<any> {
@@ -758,18 +818,24 @@ export class MoltsPayServer {
   /**
    * Build payment requirements for proxy endpoint (uses provided wallet)
    */
-  private buildProxyPaymentRequirements(config: ServiceConfig, wallet: string): X402PaymentRequirements {
+  private buildProxyPaymentRequirements(config: ServiceConfig, wallet: string, token?: string): X402PaymentRequirements {
     const amountInUnits = Math.floor(config.price * 1e6).toString();
-    const usdcAddress = USDC_ADDRESSES[this.networkId];
+    const acceptedTokens = getAcceptedCurrencies(config);
+    
+    // Use specified token or default to first accepted
+    const selectedToken = token && acceptedTokens.includes(token) ? token : acceptedTokens[0];
+    const tokenAddresses = TOKEN_ADDRESSES[this.networkId] || {};
+    const tokenAddress = tokenAddresses[selectedToken];
+    const tokenDomain = TOKEN_DOMAINS[selectedToken] || TOKEN_DOMAINS.USDC;
 
     return {
       scheme: 'exact',
       network: this.networkId,
-      asset: usdcAddress,
+      asset: tokenAddress,
       amount: amountInUnits,
       payTo: wallet, // Use provided wallet, not manifest
       maxTimeoutSeconds: 300,
-      extra: USDC_DOMAIN,
+      extra: tokenDomain,
     };
   }
 
