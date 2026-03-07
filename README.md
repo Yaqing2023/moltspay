@@ -1,6 +1,21 @@
 # MoltsPay
 
-Blockchain payment infrastructure for AI Agents. Turn any skill into a paid service with one JSON file.
+[![npm version](https://img.shields.io/npm/v/moltspay.svg)](https://www.npmjs.com/package/moltspay)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
+
+**Blockchain payment infrastructure for AI Agents.** Turn any skill into a paid service with one JSON file.
+
+MoltsPay enables agent-to-agent commerce using the [x402 protocol](https://www.x402.org/) - HTTP-native payments where AI agents can pay each other for services without human intervention. Built on USDC stablecoins with gasless transactions powered by Coinbase CDP.
+
+## Why MoltsPay?
+
+| Problem | MoltsPay Solution |
+|---------|-------------------|
+| AI agents can't pay for services | x402 protocol - HTTP 402 Payment Required flow |
+| Blockchain payments need gas | Gasless - CDP facilitator handles all gas fees |
+| Complex wallet integration | One JSON file - add `moltspay.services.json` to any skill |
+| Payment verification is hard | Automatic on-chain verification included |
 
 ## Features
 
@@ -8,7 +23,7 @@ Blockchain payment infrastructure for AI Agents. Turn any skill into a paid serv
 - 🎫 **x402 Protocol** - HTTP-native payments (402 Payment Required)
 - 💨 **Gasless** - Both client and server pay no gas (CDP facilitator handles it)
 - ✅ **Payment Verification** - Automatic on-chain verification
-- 🔒 **Secure Wallet** - Limits, whitelist, and audit logging
+- 🔒 **Secure Wallet** - Spending limits, whitelist, and audit logging
 - ⛓️ **Multi-chain** - Base, Polygon, Ethereum (mainnet & testnet)
 - 🤖 **Agent-to-Agent** - Complete A2A payment flow support
 
@@ -63,12 +78,38 @@ npx moltspay init --chain base
 ```
 
 **2. Fund your wallet:**
-Ask your owner to send USDC to your wallet address. No ETH needed!
+Send USDC to your wallet address. No ETH needed!
 
 **3. Use paid services:**
 ```bash
 npx moltspay pay https://server.com text-to-video --prompt "a cat dancing"
 ```
+
+## How x402 Protocol Works
+
+```
+Client                         Server                      CDP Facilitator
+  │                              │                              │
+  │ POST /execute                │                              │
+  │ ─────────────────────────>   │                              │
+  │                              │                              │
+  │ 402 + payment requirements   │                              │
+  │ <─────────────────────────   │                              │
+  │                              │                              │
+  │ [Sign EIP-3009 - NO GAS]     │                              │
+  │                              │                              │
+  │ POST + X-Payment header      │                              │
+  │ ─────────────────────────>   │ Verify signature             │
+  │                              │ ─────────────────────────>   │
+  │                              │                              │
+  │                              │ Execute transfer (pays gas)  │
+  │                              │ <─────────────────────────   │
+  │                              │                              │
+  │ 200 OK + result              │                              │
+  │ <─────────────────────────   │                              │
+```
+
+**Key insight:** Client signs a payment authorization, server submits it. Neither party pays gas - the CDP facilitator handles settlement.
 
 ## Skill Structure
 
@@ -80,10 +121,6 @@ my-skill/
 ├── index.js               # Your existing exports
 └── moltspay.services.json # Only file you add!
 ```
-
-**Entry point discovery:**
-1. If `package.json` exists → uses `main` field
-2. Otherwise → defaults to `index.js`
 
 **Your functions stay untouched.** Just add the JSON config.
 
@@ -119,8 +156,6 @@ my-skill/
 
 ```bash
 npx moltspay validate ./my-skill
-# or
-npx moltspay validate ./moltspay.services.json
 ```
 
 ## Server Setup (Mainnet)
@@ -140,33 +175,6 @@ npx moltspay start ./my-skill --port 3000
 ```
 
 Server does NOT need a private key - the x402 facilitator handles settlement.
-
-## How x402 Works
-
-```
-Client                         Server                      CDP Facilitator
-  │                              │                              │
-  │ POST /execute                │                              │
-  │ ─────────────────────────>   │                              │
-  │                              │                              │
-  │ 402 + payment requirements   │                              │
-  │ <─────────────────────────   │                              │
-  │                              │                              │
-  │ [Sign EIP-3009 - NO GAS]     │                              │
-  │                              │                              │
-  │ POST + X-Payment header      │                              │
-  │ ─────────────────────────>   │ Verify signature             │
-  │                              │ ─────────────────────────>   │
-  │                              │                              │
-  │                              │ Execute transfer (pays gas)  │
-  │                              │ <─────────────────────────   │
-  │                              │                              │
-  │ 200 OK + result              │                              │
-  │ <─────────────────────────   │                              │
-```
-
-**Client needs:** USDC balance only (no ETH/gas)
-**Server needs:** CDP credentials only (no private key)
 
 ## CLI Reference
 
@@ -227,30 +235,45 @@ server.listen(3000);
 
 | Chain | ID | Type |
 |-------|-----|------|
-| base | 8453 | Mainnet |
-| polygon | 137 | Mainnet |
-| ethereum | 1 | Mainnet |
-| base_sepolia | 84532 | Testnet |
+| Base | 8453 | Mainnet |
+| Polygon | 137 | Mainnet |
+| Ethereum | 1 | Mainnet |
+| Base Sepolia | 84532 | Testnet |
 
-## Example: Zen7 Video Generation
+## Live Example: Zen7 Video Generation
 
 Live service at `https://juai8.com/zen7/`
 
 **Services:**
-- `text-to-video` - $0.99 USDC
-- `image-to-video` - $1.49 USDC
+- `text-to-video` - $0.99 USDC - Generate video from text prompt
+- `image-to-video` - $1.49 USDC - Animate a static image
 
-**Test it:**
+**Try it:**
 ```bash
 npx moltspay services https://juai8.com/zen7
 npx moltspay pay https://juai8.com/zen7 text-to-video --prompt "a happy cat"
 ```
 
+## Use Cases
+
+- **AI Video Generation** - Pay per video generated
+- **Image Processing** - Pay for AI image editing/enhancement
+- **Data APIs** - Monetize proprietary datasets
+- **Compute Services** - Sell GPU time to other agents
+- **Content Generation** - AI writing, music, code generation
+
+## Related Projects
+
+- [moltspay-python](https://github.com/Yaqing2023/moltspay-python) - Python SDK with LangChain integration
+- [x402 Protocol](https://www.x402.org/) - The HTTP payment standard
+
 ## Links
 
+- **Website:** https://moltspay.com
 - **npm:** https://www.npmjs.com/package/moltspay
-- **GitHub:** https://github.com/Yaqing2023/moltspay
+- **PyPI:** https://pypi.org/project/moltspay/
 - **x402 Protocol:** https://www.x402.org/
+- **Coinbase CDP:** https://portal.cdp.coinbase.com/
 
 ## License
 
