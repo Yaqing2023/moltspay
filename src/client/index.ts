@@ -228,7 +228,21 @@ export class MoltsPayClient {
       }
     }
 
-    console.log(`[MoltsPay] Signing payment: $${amount} ${token} (gasless)`);
+    // USDT does not support gasless transfers (no EIP-2612 permit)
+    // It requires on-chain approve + transfer, meaning the user pays gas
+    if (token === 'USDT') {
+      const balances = await this.getBalance();
+      if (balances.native < 0.0001) {
+        throw new Error(
+          `USDT requires ETH for gas (~$0.01 on Base). ` +
+          `Your ETH balance: ${balances.native.toFixed(6)} ETH. ` +
+          `Please add a small amount of ETH to your wallet, or use USDC (gasless).`
+        );
+      }
+      console.log(`[MoltsPay] ⚠️  USDT requires gas (~$0.01). Proceeding with payment...`);
+    } else {
+      console.log(`[MoltsPay] Signing payment: $${amount} ${token} (gasless)`);
+    }
 
     // Step 4: Sign EIP-3009 authorization (GASLESS - just signing)
     // payTo is the recipient address (v2 format)

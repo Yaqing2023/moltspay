@@ -603,6 +603,20 @@ program
     const imageDisplay = params.image_url || (params.image_base64 ? `[local file: ${options.image}]` : null);
     const token = (options.token || 'USDC').toUpperCase();
 
+    // USDT requires gas - check native balance
+    if (token === 'USDT') {
+      const balance = await client.getBalance();
+      if (balance.native < 0.0001) {
+        console.log('\n⚠️  USDT requires a small amount of ETH for gas (~$0.01)');
+        console.log(`   Your ETH balance: ${balance.native.toFixed(6)} ETH`);
+        console.log('   Please add a tiny amount of ETH to your wallet.\n');
+        process.exit(1);
+      }
+      if (!options.json) {
+        console.log('\n⚠️  Note: USDT payments require gas (~$0.01 on Base)');
+      }
+    }
+
     if (!options.json) {
       console.log(`\n💳 MoltsPay - Paying for service\n`);
       console.log(`   Server: ${server}`);
