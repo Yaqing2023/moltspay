@@ -51,7 +51,8 @@ export async function textToVideo({ prompt }) {
 {
   "provider": {
     "name": "My Video Service",
-    "wallet": "0xYOUR_WALLET_ADDRESS"
+    "wallet": "0xYOUR_WALLET_ADDRESS",
+    "chains": ["base", "polygon"]
   },
   "services": [{
     "id": "text-to-video",
@@ -82,7 +83,11 @@ Send USDC to your wallet address. No ETH needed!
 
 **3. Use paid services:**
 ```bash
+# Pay on Base (default)
 npx moltspay pay https://server.com text-to-video --prompt "a cat dancing"
+
+# Pay on Polygon
+npx moltspay pay https://server.com text-to-video --chain polygon --prompt "a cat dancing"
 ```
 
 ## How x402 Protocol Works
@@ -133,7 +138,7 @@ my-skill/
     "name": "Service Name",
     "description": "Optional description",
     "wallet": "0x...",
-    "chain": "base"
+    "chains": ["base", "polygon"]
   },
   "services": [{
     "id": "service-id",
@@ -151,6 +156,26 @@ my-skill/
   }]
 }
 ```
+
+### Multi-Chain Configuration
+
+Accept payments on multiple chains by specifying a `chains` array:
+
+```json
+{
+  "provider": {
+    "wallet": "0x...",
+    "chains": ["base", "polygon"]
+  }
+}
+```
+
+Clients can then choose which chain to pay on:
+```bash
+npx moltspay pay https://server.com service-id --chain polygon --prompt "..."
+```
+
+If no `--chain` is specified, the client uses the first chain in the provider's list.
 
 ### Validate Your Config
 
@@ -181,10 +206,15 @@ Server does NOT need a private key - the x402 facilitator handles settlement.
 ```bash
 # === Client Commands ===
 npx moltspay init                    # Create wallet
+npx moltspay init --chain polygon    # Create wallet for Polygon
 npx moltspay status                  # Check balance
 npx moltspay config                  # Update limits
 npx moltspay services <url>          # List provider's services
 npx moltspay pay <url> <service>     # Pay and execute service
+
+# === Pay with Chain Selection ===
+npx moltspay pay <url> <service> --chain base     # Pay on Base (default)
+npx moltspay pay <url> <service> --chain polygon  # Pay on Polygon
 
 # === Server Commands ===
 npx moltspay start <skill-dir>       # Start server
@@ -193,7 +223,8 @@ npx moltspay validate <path>         # Validate manifest
 
 # === Options ===
 --port <port>                        # Server port (default 3000)
---chain <chain>                      # Chain: base, polygon, ethereum
+--chain <chain>                      # Chain: base, polygon (for pay/init)
+--token <token>                      # Token: USDC, USDT
 --max-per-tx <amount>                # Spending limit per transaction
 --max-per-day <amount>               # Daily spending limit
 ```
@@ -248,10 +279,18 @@ Live service at `https://juai8.com/zen7/`
 - `text-to-video` - $0.99 USDC - Generate video from text prompt
 - `image-to-video` - $1.49 USDC - Animate a static image
 
+**Supported Chains:** Base, Polygon
+
 **Try it:**
 ```bash
+# List services
 npx moltspay services https://juai8.com/zen7
+
+# Pay on Base (default)
 npx moltspay pay https://juai8.com/zen7 text-to-video --prompt "a happy cat"
+
+# Pay on Polygon
+npx moltspay pay https://juai8.com/zen7 text-to-video --chain polygon --prompt "a happy cat"
 ```
 
 ## Use Cases
