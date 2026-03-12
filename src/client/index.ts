@@ -126,11 +126,27 @@ export class MoltsPayClient {
    * Get services from a provider
    */
   async getServices(serverUrl: string): Promise<ServicesResponse> {
-    const res = await fetch(`${serverUrl}/services`);
-    if (!res.ok) {
-      throw new Error(`Failed to get services: ${res.statusText}`);
+    // Normalize URL - don't append /services if already present
+    const normalizedUrl = serverUrl.replace(/\/(services|api\/services|registry\/services)\/?$/, '');
+    
+    // Try /services first (standard provider endpoint)
+    const endpoints = ['/services', '/api/services', '/registry/services'];
+    
+    for (const endpoint of endpoints) {
+      try {
+        const res = await fetch(`${normalizedUrl}${endpoint}`);
+        if (!res.ok) continue;
+        
+        const contentType = res.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) continue;
+        
+        return await res.json() as ServicesResponse;
+      } catch {
+        continue;
+      }
     }
-    return res.json() as Promise<ServicesResponse>;
+    
+    throw new Error(`Failed to get services: no valid endpoint found at ${normalizedUrl}`);
   }
 
   /**

@@ -218,18 +218,38 @@ program
       if (options.json) {
         console.log(JSON.stringify(services, null, 2));
       } else {
-        console.log(`\n🏪 ${services.provider.name}\n`);
-        console.log(`   ${services.provider.description || ''}`);
-        console.log(`   Wallet: ${services.provider.wallet}`);
-        console.log(`   Chain: ${services.provider.chain}`);
+        // Handle both single-provider and marketplace (multi-provider) responses
+        if (services.provider) {
+          // Single provider format
+          console.log(`\n🏪 ${services.provider.name}\n`);
+          console.log(`   ${services.provider.description || ''}`);
+          console.log(`   Wallet: ${services.provider.wallet}`);
+          
+          // Display chains (support both old 'chain' and new 'chains' format)
+          const chains = services.provider.chains 
+            ? (Array.isArray(services.provider.chains) 
+                ? services.provider.chains.map((c: any) => typeof c === 'string' ? c : c.chain).join(', ')
+                : services.provider.chains)
+            : services.provider.chain || 'base';
+          console.log(`   Chains: ${chains}`);
+        } else {
+          // Marketplace/registry format (multiple providers)
+          console.log(`\n🏪 MoltsPay Service Registry\n`);
+          console.log(`   ${services.services?.length || 0} services available`);
+        }
+        
         console.log('\n📦 Services:\n');
         
         for (const svc of services.services) {
-          const status = svc.available ? '✅' : '❌';
-          console.log(`   ${status} ${svc.id}`);
+          const status = svc.available !== false ? '✅' : '❌';
+          console.log(`   ${status} ${svc.id || svc.name}`);
           console.log(`      ${svc.name} - $${svc.price} ${svc.currency}`);
           if (svc.description) {
             console.log(`      ${svc.description}`);
+          }
+          // Show provider info for marketplace listings
+          if (svc.provider && !services.provider) {
+            console.log(`      Provider: ${svc.provider.name || svc.provider.username}`);
           }
           console.log('');
         }
