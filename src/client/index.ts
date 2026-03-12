@@ -28,6 +28,8 @@ export interface PayOptions {
   token?: TokenSymbol;
   /** Auto-select token based on balance (default: false) */
   autoSelect?: boolean;
+  /** Chain to pay on (base or polygon, default: base) */
+  chain?: 'base' | 'polygon';
 }
 
 // x402 constants
@@ -154,10 +156,14 @@ export class MoltsPayClient {
 
     // Step 1: Make initial request without payment
     console.log(`[MoltsPay] Requesting service: ${service}`);
+    const requestBody: any = { service, params };
+    if (options.chain) {
+      requestBody.chain = options.chain;
+    }
     const initialRes = await fetch(`${serverUrl}/execute`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ service, params }),
+      body: JSON.stringify(requestBody),
     });
 
     // If not 402, check for success or error
@@ -195,13 +201,54 @@ export class MoltsPayClient {
       throw new Error('Invalid x-payment-required header');
     }
 
-    // Find matching requirement for our chain
-    const chain = getChain(this.config.chain as ChainName);
+    // Helper to convert network ID to chain name
+    const networkToChainName = (network: string): string | null => {
+      const match = network.match(/^eip155:(\d+)$/);
+      if (!match) return null;
+      const chainId = parseInt(match[1]);
+      if (chainId === 8453) return 'base';
+      if (chainId === 137) return 'polygon';
+      if (chainId === 84532) return 'base_sepolia';
+      return null;
+    };
+
+    // Get server's accepted chains
+    const serverChains = requirements
+      .map(r => networkToChainName(r.network))
+      .filter((c): c is string => c !== null);
+
+    // Determine which chain to use
+    let chainName: ChainName;
+    const userSpecifiedChain = options.chain;
+
+    if (userSpecifiedChain) {
+      // User specified --chain, validate it's accepted by server
+      if (!serverChains.includes(userSpecifiedChain)) {
+        throw new Error(
+          `Server doesn't accept '${userSpecifiedChain}'.\n` +
+          `Server accepts: ${serverChains.join(', ')}`
+        );
+      }
+      chainName = userSpecifiedChain as ChainName;
+    } else {
+      // No --chain provided
+      if (serverChains.length === 1 && serverChains[0] === 'base') {
+        // Only default to base if server ONLY accepts base
+        chainName = 'base';
+      } else {
+        throw new Error(
+          `Server accepts: ${serverChains.join(', ')}\n` +
+          `Please specify: --chain base  or  --chain polygon`
+        );
+      }
+    }
+
+    const chain = getChain(chainName);
     const network = `eip155:${chain.chainId}`;
     const req = requirements.find(r => r.scheme === 'exact' && r.network === network);
-    
+
     if (!req) {
-      throw new Error(`No matching payment option for ${network}`);
+      throw new Error(`Failed to find payment requirement for ${chainName}`);
     }
 
     // Step 3: Check limits
@@ -275,13 +322,17 @@ export class MoltsPayClient {
 
     // Step 6: Retry with payment header
     console.log(`[MoltsPay] Sending request with payment...`);
+    const paidRequestBody: any = { service, params };
+    if (options.chain) {
+      paidRequestBody.chain = options.chain;
+    }
     const paidRes = await fetch(`${serverUrl}/execute`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         [PAYMENT_HEADER]: paymentHeader,
       },
-      body: JSON.stringify({ service, params }),
+      body: JSON.stringify(paidRequestBody),
     });
 
     const result = await paidRes.json() as any;
@@ -502,7 +553,7 @@ export class MoltsPayClient {
   }
 
   /**
-   * Get wallet balance (USDC, USDT, and native token)
+   * Get wallet balance (USDC, USDT, and native token) on default chain
    */
   async getBalance(): Promise<{ usdc: number; usdt: number; native: number }> {
     if (!this.wallet) {
@@ -531,5 +582,45 @@ export class MoltsPayClient {
       usdt: parseFloat(ethers.formatUnits(usdtBalance, chain.tokens.USDT.decimals)),
       native: parseFloat(ethers.formatEther(nativeBalance)),
     };
+  }
+
+  /**
+   * Get wallet balances on all supported chains (Base + Polygon)
+   */
+  async getAllBalances(): Promise<Record<string, { usdc: number; usdt: number; native: number }>> {
+    if (!this.wallet) {
+      throw new Error('Client not initialized');
+    }
+
+    const supportedChains: ChainName[] = ['base', 'polygon'];
+    const tokenAbi = ['function balanceOf(address) view returns (uint256)'];
+    const results: Record<string, { usdc: number; usdt: number; native: number }> = {};
+
+    // Query all chains in parallel
+    await Promise.all(
+      supportedChains.map(async (chainName) => {
+        try {
+          const chain = getChain(chainName);
+          const provider = new ethers.JsonRpcProvider(chain.rpc);
+
+          const [nativeBalance, usdcBalance, usdtBalance] = await Promise.all([
+            provider.getBalance(this.wallet!.address),
+            new ethers.Contract(chain.tokens.USDC.address, tokenAbi, provider).balanceOf(this.wallet!.address),
+            new ethers.Contract(chain.tokens.USDT.address, tokenAbi, provider).balanceOf(this.wallet!.address),
+          ]);
+
+          results[chainName] = {
+            usdc: parseFloat(ethers.formatUnits(usdcBalance, chain.tokens.USDC.decimals)),
+            usdt: parseFloat(ethers.formatUnits(usdtBalance, chain.tokens.USDT.decimals)),
+            native: parseFloat(ethers.formatEther(nativeBalance)),
+          };
+        } catch (err) {
+          // If chain query fails, show zeros
+          results[chainName] = { usdc: 0, usdt: 0, native: 0 };
+        }
+      })
+    );
+
+    return results;
   }
 }

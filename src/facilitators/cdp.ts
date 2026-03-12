@@ -104,10 +104,10 @@ export class CDPFacilitator extends BaseFacilitator {
     // Set endpoint
     this.endpoint = this.useMainnet ? CDP_MAINNET_URL : CDP_TESTNET_URL;
     
-    // Set supported networks
+    // Set supported networks (CDP supports Base + Polygon)
     this.supportedNetworks = this.useMainnet 
-      ? ['eip155:8453']  // Base mainnet only
-      : ['eip155:8453', 'eip155:84532'];  // Both mainnet and testnet via x402.org
+      ? ['eip155:8453', 'eip155:137']  // Base + Polygon mainnet
+      : ['eip155:8453', 'eip155:84532', 'eip155:137'];  // Base, Base Sepolia, Polygon
     
     // Warn if mainnet without credentials
     if (this.useMainnet && (!this.apiKeyId || !this.apiKeySecret)) {

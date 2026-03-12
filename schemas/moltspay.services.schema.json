@@ -23,13 +23,52 @@
         "wallet": {
           "type": "string",
           "pattern": "^0x[a-fA-F0-9]{40}$",
-          "description": "Ethereum address to receive payments"
+          "description": "Default Ethereum address to receive payments"
         },
         "chain": {
           "type": "string",
           "enum": ["base", "ethereum", "polygon"],
           "default": "base",
-          "description": "Blockchain network for payments"
+          "description": "Default blockchain network (use 'chains' for multi-chain)"
+        },
+        "chains": {
+          "type": "array",
+          "description": "Multi-chain configuration. When specified, provider accepts payments on multiple chains.",
+          "items": {
+            "type": "object",
+            "required": ["chain", "network"],
+            "properties": {
+              "chain": {
+                "type": "string",
+                "enum": ["base", "ethereum", "polygon"],
+                "description": "Chain name"
+              },
+              "network": {
+                "type": "string",
+                "pattern": "^eip155:\\d+$",
+                "description": "CAIP-2 network identifier",
+                "examples": ["eip155:8453", "eip155:137", "eip155:1"]
+              },
+              "wallet": {
+                "type": "string",
+                "pattern": "^0x[a-fA-F0-9]{40}$",
+                "description": "Optional per-chain wallet address. Falls back to provider.wallet if not specified."
+              },
+              "tokens": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": ["USDC", "USDT"]
+                },
+                "description": "Tokens accepted on this chain",
+                "examples": [["USDC", "USDT"]]
+              }
+            }
+          },
+          "examples": [[
+            {"chain": "base", "network": "eip155:8453", "tokens": ["USDC", "USDT"]},
+            {"chain": "polygon", "network": "eip155:137", "tokens": ["USDC"]}
+          ]]
         }
       }
     },
@@ -137,6 +176,23 @@
           "price": 0.99,
           "currency": "USDC",
           "acceptedCurrencies": ["USDC", "USDT"]
+        }
+      ]
+    },
+    {
+      "provider": {
+        "name": "Multi-Chain Service",
+        "wallet": "0xDefaultWallet...",
+        "chains": [
+          {"chain": "base", "network": "eip155:8453", "tokens": ["USDC", "USDT"]},
+          {"chain": "polygon", "network": "eip155:137", "wallet": "0xPolygonWallet...", "tokens": ["USDC"]}
+        ]
+      },
+      "services": [
+        {
+          "id": "my-service",
+          "price": 1.00,
+          "currency": "USDC"
         }
       ]
     }

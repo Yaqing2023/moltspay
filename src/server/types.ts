@@ -37,12 +37,21 @@ export interface OutputField {
   description?: string;
 }
 
+// Chain configuration for multi-chain support
+export interface ChainConfig {
+  chain: string;
+  network: string;
+  wallet?: string;  // Optional per-chain wallet, falls back to provider.wallet
+  tokens?: TokenSymbol[];
+}
+
 // Provider config from moltspay.services.json
 export interface ProviderConfig {
   name: string;
   description?: string;
   wallet: string;
-  chain: string;
+  chain?: string;  // Single chain (backward compat)
+  chains?: ChainConfig[];  // Multi-chain support
 }
 
 // Full services.json structure

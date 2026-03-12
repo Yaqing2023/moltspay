@@ -172,30 +172,33 @@ program
 
     const config = client.getConfig();
     
-    let balance = { usdc: 0, usdt: 0, native: 0 };
+    // Get balances on all supported chains
+    let allBalances: Record<string, { usdc: number; usdt: number; native: number }> = {};
     try {
-      balance = await client.getBalance();
+      allBalances = await client.getAllBalances();
     } catch (err: any) {
-      console.error('Warning: Could not fetch balance:', err.message);
+      console.error('Warning: Could not fetch balances:', err.message);
     }
 
     if (options.json) {
       console.log(JSON.stringify({
         address: client.address,
-        chain: config.chain,
-        balance,
+        balances: allBalances,
         limits: config.limits,
       }, null, 2));
     } else {
-      console.log('\n📊 MoltsPay Status\n');
-      console.log(`   Wallet: ${client.address}`);
-      console.log(`   Chain: ${config.chain}`);
-      console.log(`   Balance: ${balance.usdc.toFixed(2)} USDC | ${balance.usdt.toFixed(2)} USDT`);
-      console.log(`   Native: ${balance.native.toFixed(6)} ETH`);
+      console.log('\n📊 MoltsPay Wallet Status\n');
+      console.log(`   Address: ${client.address}`);
       console.log('');
-      console.log('   Limits:');
-      console.log(`     Max per tx: $${config.limits.maxPerTx}`);
-      console.log(`     Max per day: $${config.limits.maxPerDay}`);
+      console.log('   Balances:');
+      for (const [chainName, balance] of Object.entries(allBalances)) {
+        const chainLabel = chainName.charAt(0).toUpperCase() + chainName.slice(1);
+        console.log(`     ${chainLabel.padEnd(10)} ${balance.usdc.toFixed(2)} USDC | ${balance.usdt.toFixed(2)} USDT`);
+      }
+      console.log('');
+      console.log('   Spending Limits:');
+      console.log(`     Per Transaction: $${config.limits.maxPerTx}`);
+      console.log(`     Daily:           $${config.limits.maxPerDay}`);
       console.log('');
     }
   });
@@ -543,6 +546,7 @@ program
  *   File: ./image.jpg or /path/to/image.jpg -> sends as image_base64
  * 
  * --token specifies which stablecoin to use (USDC or USDT)
+ * --chain specifies which chain to pay on (base or polygon, default: base)
  */
 program
   .command('pay <server> <service> [params]')
@@ -550,6 +554,7 @@ program
   .option('--prompt <text>', 'Prompt for the service')
   .option('--image <path>', 'Image URL or local file path')
   .option('--token <token>', 'Token to pay with (USDC or USDT)', 'USDC')
+  .option('--chain <chain>', 'Chain to pay on (base or polygon). Required if server accepts multiple chains.')
   .option('--json', 'Output raw JSON only')
   .action(async (server, service, paramsJson, options) => {
     const client = new MoltsPayClient();
@@ -600,6 +605,13 @@ program
       process.exit(1);
     }
 
+    // Validate chain option (if specified)
+    const chain = options.chain?.toLowerCase() as 'base' | 'polygon' | undefined;
+    if (chain && !['base', 'polygon'].includes(chain)) {
+      console.error(`❌ Unknown chain: ${chain}. Supported: base, polygon`);
+      process.exit(1);
+    }
+
     const imageDisplay = params.image_url || (params.image_base64 ? `[local file: ${options.image}]` : null);
     const token = (options.token || 'USDC').toUpperCase();
 
@@ -623,13 +635,17 @@ program
       console.log(`   Service: ${service}`);
       console.log(`   Prompt: ${params.prompt}`);
       if (imageDisplay) console.log(`   Image: ${imageDisplay}`);
+      console.log(`   Chain: ${chain || '(auto)'}`);  // Will be determined by server
       console.log(`   Token: ${token}`);
       console.log(`   Wallet: ${client.address}`);
       console.log('');
     }
 
     try {
-      const result = await client.pay(server, service, params, { token: token as 'USDC' | 'USDT' });
+      const result = await client.pay(server, service, params, { 
+        token: token as 'USDC' | 'USDT',
+        chain
+      });
       
       if (options.json) {
         console.log(JSON.stringify(result));

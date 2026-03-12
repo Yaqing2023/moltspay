@@ -49,6 +49,17 @@ const TOKEN_ADDRESSES: Record<string, Record<string, string>> = {
     USDC: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
     USDT: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', // Same as USDC on testnet
   },
+  'eip155:137': {
+    USDC: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
+    USDT: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F',
+  },
+};
+
+// Chain name to network ID mapping
+const CHAIN_TO_NETWORK: Record<string, string> = {
+  'base': 'eip155:8453',
+  'base_sepolia': 'eip155:84532',
+  'polygon': 'eip155:137',
 };
 
 // EIP-712 domain info for tokens
@@ -146,12 +157,21 @@ export class MoltsPayServer {
 
     // Get primary facilitator for logging
     const primaryFacilitator = this.registry.get(facilitatorConfig.primary);
-    const networkName = this.useMainnet ? 'Base mainnet' : 'Base Sepolia (testnet)';
     
     console.log(`[MoltsPay] Loaded ${this.manifest.services.length} services from ${servicesPath}`);
     console.log(`[MoltsPay] Provider: ${this.manifest.provider.name}`);
     console.log(`[MoltsPay] Receive wallet: ${this.manifest.provider.wallet}`);
-    console.log(`[MoltsPay] Network: ${this.networkId} (${networkName})`);
+    
+    // Log configured chains
+    const chains = this.manifest.provider.chains;
+    if (chains && chains.length > 0) {
+      const chainNames = chains.map(c => c.chain || c.network).join(', ');
+      console.log(`[MoltsPay] Chains: ${chainNames} (multi-chain enabled)`);
+    } else {
+      const networkName = this.useMainnet ? 'Base mainnet' : 'Base Sepolia (testnet)';
+      console.log(`[MoltsPay] Network: ${this.networkId} (${networkName})`);
+    }
+    
     console.log(`[MoltsPay] Facilitator: ${primaryFacilitator.displayName} (${facilitatorConfig.strategy || 'failover'})`);
     console.log(`[MoltsPay] Protocol: x402 (gasless for both client AND server)`);
   }
@@ -166,6 +186,49 @@ export class MoltsPayServer {
     }
     this.skills.set(serviceId, { id: serviceId, config, handler });
     return this;
+  }
+
+  /**
+   * Get all configured chains for this provider
+   * Returns array of { network, wallet, tokens } for each chain
+   */
+  private getProviderChains(): Array<{ network: string; wallet: string; tokens: string[] }> {
+    const provider = this.manifest.provider;
+    
+    // If chains array is defined, use it
+    if (provider.chains && provider.chains.length > 0) {
+      return provider.chains.map(c => ({
+        network: c.network || CHAIN_TO_NETWORK[c.chain] || 'eip155:8453',
+        wallet: c.wallet || provider.wallet,
+        tokens: c.tokens || ['USDC'],
+      }));
+    }
+    
+    // Fallback to single chain (backward compat)
+    const chain = provider.chain || 'base';
+    const network = CHAIN_TO_NETWORK[chain] || this.networkId;
+    return [{
+      network,
+      wallet: provider.wallet,
+      tokens: ['USDC'],
+    }];
+  }
+
+  /**
+   * Get wallet address for a specific network
+   */
+  private getWalletForNetwork(network: string): string {
+    const chains = this.getProviderChains();
+    const chain = chains.find(c => c.network === network);
+    return chain?.wallet || this.manifest.provider.wallet;
+  }
+
+  /**
+   * Check if a network is accepted by this provider
+   */
+  private isNetworkAccepted(network: string): boolean {
+    const chains = this.getProviderChains();
+    return chains.some(c => c.network === network);
   }
 
   /**
@@ -392,8 +455,12 @@ export class MoltsPayServer {
       });
     }
 
-    // Build requirements for facilitator using the detected token
-    const requirements = this.buildPaymentRequirements(skill.config, paymentToken);
+    // Get payment network and corresponding wallet
+    const paymentNetwork = payment.accepted?.network || payment.network || this.networkId;
+    const paymentWallet = this.getWalletForNetwork(paymentNetwork);
+
+    // Build requirements for facilitator using the detected token and network
+    const requirements = this.buildPaymentRequirements(skill.config, paymentNetwork, paymentWallet, paymentToken);
 
     // Verify payment with facilitator (via registry)
     console.log(`[MoltsPay] Verifying payment...`);
@@ -460,18 +527,36 @@ export class MoltsPayServer {
 
   /**
    * Return 402 with x402 payment requirements (v2 format)
-   * Includes requirements for all accepted currencies
+   * Includes requirements for all chains and all accepted currencies
    */
   private sendPaymentRequired(config: ServiceConfig, res: ServerResponse): void {
     const acceptedTokens = getAcceptedCurrencies(config);
+    const providerChains = this.getProviderChains();
     
-    // Build requirements for each accepted token
-    const accepts = acceptedTokens.map(token => this.buildPaymentRequirements(config, token));
+    // Build requirements for each chain x token combination
+    const accepts: X402PaymentRequirements[] = [];
+    for (const chainConfig of providerChains) {
+      for (const token of acceptedTokens) {
+        // Only add if this chain supports this token
+        if (chainConfig.tokens.includes(token)) {
+          accepts.push(this.buildPaymentRequirements(config, chainConfig.network, chainConfig.wallet, token));
+        }
+      }
+    }
+
+    // Get list of accepted chains for response
+    const acceptedChains = providerChains.map(c => {
+      // Convert network ID to chain name for readability
+      if (c.network === 'eip155:8453') return 'base';
+      if (c.network === 'eip155:137') return 'polygon';
+      return c.network;
+    });
 
     const paymentRequired = {
       x402Version: X402_VERSION,
       accepts,
       acceptedCurrencies: acceptedTokens,
+      acceptedChains,
       resource: {
         url: `/execute?service=${config.id}`,
         description: `${config.name} - $${config.price} ${config.currency}`,
@@ -489,6 +574,7 @@ export class MoltsPayServer {
       error: 'Payment required',
       message: `Service requires $${config.price} ${config.currency}`,
       acceptedCurrencies: acceptedTokens,
+      acceptedChains,
       x402: paymentRequired,
     }, null, 2));
   }
@@ -505,14 +591,16 @@ export class MoltsPayServer {
     }
 
     const scheme = payment.accepted?.scheme || payment.scheme;
-    const network = payment.accepted?.network || payment.network;
+    const network = payment.accepted?.network || payment.network || this.networkId;
 
     if (scheme !== 'exact') {
       return { valid: false, error: `Unsupported scheme: ${scheme}` };
     }
 
-    if (network !== this.networkId) {
-      return { valid: false, error: `Network mismatch: expected ${this.networkId}, got ${network}` };
+    // Check if payment network is one of our accepted networks
+    if (!this.isNetworkAccepted(network)) {
+      const acceptedChains = this.getProviderChains().map(c => c.network).join(', ');
+      return { valid: false, error: `Network not accepted: ${network}. Accepted: ${acceptedChains}` };
     }
 
     return { valid: true };
@@ -520,25 +608,32 @@ export class MoltsPayServer {
 
   /**
    * Build payment requirements for facilitator
-   * Returns requirements for the primary currency (USDC by default)
-   * Server accepts any of the acceptedCurrencies
+   * Now supports multi-chain: takes network and wallet as parameters
    */
-  private buildPaymentRequirements(config: ServiceConfig, token?: string): X402PaymentRequirements {
+  private buildPaymentRequirements(
+    config: ServiceConfig, 
+    network?: string, 
+    wallet?: string,
+    token?: string
+  ): X402PaymentRequirements {
     const amountInUnits = Math.floor(config.price * 1e6).toString();
     const acceptedTokens = getAcceptedCurrencies(config);
     
-    // Use specified token or default to first accepted
+    // Use specified values or defaults
+    const selectedNetwork = network || this.networkId;
+    const selectedWallet = wallet || this.manifest.provider.wallet;
     const selectedToken = token && acceptedTokens.includes(token) ? token : acceptedTokens[0];
-    const tokenAddresses = TOKEN_ADDRESSES[this.networkId] || {};
+    
+    const tokenAddresses = TOKEN_ADDRESSES[selectedNetwork] || {};
     const tokenAddress = tokenAddresses[selectedToken];
     const tokenDomain = TOKEN_DOMAINS[selectedToken] || TOKEN_DOMAINS.USDC;
 
     return {
       scheme: 'exact',
-      network: this.networkId,
+      network: selectedNetwork,
       asset: tokenAddress,
       amount: amountInUnits,
-      payTo: this.manifest.provider.wallet,
+      payTo: selectedWallet,
       maxTimeoutSeconds: 300,
       extra: tokenDomain,
     };
@@ -546,14 +641,18 @@ export class MoltsPayServer {
 
   /**
    * Detect which token is being used in the payment
+   * Checks across all supported networks
    */
   private detectPaymentToken(payment: X402PaymentPayload): string | undefined {
     const asset = payment.accepted?.asset || (payment.payload as any)?.asset;
     if (!asset) return undefined;
 
-    const tokenAddresses = TOKEN_ADDRESSES[this.networkId] || {};
+    // Get payment network to check correct token addresses
+    const paymentNetwork = payment.accepted?.network || payment.network || this.networkId;
+    const tokenAddresses = TOKEN_ADDRESSES[paymentNetwork] || {};
+    
     for (const [symbol, address] of Object.entries(tokenAddresses)) {
-      if (address.toLowerCase() === asset.toLowerCase()) {
+      if (address && (address as string).toLowerCase() === asset.toLowerCase()) {
         return symbol;
       }
     }
@@ -653,6 +752,12 @@ export class MoltsPayServer {
     if (isNaN(amountNum) || amountNum <= 0) {
       return this.sendJson(res, 400, { error: 'Invalid amount' });
     }
+    
+    // Validate chain if provided
+    const supportedChains = ['base', 'polygon', 'base_sepolia'];
+    if (chain && !supportedChains.includes(chain)) {
+      return this.sendJson(res, 400, { error: `Unsupported chain: ${chain}. Supported: ${supportedChains.join(', ')}` });
+    }
 
     // Build a synthetic service config for payment
     const proxyConfig: ServiceConfig = {
@@ -666,12 +771,12 @@ export class MoltsPayServer {
       output: {},
     };
 
-    // Build payment requirements with the provided wallet
-    const requirements = this.buildProxyPaymentRequirements(proxyConfig, wallet);
+    // Build payment requirements with the provided wallet and chain
+    const requirements = this.buildProxyPaymentRequirements(proxyConfig, wallet, currency, chain);
 
     // If no payment header, return 402 with payment requirements
     if (!paymentHeader) {
-      return this.sendProxyPaymentRequired(proxyConfig, wallet, memo, res);
+      return this.sendProxyPaymentRequired(proxyConfig, wallet, memo, chain, res);
     }
 
     // Parse payment payload
@@ -695,8 +800,10 @@ export class MoltsPayServer {
       return this.sendJson(res, 402, { error: `Unsupported scheme: ${scheme}` });
     }
 
-    if (network !== this.networkId) {
-      return this.sendJson(res, 402, { error: `Network mismatch: expected ${this.networkId}, got ${network}` });
+    // Validate network matches requested chain (or default to provider's network)
+    const expectedNetwork = chain ? (CHAIN_TO_NETWORK[chain] || this.networkId) : this.networkId;
+    if (network !== expectedNetwork) {
+      return this.sendJson(res, 402, { error: `Network mismatch: expected ${expectedNetwork}, got ${network}` });
     }
 
     // Verify payment with facilitator
@@ -818,19 +925,22 @@ export class MoltsPayServer {
   /**
    * Build payment requirements for proxy endpoint (uses provided wallet)
    */
-  private buildProxyPaymentRequirements(config: ServiceConfig, wallet: string, token?: string): X402PaymentRequirements {
+  private buildProxyPaymentRequirements(config: ServiceConfig, wallet: string, token?: string, chain?: string): X402PaymentRequirements {
     const amountInUnits = Math.floor(config.price * 1e6).toString();
     const acceptedTokens = getAcceptedCurrencies(config);
     
+    // Determine network from chain parameter or use default
+    const networkId = chain ? (CHAIN_TO_NETWORK[chain] || this.networkId) : this.networkId;
+    
     // Use specified token or default to first accepted
     const selectedToken = token && acceptedTokens.includes(token) ? token : acceptedTokens[0];
-    const tokenAddresses = TOKEN_ADDRESSES[this.networkId] || {};
+    const tokenAddresses = TOKEN_ADDRESSES[networkId] || TOKEN_ADDRESSES[this.networkId] || {};
     const tokenAddress = tokenAddresses[selectedToken];
     const tokenDomain = TOKEN_DOMAINS[selectedToken] || TOKEN_DOMAINS.USDC;
 
     return {
       scheme: 'exact',
-      network: this.networkId,
+      network: networkId,
       asset: tokenAddress,
       amount: amountInUnits,
       payTo: wallet, // Use provided wallet, not manifest
@@ -846,9 +956,10 @@ export class MoltsPayServer {
     config: ServiceConfig, 
     wallet: string,
     memo: string | undefined,
+    chain: string | undefined,
     res: ServerResponse
   ): void {
-    const requirements = this.buildProxyPaymentRequirements(config, wallet);
+    const requirements = this.buildProxyPaymentRequirements(config, wallet, config.currency, chain);
 
     const paymentRequired = {
       x402Version: X402_VERSION,
