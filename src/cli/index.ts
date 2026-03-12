@@ -6,6 +6,7 @@
  * Commands:
  *   npx moltspay init              - Create wallet, set limits
  *   npx moltspay config            - Update settings
+ *   npx moltspay fund <amount>     - Fund wallet via Coinbase (US only)
  *   npx moltspay status            - Show wallet and balance
  *   npx moltspay services <url>    - List services from provider
  *   npx moltspay start <manifest>  - Start server from services.json
@@ -18,6 +19,7 @@ import { existsSync, writeFileSync, readFileSync, unlinkSync, mkdirSync } from '
 import { spawn } from 'child_process';
 import { MoltsPayClient } from '../client/index.js';
 import { MoltsPayServer } from '../server/index.js';
+import { printQRCode } from '../onramp/index.js';
 import * as readline from 'readline';
 
 const program = new Command();
@@ -148,6 +150,53 @@ program
         console.log(`✅ Updated max per day to $${options.maxPerDay}`);
       }
     }
+  });
+
+/**
+ * npx moltspay fund <amount>
+ * 
+ * Fund wallet with USDC via Coinbase Pay
+ * US residents only, debit card or Apple Pay
+ */
+program
+  .command('fund <amount>')
+  .description('Fund wallet with USDC via Coinbase (US debit card / Apple Pay)')
+  .option('--chain <chain>', 'Chain to fund (base or polygon)', 'base')
+  .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
+  .action(async (amountStr, options) => {
+    const client = new MoltsPayClient({ configDir: options.configDir });
+
+    if (!client.isInitialized) {
+      console.log('❌ Not initialized. Run: npx moltspay init');
+      return;
+    }
+
+    const amount = parseFloat(amountStr);
+    if (isNaN(amount) || amount < 5) {
+      console.log('❌ Minimum $5.');
+      return;
+    }
+
+    const chain = (options.chain?.toLowerCase() || 'base') as 'base' | 'polygon';
+    if (!['base', 'polygon'].includes(chain)) {
+      console.log('❌ Invalid chain. Use: base or polygon');
+      return;
+    }
+
+    const { generateOnrampUrl } = await import('../onramp/index.js');
+    const url = generateOnrampUrl({
+      destinationAddress: client.address!,
+      amount,
+      chain,
+    });
+
+    console.log('\n💳 Fund your agent wallet\n');
+    console.log(`   Wallet: ${client.address}`);
+    console.log(`   Chain: ${chain}`);
+    console.log(`   Amount: $${amount.toFixed(2)}\n`);
+    console.log('   Scan to pay (US debit card / Apple Pay):\n');
+    await printQRCode(url);
+    console.log(`\n   ${url}\n`);
   });
 
 /**
