@@ -189,12 +189,26 @@ program
     console.log(`   Amount: $${amount.toFixed(2)}\n`);
 
     try {
-      const { generateOnrampUrl } = await import('../onramp/index.js');
-      const url = await generateOnrampUrl({
-        destinationAddress: client.address!,
-        amount,
-        chain,
+      // Call server API to generate onramp URL (no local CDP keys needed)
+      const ONRAMP_API = process.env.MOLTSPAY_ONRAMP_API || 'https://moltspay.com/api/v1/onramp';
+      
+      const response = await fetch(`${ONRAMP_API}/create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          address: client.address,
+          amount,
+          chain,
+        }),
       });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Server error' })) as { error?: string };
+        throw new Error(errorData.error || `Server returned ${response.status}`);
+      }
+
+      const result = await response.json() as { url: string };
+      const { url } = result;
 
       console.log('   Scan to pay (US debit card / Apple Pay):\n');
       await printQRCode(url);
@@ -260,13 +274,14 @@ program
 /**
  * npx moltspay list
  * 
- * List transactions for the agent wallet
+ * List transactions for the agent wallet using Blockscout APIs (free, no API key needed)
  */
 program
   .command('list')
   .description('List recent transactions')
-  .option('--days <n>', 'Number of days to look back', '1')
-  .option('--chain <chain>', 'Chain to query (base or polygon)', 'base')
+  .option('--days <n>', 'Number of days to look back', '7')
+  .option('--chain <chain>', 'Chain to query (base, polygon, or all)', 'all')
+  .option('--limit <n>', 'Max transactions to show', '20')
   .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
   .action(async (options) => {
     const client = new MoltsPayClient({ configDir: options.configDir });
@@ -276,110 +291,108 @@ program
       return;
     }
 
-    const days = parseInt(options.days) || 1;
-    const chain = options.chain?.toLowerCase() || 'base';
+    const days = parseInt(options.days) || 7;
+    const limit = parseInt(options.limit) || 20;
+    const chain = options.chain?.toLowerCase() || 'all';
 
-    if (!['base', 'polygon'].includes(chain)) {
-      console.log('❌ Invalid chain. Use: base or polygon');
+    if (!['base', 'polygon', 'all'].includes(chain)) {
+      console.log('❌ Invalid chain. Use: base, polygon, or all');
       return;
     }
 
-    console.log(`\n📜 Transactions (last ${days} day${days > 1 ? 's' : ''}) - ${chain.toUpperCase()}\n`);
+    const wallet = client.address!;
+    const cutoffTime = Date.now() - (days * 24 * 60 * 60 * 1000);
 
-    try {
-      const { createPublicClient, http, parseAbi } = await import('viem');
-      const chains = await import('viem/chains');
+    // Blockscout API configs (free, no API key needed)
+    const explorers: Record<string, { api: string; usdc: string; name: string }> = {
+      base: {
+        api: 'https://base.blockscout.com/api/v2',
+        usdc: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        name: 'Base',
+      },
+      polygon: {
+        api: 'https://polygon.blockscout.com/api/v2',
+        usdc: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
+        name: 'Polygon',
+      },
+    };
+
+    const chainsToQuery = chain === 'all' ? ['base', 'polygon'] : [chain];
+
+    console.log(`\n📜 Transactions (last ${days} day${days > 1 ? 's' : ''})\n`);
+
+    interface TokenTx {
+      chain: string;
+      timestamp: number;
+      type: string;
+      amount: number;
+      other: string;
+      hash: string;
+    }
+
+    let allTxns: TokenTx[] = [];
+
+    for (const c of chainsToQuery) {
+      const explorer = explorers[c];
       
-      const chainConfig = chain === 'base' ? chains.base : chains.polygon;
-      const rpcUrl = chain === 'base' ? 'https://mainnet.base.org' : 'https://polygon-rpc.com';
-      const USDC = chain === 'base' 
-        ? '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
-        : '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359';
+      try {
+        const url = `${explorer.api}/addresses/${wallet}/token-transfers?type=ERC-20&token=${explorer.usdc}`;
+        const response = await fetch(url);
+        const data = await response.json() as { 
+          items: Array<{
+            timestamp: string;
+            from: { hash: string };
+            to: { hash: string };
+            total: { value: string; decimals: string };
+            transaction_hash: string;
+          }>;
+        };
 
-      const publicClient = createPublicClient({
-        chain: chainConfig,
-        transport: http(rpcUrl),
-      });
+        if (data.items && Array.isArray(data.items)) {
+          for (const tx of data.items) {
+            const timestamp = new Date(tx.timestamp).getTime();
+            if (timestamp < cutoffTime) continue;
 
-      const currentBlock = await publicClient.getBlockNumber();
-      const blocksPerDay = chain === 'base' ? 43200n : 43200n; // ~2s per block
-      const fromBlock = currentBlock - (blocksPerDay * BigInt(days));
-
-      const transferEvent = parseAbi(['event Transfer(address indexed from, address indexed to, uint256 value)'])[0];
-      const wallet = client.address!.toLowerCase();
-
-      // Query in parallel chunks
-      const chunkSize = 5000n;
-      const totalChunks = Math.ceil(Number(currentBlock - fromBlock) / Number(chunkSize));
-      let allTxns: Array<{ block: bigint; type: string; amount: number; other: string; hash: string }> = [];
-
-      process.stdout.write(`   Scanning ${totalChunks} chunks...`);
-
-      const chunks: Array<{ start: bigint; end: bigint }> = [];
-      for (let start = fromBlock; start < currentBlock; start += chunkSize) {
-        const end = start + chunkSize > currentBlock ? currentBlock : start + chunkSize;
-        chunks.push({ start, end });
-      }
-
-      // Query in parallel (max 5 concurrent)
-      const batchSize = 5;
-      for (let i = 0; i < chunks.length; i += batchSize) {
-        const batch = chunks.slice(i, i + batchSize);
-        const promises = batch.flatMap(({ start, end }) => [
-          // Incoming
-          publicClient.getLogs({
-            address: USDC as `0x${string}`,
-            event: transferEvent,
-            args: { to: client.address as `0x${string}` },
-            fromBlock: start,
-            toBlock: end,
-          }).catch(() => []),
-          // Outgoing
-          publicClient.getLogs({
-            address: USDC as `0x${string}`,
-            event: transferEvent,
-            args: { from: client.address as `0x${string}` },
-            fromBlock: start,
-            toBlock: end,
-          }).catch(() => []),
-        ]);
-
-        const results = await Promise.all(promises);
-        
-        for (let j = 0; j < results.length; j++) {
-          const logs = results[j];
-          const isIncoming = j % 2 === 0;
-          for (const log of logs) {
+            const isIncoming = tx.to.hash.toLowerCase() === wallet.toLowerCase();
+            const decimals = parseInt(tx.total.decimals) || 6;
             allTxns.push({
-              block: log.blockNumber,
+              chain: c,
+              timestamp,
               type: isIncoming ? 'IN' : 'OUT',
-              amount: Number(log.args.value) / 1e6,
-              other: (isIncoming ? log.args.from : log.args.to) as string,
-              hash: log.transactionHash,
+              amount: parseInt(tx.total.value) / Math.pow(10, decimals),
+              other: isIncoming ? tx.from.hash : tx.to.hash,
+              hash: tx.transaction_hash,
             });
           }
         }
-        process.stdout.write('.');
+      } catch (error) {
+        console.log(`   ⚠️  ${explorer.name}: API error`);
       }
-      console.log(' done\n');
+    }
 
-      // Sort by block descending
-      allTxns.sort((a, b) => Number(b.block - a.block));
+    // Sort by timestamp descending
+    allTxns.sort((a, b) => b.timestamp - a.timestamp);
 
-      if (allTxns.length === 0) {
-        console.log('   (no transactions found)\n');
-      } else {
-        for (const tx of allTxns) {
-          const sign = tx.type === 'IN' ? '+' : '-';
-          const color = tx.type === 'IN' ? '\x1b[32m' : '\x1b[31m';
-          const reset = '\x1b[0m';
-          console.log(`   ${color}${sign}${tx.amount.toFixed(2)} USDC${reset} | ${tx.type === 'IN' ? 'from' : 'to'} ${tx.other.slice(0, 10)}...${tx.other.slice(-6)}`);
-          console.log(`      tx: ${tx.hash.slice(0, 20)}...`);
-        }
-        console.log(`\n   Total: ${allTxns.length} transaction(s)\n`);
+    // Apply limit
+    allTxns = allTxns.slice(0, limit);
+
+    if (allTxns.length === 0) {
+      console.log('   (no transactions found)\n');
+    } else {
+      for (const tx of allTxns) {
+        const sign = tx.type === 'IN' ? '+' : '-';
+        const color = tx.type === 'IN' ? '\x1b[32m' : '\x1b[31m';
+        const reset = '\x1b[0m';
+        const date = new Date(tx.timestamp).toISOString().slice(5, 16).replace('T', ' ');
+        const chainTag = chain === 'all' ? `[${tx.chain.toUpperCase()}] ` : '';
+        
+        console.log(`   ${color}${sign}${tx.amount.toFixed(2)} USDC${reset} | ${chainTag}${tx.type === 'IN' ? 'from' : 'to'} ${tx.other.slice(0, 10)}...${tx.other.slice(-4)} | ${date}`);
       }
-    } catch (error) {
-      console.log(`❌ Error: ${(error as Error).message}`);
+      
+      // Summary
+      const inTotal = allTxns.filter(t => t.type === 'IN').reduce((s, t) => s + t.amount, 0);
+      const outTotal = allTxns.filter(t => t.type === 'OUT').reduce((s, t) => s + t.amount, 0);
+      console.log(`\n   📊 ${allTxns.length} transaction(s) | \x1b[32m+$${inTotal.toFixed(2)}\x1b[0m in | \x1b[31m-$${outTotal.toFixed(2)}\x1b[0m out\n`);
     }
   });
 
