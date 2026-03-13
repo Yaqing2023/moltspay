@@ -258,6 +258,132 @@ program
   });
 
 /**
+ * npx moltspay list
+ * 
+ * List transactions for the agent wallet
+ */
+program
+  .command('list')
+  .description('List recent transactions')
+  .option('--days <n>', 'Number of days to look back', '1')
+  .option('--chain <chain>', 'Chain to query (base or polygon)', 'base')
+  .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
+  .action(async (options) => {
+    const client = new MoltsPayClient({ configDir: options.configDir });
+
+    if (!client.isInitialized) {
+      console.log('❌ Not initialized. Run: npx moltspay init');
+      return;
+    }
+
+    const days = parseInt(options.days) || 1;
+    const chain = options.chain?.toLowerCase() || 'base';
+
+    if (!['base', 'polygon'].includes(chain)) {
+      console.log('❌ Invalid chain. Use: base or polygon');
+      return;
+    }
+
+    console.log(`\n📜 Transactions (last ${days} day${days > 1 ? 's' : ''}) - ${chain.toUpperCase()}\n`);
+
+    try {
+      const { createPublicClient, http, parseAbi } = await import('viem');
+      const chains = await import('viem/chains');
+      
+      const chainConfig = chain === 'base' ? chains.base : chains.polygon;
+      const rpcUrl = chain === 'base' ? 'https://mainnet.base.org' : 'https://polygon-rpc.com';
+      const USDC = chain === 'base' 
+        ? '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
+        : '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359';
+
+      const publicClient = createPublicClient({
+        chain: chainConfig,
+        transport: http(rpcUrl),
+      });
+
+      const currentBlock = await publicClient.getBlockNumber();
+      const blocksPerDay = chain === 'base' ? 43200n : 43200n; // ~2s per block
+      const fromBlock = currentBlock - (blocksPerDay * BigInt(days));
+
+      const transferEvent = parseAbi(['event Transfer(address indexed from, address indexed to, uint256 value)'])[0];
+      const wallet = client.address!.toLowerCase();
+
+      // Query in parallel chunks
+      const chunkSize = 5000n;
+      const totalChunks = Math.ceil(Number(currentBlock - fromBlock) / Number(chunkSize));
+      let allTxns: Array<{ block: bigint; type: string; amount: number; other: string; hash: string }> = [];
+
+      process.stdout.write(`   Scanning ${totalChunks} chunks...`);
+
+      const chunks: Array<{ start: bigint; end: bigint }> = [];
+      for (let start = fromBlock; start < currentBlock; start += chunkSize) {
+        const end = start + chunkSize > currentBlock ? currentBlock : start + chunkSize;
+        chunks.push({ start, end });
+      }
+
+      // Query in parallel (max 5 concurrent)
+      const batchSize = 5;
+      for (let i = 0; i < chunks.length; i += batchSize) {
+        const batch = chunks.slice(i, i + batchSize);
+        const promises = batch.flatMap(({ start, end }) => [
+          // Incoming
+          publicClient.getLogs({
+            address: USDC as `0x${string}`,
+            event: transferEvent,
+            args: { to: client.address as `0x${string}` },
+            fromBlock: start,
+            toBlock: end,
+          }).catch(() => []),
+          // Outgoing
+          publicClient.getLogs({
+            address: USDC as `0x${string}`,
+            event: transferEvent,
+            args: { from: client.address as `0x${string}` },
+            fromBlock: start,
+            toBlock: end,
+          }).catch(() => []),
+        ]);
+
+        const results = await Promise.all(promises);
+        
+        for (let j = 0; j < results.length; j++) {
+          const logs = results[j];
+          const isIncoming = j % 2 === 0;
+          for (const log of logs) {
+            allTxns.push({
+              block: log.blockNumber,
+              type: isIncoming ? 'IN' : 'OUT',
+              amount: Number(log.args.value) / 1e6,
+              other: (isIncoming ? log.args.from : log.args.to) as string,
+              hash: log.transactionHash,
+            });
+          }
+        }
+        process.stdout.write('.');
+      }
+      console.log(' done\n');
+
+      // Sort by block descending
+      allTxns.sort((a, b) => Number(b.block - a.block));
+
+      if (allTxns.length === 0) {
+        console.log('   (no transactions found)\n');
+      } else {
+        for (const tx of allTxns) {
+          const sign = tx.type === 'IN' ? '+' : '-';
+          const color = tx.type === 'IN' ? '\x1b[32m' : '\x1b[31m';
+          const reset = '\x1b[0m';
+          console.log(`   ${color}${sign}${tx.amount.toFixed(2)} USDC${reset} | ${tx.type === 'IN' ? 'from' : 'to'} ${tx.other.slice(0, 10)}...${tx.other.slice(-6)}`);
+          console.log(`      tx: ${tx.hash.slice(0, 20)}...`);
+        }
+        console.log(`\n   Total: ${allTxns.length} transaction(s)\n`);
+      }
+    } catch (error) {
+      console.log(`❌ Error: ${(error as Error).message}`);
+    }
+  });
+
+/**
  * npx moltspay services <url>
  */
 program
