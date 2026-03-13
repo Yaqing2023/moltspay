@@ -183,20 +183,25 @@ program
       return;
     }
 
-    const { generateOnrampUrl } = await import('../onramp/index.js');
-    const url = generateOnrampUrl({
-      destinationAddress: client.address!,
-      amount,
-      chain,
-    });
-
     console.log('\n💳 Fund your agent wallet\n');
     console.log(`   Wallet: ${client.address}`);
     console.log(`   Chain: ${chain}`);
     console.log(`   Amount: $${amount.toFixed(2)}\n`);
-    console.log('   Scan to pay (US debit card / Apple Pay):\n');
-    await printQRCode(url);
-    console.log(`\n   ${url}\n`);
+
+    try {
+      const { generateOnrampUrl } = await import('../onramp/index.js');
+      const url = await generateOnrampUrl({
+        destinationAddress: client.address!,
+        amount,
+        chain,
+      });
+
+      console.log('   Scan to pay (US debit card / Apple Pay):\n');
+      await printQRCode(url);
+      console.log('\n   ⏱️  QR code expires in 5 minutes\n');
+    } catch (error) {
+      console.log(`❌ ${(error as Error).message}`);
+    }
   });
 
 /**
