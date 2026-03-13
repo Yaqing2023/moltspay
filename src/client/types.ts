@@ -42,19 +42,22 @@ export interface ServiceInfo {
   input: Record<string, any>;
   output: Record<string, any>;
   available: boolean;
+  provider?: ProviderInfo;  // For marketplace listings
 }
 
 // Provider info from server
 export interface ProviderInfo {
   name: string;
+  username?: string;
   description?: string;
   wallet: string;
-  chain: string;
+  chain?: string;
+  chains?: string[] | { chain: string }[];  // Multi-chain support
 }
 
 // Services response from server
 export interface ServicesResponse {
-  provider: ProviderInfo;
+  provider?: ProviderInfo;  // Optional for marketplace listings
   services: ServiceInfo[];
 }
 
