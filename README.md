@@ -78,8 +78,14 @@ npx moltspay init --chain base
 # Output: Wallet address 0xABC123...
 ```
 
-**2. Fund your wallet:**
-Send USDC to your wallet address. No ETH needed!
+**2. Fund your wallet (US users):**
+```bash
+npx moltspay fund 50
+# Opens Coinbase Pay - use debit card or Apple Pay
+# USDC arrives in ~2 minutes. No ETH needed!
+```
+
+Or send USDC directly to your wallet address from any exchange.
 
 **3. Use paid services:**
 ```bash
@@ -207,6 +213,7 @@ Server does NOT need a private key - the x402 facilitator handles settlement.
 # === Client Commands ===
 npx moltspay init                    # Create wallet
 npx moltspay init --chain polygon    # Create wallet for Polygon
+npx moltspay fund <amount>           # Fund wallet via Coinbase (US)
 npx moltspay status                  # Check balance
 npx moltspay config                  # Update limits
 npx moltspay services <url>          # List provider's services
@@ -306,9 +313,18 @@ npx moltspay pay https://juai8.com/zen7 text-to-video --chain polygon --prompt "
 - [moltspay-python](https://github.com/Yaqing2023/moltspay-python) - Python SDK with LangChain integration
 - [x402 Protocol](https://www.x402.org/) - The HTTP payment standard
 
+## Community & Support
+
+Join our Discord for help, feedback, and updates:
+
+👉 **[MoltsPay Discord](https://discord.gg/QwCJgVBxVK)** 
+
+Or visit the [#moltspay-support](https://discord.com/channels/1472602423267819734/1480968496346304522) channel directly.
+
 ## Links
 
 - **Website:** https://moltspay.com
+- **Discord:** https://discord.gg/QwCJgVBxVK
 - **npm:** https://www.npmjs.com/package/moltspay
 - **PyPI:** https://pypi.org/project/moltspay/
 - **x402 Protocol:** https://www.x402.org/
