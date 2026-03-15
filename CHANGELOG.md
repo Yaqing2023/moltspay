@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Testnet Faucet** - `npx moltspay faucet` to get free testnet USDC (Base Sepolia)
+  - 1 USDC per request, once per 24 hours per address
+  - Works with any existing wallet (no special setup needed)
+
+### Fixed
+- **EIP-712 Domain Name** - Fixed signature verification failures on Base Sepolia
+  - Server now returns correct token domain per network in `extra` field
+  - Base mainnet USDC uses domain name `"USD Coin"`
+  - Base Sepolia USDC uses domain name `"USDC"` (different contract!)
+  - Client now uses server's `extra` field for signing instead of hardcoded values
+- Added `base_sepolia` to supported chains in CLI
+
 ## [0.9.5] - 2026-03-04
 
 ### Added

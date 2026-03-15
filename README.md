@@ -96,6 +96,22 @@ npx moltspay pay https://server.com text-to-video --prompt "a cat dancing"
 npx moltspay pay https://server.com text-to-video --chain polygon --prompt "a cat dancing"
 ```
 
+### Testnet Quick Start
+
+Want to test before using real money? Use our testnet faucet:
+
+```bash
+# 1. Create wallet (if you don't have one)
+npx moltspay init
+
+# 2. Get free testnet USDC (1 USDC per request, once per 24h)
+npx moltspay faucet
+
+# 3. Test payments on Base Sepolia
+npx moltspay pay https://moltspay.com/a/yaqing text-to-video \
+  --chain base_sepolia --prompt "a robot dancing"
+```
+
 ## How x402 Protocol Works
 
 ```
@@ -228,40 +244,37 @@ The server automatically detects which chain to verify payments on based on the 
 
 **No `USE_MAINNET` env var needed!** Just configure your accepted chains in the manifest.
 
-### Testnet Setup
+### Testnet Setup (Providers)
 
-For testing, configure `base_sepolia` in your chains array:
+To accept testnet payments, add `base_sepolia` to your chains array:
 
 ```json
 {
   "provider": {
     "wallet": "0x...",
-    "chains": [
-      { "chain": "base_sepolia", "network": "eip155:84532", "tokens": ["USDC"] }
-    ]
+    "chains": ["base", "base_sepolia"]
   }
 }
 ```
 
-Get testnet USDC from:
-- Circle Faucet: https://faucet.circle.com/
-- Base Sepolia Faucet: https://www.coinbase.com/faucets/base-ethereum-sepolia-faucet
+Clients can then pay using `--chain base_sepolia` and get free testnet USDC via `npx moltspay faucet`.
 
 ## CLI Reference
 
 ```bash
 # === Client Commands ===
 npx moltspay init                    # Create wallet
-npx moltspay init --chain polygon    # Create wallet for Polygon
 npx moltspay fund <amount>           # Fund wallet via Coinbase (US)
+npx moltspay faucet                  # Get free testnet USDC (Base Sepolia)
 npx moltspay status                  # Check balance
 npx moltspay config                  # Update limits
 npx moltspay services <url>          # List provider's services
 npx moltspay pay <url> <service>     # Pay and execute service
 
 # === Pay with Chain Selection ===
-npx moltspay pay <url> <service> --chain base     # Pay on Base (default)
-npx moltspay pay <url> <service> --chain polygon  # Pay on Polygon
+npx moltspay pay <url> <service> --chain base          # Pay on Base (default)
+npx moltspay pay <url> <service> --chain polygon       # Pay on Polygon
+npx moltspay pay <url> <service> --chain base_sepolia  # Pay on testnet
 
 # === Server Commands ===
 npx moltspay start <skill-dir>       # Start server
@@ -270,7 +283,7 @@ npx moltspay validate <path>         # Validate manifest
 
 # === Options ===
 --port <port>                        # Server port (default 3000)
---chain <chain>                      # Chain: base, polygon (for pay/init)
+--chain <chain>                      # Chain: base, polygon, base_sepolia
 --token <token>                      # Token: USDC, USDT
 --max-per-tx <amount>                # Spending limit per transaction
 --max-per-day <amount>               # Daily spending limit
