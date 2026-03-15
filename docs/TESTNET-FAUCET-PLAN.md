@@ -154,7 +154,6 @@ npx moltspay init --chain base_sepolia --name faucet
 
 1. **Circle Faucet**: https://faucet.circle.com/ (requires account)
 2. **Superbridge**: Bridge from Sepolia ETH
-3. **Base Sepolia Faucet**: https://www.coinbase.com/faucets/base-ethereum-sepolia-faucet
 
 ## Timeline
 

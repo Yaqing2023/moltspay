@@ -22,6 +22,25 @@ import { MoltsPayServer } from '../server/index.js';
 import { printQRCode } from '../onramp/index.js';
 import * as readline from 'readline';
 
+// Read version from package.json at runtime
+function getVersion(): string {
+  // Try to find package.json in common locations
+  const locations = [
+    join(__dirname, '../../package.json'),
+    join(__dirname, '../package.json'),
+    join(process.cwd(), 'node_modules/moltspay/package.json'),
+  ];
+  for (const loc of locations) {
+    try {
+      if (existsSync(loc)) {
+        const pkg = JSON.parse(readFileSync(loc, 'utf-8'));
+        if (pkg.name === 'moltspay') return pkg.version;
+      }
+    } catch { /* ignore */ }
+  }
+  return '0.0.0'; // fallback
+}
+
 const program = new Command();
 const DEFAULT_CONFIG_DIR = join(homedir(), '.moltspay');
 const PID_FILE = join(DEFAULT_CONFIG_DIR, 'server.pid');
@@ -47,7 +66,7 @@ function prompt(question: string): Promise<string> {
 program
   .name('moltspay')
   .description('MoltsPay - Payment infrastructure for AI Agents')
-  .version('1.0.0');
+  .version(getVersion());
 
 /**
  * npx moltspay init
@@ -191,15 +210,14 @@ program
       return;
     }
     
-    // Testnet: point to faucets instead of Coinbase Pay
+    // Testnet: use faucet instead of Coinbase Pay
     if (chain === 'base_sepolia') {
       console.log('\n🧪 Testnet Funding\n');
       console.log(`   Wallet: ${client.address}`);
       console.log(`   Chain: Base Sepolia (testnet)\n`);
-      console.log('📝 Get testnet USDC from these faucets:');
-      console.log('   • Circle Faucet: https://faucet.circle.com/');
-      console.log('   • Base Sepolia: https://www.coinbase.com/faucets/base-ethereum-sepolia-faucet\n');
-      console.log(`💡 Send USDC to: ${client.address}\n`);
+      console.log('💡 Use the MoltsPay faucet to get free testnet USDC:\n');
+      console.log('   npx moltspay faucet\n');
+      console.log('   Or get from Circle Faucet: https://faucet.circle.com/\n');
       return;
     }
 
