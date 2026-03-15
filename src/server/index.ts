@@ -140,7 +140,10 @@ export class MoltsPayServer {
       ...options,
     };
 
-    // Determine mainnet vs testnet from env
+    // Determine default network from env (fallback only)
+    // NOTE: Chain is auto-detected from client payment header (payment.network)
+    // USE_MAINNET is only used as fallback when payment header omits network
+    // Recommended: configure "chains" array in manifest instead
     this.useMainnet = process.env.USE_MAINNET?.toLowerCase() === 'true';
     this.networkId = this.useMainnet ? 'eip155:8453' : 'eip155:84532';
 
@@ -455,7 +458,9 @@ export class MoltsPayServer {
       });
     }
 
-    // Get payment network and corresponding wallet
+    // Auto-detect chain from payment header (key insight: client specifies chain via --chain flag)
+    // payment.network contains "eip155:8453" (base) or "eip155:84532" (base_sepolia) etc.
+    // This allows provider to serve both mainnet and testnet without separate configuration
     const paymentNetwork = payment.accepted?.network || payment.network || this.networkId;
     const paymentWallet = this.getWalletForNetwork(paymentNetwork);
 
@@ -463,7 +468,7 @@ export class MoltsPayServer {
     const requirements = this.buildPaymentRequirements(skill.config, paymentNetwork, paymentWallet, paymentToken);
 
     // Verify payment with facilitator (via registry)
-    console.log(`[MoltsPay] Verifying payment...`);
+    console.log(`[MoltsPay] Verifying payment on ${paymentNetwork}...`);
     const verifyResult = await this.registry.verify(payment, requirements);
     if (!verifyResult.valid) {
       return this.sendJson(res, 402, { 

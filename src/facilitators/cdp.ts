@@ -2,7 +2,12 @@
  * CDP Facilitator
  * 
  * Coinbase Developer Platform x402 facilitator implementation.
- * Supports both mainnet (Base) and testnet (Base Sepolia).
+ * Auto-detects mainnet vs testnet from chain ID in request.
+ * 
+ * Supported networks:
+ * - Base mainnet (eip155:8453)
+ * - Polygon mainnet (eip155:137)
+ * - Base Sepolia testnet (eip155:84532)
  * 
  * @see https://docs.cdp.coinbase.com/x402/core-concepts/facilitator
  */
@@ -23,16 +28,16 @@ import {
 // x402 protocol version
 const X402_VERSION = 2;
 
-// CDP Facilitator URLs
-const CDP_MAINNET_URL = 'https://api.cdp.coinbase.com/platform/v2/x402';
-const CDP_TESTNET_URL = 'https://www.x402.org/facilitator';
+// CDP Facilitator URL (handles both mainnet and testnet)
+const CDP_URL = 'https://api.cdp.coinbase.com/platform/v2/x402';
+
+// Testnet chain IDs (for logging/info only - CDP auto-detects from network field)
+const TESTNET_CHAIN_IDS = [84532]; // Base Sepolia
 
 export interface CDPFacilitatorConfig extends FacilitatorConfig {
-  /** Use mainnet (true) or testnet (false, default) */
-  useMainnet?: boolean;
-  /** CDP API Key ID (required for mainnet) */
+  /** CDP API Key ID (required) */
   apiKeyId?: string;
-  /** CDP API Key Secret (required for mainnet) */
+  /** CDP API Key Secret (required) */
   apiKeySecret?: string;
 }
 
@@ -83,7 +88,6 @@ export class CDPFacilitator extends BaseFacilitator {
   readonly supportedNetworks: string[];
   
   private endpoint: string;
-  private useMainnet: boolean;
   private apiKeyId?: string;
   private apiKeySecret?: string;
   
@@ -93,26 +97,24 @@ export class CDPFacilitator extends BaseFacilitator {
     // Load env files for credentials
     loadEnvFile();
     
-    // Determine mainnet vs testnet
-    this.useMainnet = config.useMainnet ?? 
-      (process.env.USE_MAINNET?.toLowerCase() === 'true');
-    
-    // Get credentials
+    // Get credentials (required for CDP)
     this.apiKeyId = config.apiKeyId || process.env.CDP_API_KEY_ID;
     this.apiKeySecret = config.apiKeySecret || process.env.CDP_API_KEY_SECRET;
     
-    // Set endpoint
-    this.endpoint = this.useMainnet ? CDP_MAINNET_URL : CDP_TESTNET_URL;
+    // Single endpoint handles both mainnet and testnet (auto-detected from chain ID in request)
+    this.endpoint = CDP_URL;
     
-    // Set supported networks (CDP supports Base + Polygon)
-    this.supportedNetworks = this.useMainnet 
-      ? ['eip155:8453', 'eip155:137']  // Base + Polygon mainnet
-      : ['eip155:8453', 'eip155:84532', 'eip155:137'];  // Base, Base Sepolia, Polygon
+    // All supported networks - CDP handles both mainnet and testnet
+    this.supportedNetworks = [
+      'eip155:8453',   // Base mainnet
+      'eip155:137',    // Polygon mainnet
+      'eip155:84532',  // Base Sepolia (testnet)
+    ];
     
-    // Warn if mainnet without credentials
-    if (this.useMainnet && (!this.apiKeyId || !this.apiKeySecret)) {
-      console.warn('[CDPFacilitator] WARNING: Mainnet mode but missing CDP credentials!');
-      console.warn('[CDPFacilitator] Set CDP_API_KEY_ID and CDP_API_KEY_SECRET');
+    // Warn if missing credentials
+    if (!this.apiKeyId || !this.apiKeySecret) {
+      console.warn('[CDPFacilitator] WARNING: Missing CDP credentials!');
+      console.warn('[CDPFacilitator] Set CDP_API_KEY_ID and CDP_API_KEY_SECRET in ~/.moltspay/.env');
     }
   }
   
@@ -124,13 +126,8 @@ export class CDPFacilitator extends BaseFacilitator {
     urlPath: string,
     body?: unknown
   ): Promise<Record<string, string>> {
-    if (!this.useMainnet) {
-      // Testnet (x402.org) doesn't require auth
-      return {};
-    }
-    
     if (!this.apiKeyId || !this.apiKeySecret) {
-      throw new Error('CDP credentials required for mainnet');
+      throw new Error('CDP credentials required. Set CDP_API_KEY_ID and CDP_API_KEY_SECRET');
     }
     
     try {
@@ -197,18 +194,16 @@ export class CDPFacilitator extends BaseFacilitator {
         paymentRequirements: requirements,
       };
       
+      const authHeaders = await this.getAuthHeaders(
+        'POST',
+        '/platform/v2/x402/verify',
+        requestBody
+      );
+      
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
+        ...authHeaders,
       };
-      
-      if (this.useMainnet) {
-        const authHeaders = await this.getAuthHeaders(
-          'POST',
-          '/platform/v2/x402/verify',
-          requestBody
-        );
-        Object.assign(headers, authHeaders);
-      }
       
       const response = await fetch(`${this.endpoint}/verify`, {
         method: 'POST',
@@ -249,18 +244,16 @@ export class CDPFacilitator extends BaseFacilitator {
         paymentRequirements: requirements,
       };
       
+      const authHeaders = await this.getAuthHeaders(
+        'POST',
+        '/platform/v2/x402/settle',
+        requestBody
+      );
+      
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
+        ...authHeaders,
       };
-      
-      if (this.useMainnet) {
-        const authHeaders = await this.getAuthHeaders(
-          'POST',
-          '/platform/v2/x402/settle',
-          requestBody
-        );
-        Object.assign(headers, authHeaders);
-      }
       
       const response = await fetch(`${this.endpoint}/settle`, {
         method: 'POST',
@@ -303,11 +296,18 @@ export class CDPFacilitator extends BaseFacilitator {
   }
   
   /**
+   * Check if a chain ID is testnet
+   */
+  static isTestnet(chainId: number): boolean {
+    return TESTNET_CHAIN_IDS.includes(chainId);
+  }
+  
+  /**
    * Get configuration summary (for logging)
    */
   getConfigSummary(): string {
-    const mode = this.useMainnet ? 'mainnet' : 'testnet';
     const hasCredentials = !!(this.apiKeyId && this.apiKeySecret);
-    return `CDP Facilitator (${mode}, credentials: ${hasCredentials ? 'yes' : 'no'})`;
+    const networks = this.supportedNetworks.join(', ');
+    return `CDP Facilitator (networks: ${networks}, credentials: ${hasCredentials ? 'yes' : 'no'})`;
   }
 }

@@ -99,13 +99,11 @@ export function networkToChain(network: string): ChainName | null {
   
   const chainId = parseInt(match[1]);
   
-  // Map chain IDs to names
+  // Map chain IDs to names (Base + Polygon only, no Ethereum)
   const chainMap: Record<number, ChainName> = {
     8453: 'base',
-    84532: 'base_sepolia',
     137: 'polygon',
-    1: 'ethereum',
-    11155111: 'sepolia',
+    84532: 'base_sepolia',
   };
   
   return chainMap[chainId] || null;

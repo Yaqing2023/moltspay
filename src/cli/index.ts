@@ -71,6 +71,14 @@ program
 
     // Get options interactively if not provided
     let chain = options.chain;
+    
+    // Validate chain
+    const supportedChains = ['base', 'polygon', 'base_sepolia'];
+    if (!supportedChains.includes(chain)) {
+      console.error(`❌ Unknown chain: ${chain}. Supported: ${supportedChains.join(', ')}`);
+      process.exit(1);
+    }
+    
     let maxPerTx = options.maxPerTx ? parseFloat(options.maxPerTx) : null;
     let maxPerDay = options.maxPerDay ? parseFloat(options.maxPerDay) : null;
 
@@ -161,7 +169,7 @@ program
 program
   .command('fund <amount>')
   .description('Fund wallet with USDC via Coinbase (US debit card / Apple Pay)')
-  .option('--chain <chain>', 'Chain to fund (base or polygon)', 'base')
+  .option('--chain <chain>', 'Chain to fund (base, polygon, or base_sepolia)', 'base')
   .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
   .action(async (amountStr, options) => {
     const client = new MoltsPayClient({ configDir: options.configDir });
@@ -177,9 +185,21 @@ program
       return;
     }
 
-    const chain = (options.chain?.toLowerCase() || 'base') as 'base' | 'polygon';
-    if (!['base', 'polygon'].includes(chain)) {
-      console.log('❌ Invalid chain. Use: base or polygon');
+    const chain = (options.chain?.toLowerCase() || 'base') as 'base' | 'polygon' | 'base_sepolia';
+    if (!['base', 'polygon', 'base_sepolia'].includes(chain)) {
+      console.log('❌ Invalid chain. Use: base, polygon, or base_sepolia');
+      return;
+    }
+    
+    // Testnet: point to faucets instead of Coinbase Pay
+    if (chain === 'base_sepolia') {
+      console.log('\n🧪 Testnet Funding\n');
+      console.log(`   Wallet: ${client.address}`);
+      console.log(`   Chain: Base Sepolia (testnet)\n`);
+      console.log('📝 Get testnet USDC from these faucets:');
+      console.log('   • Circle Faucet: https://faucet.circle.com/');
+      console.log('   • Base Sepolia: https://www.coinbase.com/faucets/base-ethereum-sepolia-faucet\n');
+      console.log(`💡 Send USDC to: ${client.address}\n`);
       return;
     }
 
@@ -280,7 +300,7 @@ program
   .command('list')
   .description('List recent transactions')
   .option('--days <n>', 'Number of days to look back', '7')
-  .option('--chain <chain>', 'Chain to query (base, polygon, or all)', 'all')
+  .option('--chain <chain>', 'Chain to query (base, polygon, base_sepolia, or all)', 'all')
   .option('--limit <n>', 'Max transactions to show', '20')
   .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
   .action(async (options) => {
@@ -295,8 +315,8 @@ program
     const limit = parseInt(options.limit) || 20;
     const chain = options.chain?.toLowerCase() || 'all';
 
-    if (!['base', 'polygon', 'all'].includes(chain)) {
-      console.log('❌ Invalid chain. Use: base, polygon, or all');
+    if (!['base', 'polygon', 'base_sepolia', 'all'].includes(chain)) {
+      console.log('❌ Invalid chain. Use: base, polygon, base_sepolia, or all');
       return;
     }
 
@@ -315,9 +335,14 @@ program
         usdc: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
         name: 'Polygon',
       },
+      base_sepolia: {
+        api: 'https://base-sepolia.blockscout.com/api/v2',
+        usdc: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+        name: 'Base Sepolia',
+      },
     };
 
-    const chainsToQuery = chain === 'all' ? ['base', 'polygon'] : [chain];
+    const chainsToQuery = chain === 'all' ? ['base', 'polygon', 'base_sepolia'] : [chain];
 
     console.log(`\n📜 Transactions (last ${days} day${days > 1 ? 's' : ''})\n`);
 
@@ -767,7 +792,7 @@ program
   .option('--prompt <text>', 'Prompt for the service')
   .option('--image <path>', 'Image URL or local file path')
   .option('--token <token>', 'Token to pay with (USDC or USDT)', 'USDC')
-  .option('--chain <chain>', 'Chain to pay on (base or polygon). Required if server accepts multiple chains.')
+  .option('--chain <chain>', 'Chain to pay on (base, polygon, or base_sepolia). Required if server accepts multiple chains.')
   .option('--json', 'Output raw JSON only')
   .action(async (server, service, paramsJson, options) => {
     const client = new MoltsPayClient();
@@ -819,9 +844,9 @@ program
     }
 
     // Validate chain option (if specified)
-    const chain = options.chain?.toLowerCase() as 'base' | 'polygon' | undefined;
-    if (chain && !['base', 'polygon'].includes(chain)) {
-      console.error(`❌ Unknown chain: ${chain}. Supported: base, polygon`);
+    const chain = options.chain?.toLowerCase() as 'base' | 'polygon' | 'base_sepolia' | undefined;
+    if (chain && !['base', 'polygon', 'base_sepolia'].includes(chain)) {
+      console.error(`❌ Unknown chain: ${chain}. Supported: base, polygon, base_sepolia`);
       process.exit(1);
     }
 

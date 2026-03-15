@@ -608,7 +608,7 @@ export class MoltsPayClient {
       throw new Error('Client not initialized');
     }
 
-    const supportedChains: ChainName[] = ['base', 'polygon'];
+    const supportedChains: ChainName[] = ['base', 'polygon', 'base_sepolia'];
     const tokenAbi = ['function balanceOf(address) view returns (uint256)'];
     const results: Record<string, { usdc: number; usdt: number; native: number }> = {};
 

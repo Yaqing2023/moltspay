@@ -26,7 +26,7 @@ export interface ChainConfig {
   avgBlockTime: number;
 }
 
-export type ChainName = 'base' | 'base_sepolia' | 'polygon' | 'ethereum' | 'sepolia';
+export type ChainName = 'base' | 'polygon' | 'base_sepolia';
 
 // ============ Invoice Protocol ============
 

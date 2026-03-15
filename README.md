@@ -189,23 +189,63 @@ If no `--chain` is specified, the client uses the first chain in the provider's 
 npx moltspay validate ./my-skill
 ```
 
-## Server Setup (Mainnet)
+## Server Setup
 
 **1. Get CDP credentials** from https://portal.cdp.coinbase.com/
 
 **2. Create `~/.moltspay/.env`:**
 ```env
-USE_MAINNET=true
 CDP_API_KEY_ID=your-key-id
 CDP_API_KEY_SECRET=your-secret
 ```
 
-**3. Start server:**
+**3. Configure chains in your manifest:**
+```json
+{
+  "provider": {
+    "wallet": "0x...",
+    "chains": [
+      { "chain": "base", "network": "eip155:8453", "tokens": ["USDC"] },
+      { "chain": "base_sepolia", "network": "eip155:84532", "tokens": ["USDC"] }
+    ]
+  }
+}
+```
+
+**4. Start server:**
 ```bash
 npx moltspay start ./my-skill --port 3000
 ```
 
 Server does NOT need a private key - the x402 facilitator handles settlement.
+
+### Chain Auto-Detection
+
+The server automatically detects which chain to verify payments on based on the client's payment header:
+
+- Client pays with `--chain base` → Server verifies on Base mainnet
+- Client pays with `--chain base_sepolia` → Server verifies on Base Sepolia
+
+**No `USE_MAINNET` env var needed!** Just configure your accepted chains in the manifest.
+
+### Testnet Setup
+
+For testing, configure `base_sepolia` in your chains array:
+
+```json
+{
+  "provider": {
+    "wallet": "0x...",
+    "chains": [
+      { "chain": "base_sepolia", "network": "eip155:84532", "tokens": ["USDC"] }
+    ]
+  }
+}
+```
+
+Get testnet USDC from:
+- Circle Faucet: https://faucet.circle.com/
+- Base Sepolia Faucet: https://www.coinbase.com/faucets/base-ethereum-sepolia-faucet
 
 ## CLI Reference
 
