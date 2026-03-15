@@ -15,11 +15,13 @@ export const CHAINS: Record<ChainName, ChainConfig> = {
         address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
         decimals: 6,
         symbol: 'USDC',
+        eip712Name: 'USD Coin', // EIP-712 domain name
       },
       USDT: {
         address: '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2',
         decimals: 6,
         symbol: 'USDT',
+        eip712Name: 'Tether USD',
       },
     },
     usdc: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // deprecated, for backward compat
@@ -36,11 +38,13 @@ export const CHAINS: Record<ChainName, ChainConfig> = {
         address: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
         decimals: 6,
         symbol: 'USDC',
+        eip712Name: 'USD Coin',
       },
       USDT: {
         address: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F',
         decimals: 6,
         symbol: 'USDT',
+        eip712Name: '(PoS) Tether USD', // Polygon uses this name
       },
     },
     usdc: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
@@ -58,11 +62,13 @@ export const CHAINS: Record<ChainName, ChainConfig> = {
         address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
         decimals: 6,
         symbol: 'USDC',
+        eip712Name: 'USDC', // Testnet USDC uses 'USDC' not 'USD Coin'
       },
       USDT: {
         address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', // Same as USDC on testnet (no official USDT)
         decimals: 6,
         symbol: 'USDT',
+        eip712Name: 'USDC', // Uses same contract as USDC
       },
     },
     usdc: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',

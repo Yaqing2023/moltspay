@@ -239,6 +239,78 @@ program
   });
 
 /**
+ * npx moltspay faucet
+ * 
+ * Request testnet USDC from the MoltsPay faucet (Base Sepolia only)
+ */
+program
+  .command('faucet')
+  .description('Request testnet USDC from MoltsPay faucet (Base Sepolia)')
+  .option('--address <address>', 'Wallet address (defaults to your wallet)')
+  .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
+  .action(async (options) => {
+    let address = options.address;
+
+    // If no address provided, try to use initialized wallet
+    if (!address) {
+      const client = new MoltsPayClient({ configDir: options.configDir });
+      if (client.isInitialized) {
+        address = client.address;
+      } else {
+        console.log('❌ No wallet found. Either run "npx moltspay init" or provide --address');
+        return;
+      }
+    }
+
+    // Validate address format
+    if (!address.match(/^0x[a-fA-F0-9]{40}$/)) {
+      console.log('❌ Invalid Ethereum address');
+      return;
+    }
+
+    console.log('\n🚰 MoltsPay Testnet Faucet\n');
+    console.log(`   Requesting 1 USDC on Base Sepolia...`);
+    console.log(`   Address: ${address}\n`);
+
+    try {
+      const FAUCET_API = process.env.MOLTSPAY_FAUCET_API || 'https://moltspay.com/api/v1/faucet';
+      
+      const response = await fetch(FAUCET_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address }),
+      });
+
+      const result = await response.json() as {
+        success?: boolean;
+        amount?: string;
+        transaction?: string;
+        explorer?: string;
+        faucet_balance?: string;
+        error?: string;
+        hint?: string;
+        retry_after?: string;
+      };
+
+      if (!response.ok) {
+        console.log(`❌ ${result.error || 'Request failed'}`);
+        if (result.hint) console.log(`   ${result.hint}`);
+        if (result.retry_after) console.log(`   Retry after: ${result.retry_after}`);
+        return;
+      }
+
+      console.log(`✅ Received ${result.amount} USDC!\n`);
+      console.log(`   Transaction: ${result.transaction}`);
+      console.log(`   Explorer: ${result.explorer}`);
+      console.log(`   Faucet balance: ${result.faucet_balance} USDC remaining\n`);
+      console.log('💡 Use this USDC to test x402 payments:');
+      console.log(`   npx moltspay pay <service-url> <service-id> --chain base_sepolia\n`);
+    } catch (error) {
+      console.log(`❌ ${(error as Error).message}`);
+    }
+  });
+
+/**
  * npx moltspay status
  */
 program

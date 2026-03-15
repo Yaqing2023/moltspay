@@ -28,8 +28,8 @@ export interface PayOptions {
   token?: TokenSymbol;
   /** Auto-select token based on balance (default: false) */
   autoSelect?: boolean;
-  /** Chain to pay on (base or polygon, default: base) */
-  chain?: 'base' | 'polygon';
+  /** Chain to pay on (base, polygon, or base_sepolia, default: base) */
+  chain?: 'base' | 'polygon' | 'base_sepolia';
 }
 
 // x402 constants
@@ -254,7 +254,7 @@ export class MoltsPayClient {
       } else {
         throw new Error(
           `Server accepts: ${serverChains.join(', ')}\n` +
-          `Please specify: --chain base  or  --chain polygon`
+          `Please specify: --chain base, --chain polygon, or --chain base_sepolia`
         );
       }
     }
@@ -313,17 +313,32 @@ export class MoltsPayClient {
     if (!payTo) {
       throw new Error('Missing payTo address in payment requirements');
     }
-    const authorization = await this.signEIP3009(payTo, amount, chain, token);
+    
+    // Use server's extra field for domain info (contains correct EIP-712 domain for the token on this network)
+    const domainOverride = (req.extra && typeof req.extra === 'object' && req.extra.name) 
+      ? { name: req.extra.name as string, version: (req.extra.version as string) || '2' }
+      : undefined;
+    
+    const authorization = await this.signEIP3009(payTo, amount, chain, token, domainOverride);
 
-    // Get token-specific info
+    // Get token-specific info for accepted field
     const tokenConfig = chain.tokens[token];
-    const tokenName = token === 'USDC' ? 'USD Coin' : 'Tether USD';
 
-    // Step 5: Create x402 payment payload (v2 format requires 'accepted')
+    // Step 5: Create x402 payment payload (v2 requires scheme, network, payload, AND accepted)
+    // Use server's extra field if provided (contains correct EIP-712 domain for the token on this network)
+    // Fall back to local config for backward compatibility
+    const extra = (req.extra && typeof req.extra === 'object') 
+      ? req.extra 
+      : {
+          name: (tokenConfig as any).eip712Name || 'USD Coin',
+          version: '2',
+        };
+    
     const payload = {
       x402Version: X402_VERSION,
-      payload: authorization,
-      // v2 requires 'accepted' field with the requirements being fulfilled
+      scheme: 'exact',
+      network,
+      payload: authorization, // { authorization: {...}, signature: "0x..." }
       accepted: {
         scheme: 'exact',
         network,
@@ -331,7 +346,7 @@ export class MoltsPayClient {
         amount: amountRaw,
         payTo,
         maxTimeoutSeconds: req.maxTimeoutSeconds || 300,
-        extra: req.extra || { name: tokenName, version: '2' },
+        extra,
       },
     };
     const paymentHeader = Buffer.from(JSON.stringify(payload)).toString('base64');
@@ -374,7 +389,8 @@ export class MoltsPayClient {
     to: string,
     amount: number,
     chain: { chainId: number; tokens: Record<TokenSymbol, { address: string; decimals: number }> },
-    token: TokenSymbol = 'USDC'
+    token: TokenSymbol = 'USDC',
+    domainOverride?: { name: string; version: string }
   ): Promise<{ authorization: EIP3009Authorization; signature: string }> {
     const validAfter = 0;
     const validBefore = Math.floor(Date.now() / 1000) + 3600; // 1 hour
@@ -392,11 +408,13 @@ export class MoltsPayClient {
       nonce,
     };
 
-    // EIP-712 domain - token specific
-    const tokenName = token === 'USDC' ? 'USD Coin' : 'Tether USD';
+    // EIP-712 domain - use server's domain info if provided (handles mainnet vs testnet differences)
+    // Fall back to local token config for backward compatibility
+    const tokenName = domainOverride?.name || (tokenConfig as any).eip712Name || (token === 'USDC' ? 'USD Coin' : 'Tether USD');
+    const tokenVersion = domainOverride?.version || '2';
     const domain = {
       name: tokenName,
-      version: '2',
+      version: tokenVersion,
       chainId: chain.chainId,
       verifyingContract: tokenConfig.address,
     };

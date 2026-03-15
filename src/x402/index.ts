@@ -154,9 +154,11 @@ export async function signEIP3009(
     nonce,
   };
   
-  // EIP-712 domain for USDC
+  // EIP-712 domain for USDC - use chain-specific name
+  const usdcConfig = chainConfig.tokens?.USDC;
+  const eip712Name = (usdcConfig as any)?.eip712Name || 'USD Coin';
   const domain = {
-    name: 'USD Coin',
+    name: eip712Name,
     version: '2',
     chainId: chainConfig.chainId,
     verifyingContract: chainConfig.usdc,

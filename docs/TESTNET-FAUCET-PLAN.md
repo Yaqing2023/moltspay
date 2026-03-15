@@ -31,15 +31,17 @@ To accept both mainnet and testnet, providers configure `chains` array in manife
   "provider": {
     "name": "My Service",
     "wallet": "0x...",
-    "chains": [
-      { "network": "eip155:8453", "chain": "base" },
-      { "network": "eip155:84532", "chain": "base_sepolia" }
-    ]
+    "chains": ["base", "base_sepolia", "polygon"]
   }
 }
 ```
 
-The 402 response will advertise both chains as accepted options.
+Network ID is auto-derived from chain name via `CHAIN_TO_NETWORK` mapping:
+- `base` → `eip155:8453`
+- `base_sepolia` → `eip155:84532`
+- `polygon` → `eip155:137`
+
+The 402 response will advertise all configured chains as accepted options.
 
 ## Faucet Implementation
 
@@ -67,9 +69,9 @@ POST /faucet
 
 ### Rate Limiting
 
-- 10 USDC per request
+- 1 USDC per request (enough for 100 test transactions at $0.01)
 - Max 1 request per address per 24 hours
-- Total daily limit: 1000 USDC (100 requests)
+- Total daily limit: 100 USDC
 
 ### Security
 
@@ -94,30 +96,42 @@ The CLI will:
 3. Request from faucet endpoint
 4. Show balance after
 
-## Implementation Steps
+## Implementation Status
 
-### Phase 1: Multi-Chain Provider Support ✅
+### Phase 1: Multi-Chain Provider Support ✅ COMPLETE
 
-Already implemented:
 - [x] `payment.network` read from payment header
 - [x] `getWalletForNetwork()` returns correct wallet
-- [x] `getProviderChains()` reads from manifest
+- [x] `getProviderChains()` supports both string array `["base"]` and object array
 - [x] 402 response advertises all configured chains
+- [x] Schema updated to use simple string array format
+- [x] CLI supports `--chain base_sepolia` for init/pay/fund/list
+- [x] `fund` command shows faucet links for testnet
 
-### Phase 2: Faucet Backend
+### Phase 2: Faucet Backend ✅ COMPLETE
 
-1. Create faucet wallet on Base Sepolia
-2. Fund with testnet USDC (get from Circle faucet)
-3. Implement `/faucet` endpoint with rate limiting
-4. Store request history (SQLite or JSON file)
+1. ✅ Create faucet wallet on Base Sepolia: `0x145E00f48b98E2829f803Be53418230e47943a8A`
+2. ✅ Fund with testnet USDC (20 USDC from Circle faucet)
+3. ✅ Implement `/faucet` endpoint with rate limiting (moltspay-creators)
+4. ✅ Store request history (SQLite faucet_requests table)
 
-### Phase 3: CLI Command
+**Endpoints:**
+- `POST https://moltspay.com/api/v1/faucet` - Request 1 USDC
+- `GET https://moltspay.com/api/v1/faucet/status` - Check availability
 
-1. Add `faucet` command to CLI
-2. Auto-detect wallet address
-3. Pretty print result with balance
+### Phase 3: CLI Command ✅ COMPLETE
 
-### Phase 4: Documentation
+1. ✅ Add `faucet` command to CLI
+2. ✅ Auto-detect wallet address from ~/.moltspay/wallet.json
+3. ✅ Pretty print result with balance
+
+**Usage:**
+```bash
+npx moltspay faucet                    # Use your wallet
+npx moltspay faucet --address 0x...    # Specify address
+```
+
+### Phase 4: Documentation (TODO)
 
 1. Update README with testnet quickstart
 2. Add faucet to onboarding flow
@@ -136,28 +150,6 @@ npx moltspay init --chain base_sepolia --name faucet
 # https://testnets.superbridge.app/
 ```
 
-## Code Changes Needed
-
-### 1. Remove USE_MAINNET dependency
-
-The server already reads chain from payment header. Just need to:
-- Update docs to clarify no `USE_MAINNET` needed
-- Ensure `chains` array in manifest is the canonical config
-
-### 2. Add faucet endpoint
-
-New file: `src/server/faucet.ts`
-- Rate limiting logic
-- Transfer testnet USDC
-- Request history
-
-### 3. CLI faucet command
-
-New file: `src/cli/faucet.ts`
-- Parse args
-- Call faucet endpoint
-- Show result
-
 ## Testnet USDC Sources
 
 1. **Circle Faucet**: https://faucet.circle.com/ (requires account)
@@ -166,7 +158,7 @@ New file: `src/cli/faucet.ts`
 
 ## Timeline
 
-- Week 1: Multi-chain manifest documentation
+- Week 1: Multi-chain manifest documentation ✅
 - Week 2: Faucet backend implementation
 - Week 3: CLI integration + testing
 - Week 4: Launch with docs

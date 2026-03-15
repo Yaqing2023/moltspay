@@ -62,11 +62,31 @@ const CHAIN_TO_NETWORK: Record<string, string> = {
   'polygon': 'eip155:137',
 };
 
-// EIP-712 domain info for tokens
-const TOKEN_DOMAINS: Record<string, { name: string; version: string }> = {
-  USDC: { name: 'USD Coin', version: '2' },
-  USDT: { name: 'Tether USD', version: '2' },
+// EIP-712 domain info for tokens (per network)
+// Different networks may have different domain names for the same token
+const TOKEN_DOMAINS: Record<string, Record<string, { name: string; version: string }>> = {
+  // Base mainnet
+  'eip155:8453': {
+    USDC: { name: 'USD Coin', version: '2' },
+    USDT: { name: 'Tether USD', version: '2' },
+  },
+  // Base Sepolia testnet - USDC uses 'USDC' not 'USD Coin'
+  'eip155:84532': {
+    USDC: { name: 'USDC', version: '2' },
+    USDT: { name: 'USDC', version: '2' }, // Same contract as USDC on testnet
+  },
+  // Polygon mainnet
+  'eip155:137': {
+    USDC: { name: 'USD Coin', version: '2' },
+    USDT: { name: '(PoS) Tether USD', version: '2' },
+  },
 };
+
+// Helper to get token domain for a network
+function getTokenDomain(network: string, token: string): { name: string; version: string } {
+  const networkDomains = TOKEN_DOMAINS[network] || TOKEN_DOMAINS['eip155:8453']; // fallback to base mainnet
+  return networkDomains[token] || { name: 'USD Coin', version: '2' };
+}
 
 // Helper to get accepted currencies with backward compatibility
 function getAcceptedCurrencies(config: ServiceConfig): string[] {
@@ -199,12 +219,16 @@ export class MoltsPayServer {
     const provider = this.manifest.provider;
     
     // If chains array is defined, use it
+    // Supports both string array ["base", "polygon"] and object array [{chain, wallet, tokens}]
     if (provider.chains && provider.chains.length > 0) {
-      return provider.chains.map(c => ({
-        network: c.network || CHAIN_TO_NETWORK[c.chain] || 'eip155:8453',
-        wallet: c.wallet || provider.wallet,
-        tokens: c.tokens || ['USDC'],
-      }));
+      return provider.chains.map(c => {
+        const chainName = typeof c === 'string' ? c : c.chain;
+        return {
+          network: CHAIN_TO_NETWORK[chainName] || 'eip155:8453',
+          wallet: (typeof c === 'object' ? c.wallet : null) || provider.wallet,
+          tokens: (typeof c === 'object' ? c.tokens : null) || ['USDC'],
+        };
+      });
     }
     
     // Fallback to single chain (backward compat)
@@ -631,7 +655,7 @@ export class MoltsPayServer {
     
     const tokenAddresses = TOKEN_ADDRESSES[selectedNetwork] || {};
     const tokenAddress = tokenAddresses[selectedToken];
-    const tokenDomain = TOKEN_DOMAINS[selectedToken] || TOKEN_DOMAINS.USDC;
+    const tokenDomain = getTokenDomain(selectedNetwork, selectedToken);
 
     return {
       scheme: 'exact',
@@ -941,7 +965,7 @@ export class MoltsPayServer {
     const selectedToken = token && acceptedTokens.includes(token) ? token : acceptedTokens[0];
     const tokenAddresses = TOKEN_ADDRESSES[networkId] || TOKEN_ADDRESSES[this.networkId] || {};
     const tokenAddress = tokenAddresses[selectedToken];
-    const tokenDomain = TOKEN_DOMAINS[selectedToken] || TOKEN_DOMAINS.USDC;
+    const tokenDomain = getTokenDomain(networkId, selectedToken);
 
     return {
       scheme: 'exact',

@@ -194,6 +194,8 @@ export class CDPFacilitator extends BaseFacilitator {
         paymentRequirements: requirements,
       };
       
+      console.log('[CDP Verify] Payload:', JSON.stringify(paymentPayload, null, 2));
+      
       const authHeaders = await this.getAuthHeaders(
         'POST',
         '/platform/v2/x402/verify',
@@ -212,6 +214,7 @@ export class CDPFacilitator extends BaseFacilitator {
       });
       
       const result = await response.json() as any;
+      console.log('[CDP Verify] Response:', response.status, JSON.stringify(result));
       
       if (!response.ok || !result.isValid) {
         return {

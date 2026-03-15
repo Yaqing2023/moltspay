@@ -10,6 +10,7 @@ export interface TokenConfig {
   address: string;
   decimals: number;
   symbol: TokenSymbol;
+  eip712Name?: string; // EIP-712 domain name (e.g., 'USD Coin' for mainnet USDC, 'USDC' for testnet)
 }
 
 // ============ Chain Config ============
