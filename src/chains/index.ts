@@ -76,6 +76,32 @@ export const CHAINS: Record<ChainName, ChainConfig> = {
     explorerTx: 'https://sepolia.basescan.org/tx/',
     avgBlockTime: 2,
   },
+  // ============ Tempo Testnet (Moderato) ============
+  tempo_moderato: {
+    name: 'Tempo Moderato',
+    chainId: 42431,
+    rpc: 'https://rpc.moderato.tempo.xyz',
+    tokens: {
+      // TIP-20 stablecoins on Tempo testnet (from mppx SDK)
+      // Note: Tempo uses USD as native gas token, not ETH
+      USDC: {
+        address: '0x20c0000000000000000000000000000000000000', // pathUSD - primary testnet stablecoin
+        decimals: 6,
+        symbol: 'USDC',
+        eip712Name: 'pathUSD',
+      },
+      USDT: {
+        address: '0x20c0000000000000000000000000000000000001', // alphaUSD
+        decimals: 6,
+        symbol: 'USDT',
+        eip712Name: 'alphaUSD',
+      },
+    },
+    usdc: '0x20c0000000000000000000000000000000000000',
+    explorer: 'https://explore.testnet.tempo.xyz/address/',
+    explorerTx: 'https://explore.testnet.tempo.xyz/tx/',
+    avgBlockTime: 0.5, // ~500ms finality
+  },
 };
 
 /**

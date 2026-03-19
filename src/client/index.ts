@@ -619,16 +619,24 @@ export class MoltsPayClient {
   }
 
   /**
-   * Get wallet balances on all supported chains (Base + Polygon)
+   * Get wallet balances on all supported chains (Base + Polygon + Tempo)
    */
-  async getAllBalances(): Promise<Record<string, { usdc: number; usdt: number; native: number }>> {
+  async getAllBalances(): Promise<Record<string, { usdc: number; usdt: number; native: number; tempo?: { pathUSD: number; alphaUSD: number; betaUSD: number; thetaUSD: number } }>> {
     if (!this.wallet) {
       throw new Error('Client not initialized');
     }
 
-    const supportedChains: ChainName[] = ['base', 'polygon', 'base_sepolia'];
+    const supportedChains: ChainName[] = ['base', 'polygon', 'base_sepolia', 'tempo_moderato'];
     const tokenAbi = ['function balanceOf(address) view returns (uint256)'];
-    const results: Record<string, { usdc: number; usdt: number; native: number }> = {};
+    const results: Record<string, { usdc: number; usdt: number; native: number; tempo?: { pathUSD: number; alphaUSD: number; betaUSD: number; thetaUSD: number } }> = {};
+
+    // Tempo testnet token addresses
+    const tempoTokens = {
+      pathUSD: '0x20c0000000000000000000000000000000000000',
+      alphaUSD: '0x20c0000000000000000000000000000000000001',
+      betaUSD: '0x20c0000000000000000000000000000000000002',
+      thetaUSD: '0x20c0000000000000000000000000000000000003',
+    };
 
     // Query all chains in parallel
     await Promise.all(
@@ -637,17 +645,41 @@ export class MoltsPayClient {
           const chain = getChain(chainName);
           const provider = new ethers.JsonRpcProvider(chain.rpc);
 
-          const [nativeBalance, usdcBalance, usdtBalance] = await Promise.all([
-            provider.getBalance(this.wallet!.address),
-            new ethers.Contract(chain.tokens.USDC.address, tokenAbi, provider).balanceOf(this.wallet!.address),
-            new ethers.Contract(chain.tokens.USDT.address, tokenAbi, provider).balanceOf(this.wallet!.address),
-          ]);
+          if (chainName === 'tempo_moderato') {
+            // Tempo: fetch all 4 testnet tokens
+            const [nativeBalance, pathUSD, alphaUSD, betaUSD, thetaUSD] = await Promise.all([
+              provider.getBalance(this.wallet!.address),
+              new ethers.Contract(tempoTokens.pathUSD, tokenAbi, provider).balanceOf(this.wallet!.address),
+              new ethers.Contract(tempoTokens.alphaUSD, tokenAbi, provider).balanceOf(this.wallet!.address),
+              new ethers.Contract(tempoTokens.betaUSD, tokenAbi, provider).balanceOf(this.wallet!.address),
+              new ethers.Contract(tempoTokens.thetaUSD, tokenAbi, provider).balanceOf(this.wallet!.address),
+            ]);
 
-          results[chainName] = {
-            usdc: parseFloat(ethers.formatUnits(usdcBalance, chain.tokens.USDC.decimals)),
-            usdt: parseFloat(ethers.formatUnits(usdtBalance, chain.tokens.USDT.decimals)),
-            native: parseFloat(ethers.formatEther(nativeBalance)),
-          };
+            results[chainName] = {
+              usdc: parseFloat(ethers.formatUnits(pathUSD, 6)), // pathUSD as default USDC
+              usdt: parseFloat(ethers.formatUnits(alphaUSD, 6)), // alphaUSD as default USDT
+              native: parseFloat(ethers.formatEther(nativeBalance)),
+              tempo: {
+                pathUSD: parseFloat(ethers.formatUnits(pathUSD, 6)),
+                alphaUSD: parseFloat(ethers.formatUnits(alphaUSD, 6)),
+                betaUSD: parseFloat(ethers.formatUnits(betaUSD, 6)),
+                thetaUSD: parseFloat(ethers.formatUnits(thetaUSD, 6)),
+              },
+            };
+          } else {
+            // Other chains: fetch USDC and USDT
+            const [nativeBalance, usdcBalance, usdtBalance] = await Promise.all([
+              provider.getBalance(this.wallet!.address),
+              new ethers.Contract(chain.tokens.USDC.address, tokenAbi, provider).balanceOf(this.wallet!.address),
+              new ethers.Contract(chain.tokens.USDT.address, tokenAbi, provider).balanceOf(this.wallet!.address),
+            ]);
+
+            results[chainName] = {
+              usdc: parseFloat(ethers.formatUnits(usdcBalance, chain.tokens.USDC.decimals)),
+              usdt: parseFloat(ethers.formatUnits(usdtBalance, chain.tokens.USDT.decimals)),
+              native: parseFloat(ethers.formatEther(nativeBalance)),
+            };
+          }
         } catch (err) {
           // If chain query fails, show zeros
           results[chainName] = { usdc: 0, usdt: 0, native: 0 };
@@ -656,5 +688,107 @@ export class MoltsPayClient {
     );
 
     return results;
+  }
+
+  /**
+   * Pay for a service using Tempo MPP protocol
+   * 
+   * This uses the Machine Payments Protocol (MPP) for Tempo network.
+   * The mppx library handles 402 challenges automatically.
+   * 
+   * Tries POST first, falls back to GET if POST fails.
+   * 
+   * @param url - Full URL of the MPP-enabled endpoint
+   * @param options - Request options (body, headers)
+   * @returns Response from the service
+   */
+  async payWithMPP(
+    url: string,
+    options: {
+      body?: any;
+      headers?: Record<string, string>;
+    } = {}
+  ): Promise<any> {
+    if (!this.wallet || !this.walletData) {
+      throw new Error('Client not initialized. Run: npx moltspay init');
+    }
+
+    // Dynamic imports for ESM-only packages
+    const { privateKeyToAccount } = await import('viem/accounts');
+    const { Mppx, tempo } = await import('mppx/client');
+
+    // Get private key from wallet data
+    const privateKey = this.walletData.privateKey as `0x${string}`;
+    
+    // Create viem account from private key
+    const account = privateKeyToAccount(privateKey);
+    
+    // Create mppx client with tempo method
+    const mppx = Mppx.create({
+      methods: [tempo({ account })],
+      polyfill: false, // Don't polyfill global fetch
+    });
+
+    console.log(`[MoltsPay] Making MPP request to: ${url}`);
+    console.log(`[MoltsPay] Using account: ${account.address}`);
+
+    // Helper to parse response
+    const parseResponse = async (response: Response) => {
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        return response.json();
+      }
+      return response.text();
+    };
+
+    // Try POST first
+    console.log(`[MoltsPay] Trying POST...`);
+    try {
+      const postOptions: RequestInit = {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...options.headers,
+        },
+      };
+      if (options.body) {
+        postOptions.body = JSON.stringify(options.body);
+      }
+
+      const postResponse = await mppx.fetch(url, postOptions);
+      
+      if (postResponse.ok) {
+        console.log(`[MoltsPay] POST succeeded`);
+        return parseResponse(postResponse);
+      }
+      
+      // Check if it's a method not allowed error (405) or similar
+      const postError = await postResponse.text();
+      console.log(`[MoltsPay] POST failed (${postResponse.status}), trying GET...`);
+    } catch (postErr: any) {
+      console.log(`[MoltsPay] POST error: ${postErr.message}, trying GET...`);
+    }
+
+    // Fall back to GET
+    try {
+      const getOptions: RequestInit = {
+        method: 'GET',
+        headers: {
+          ...options.headers,
+        },
+      };
+
+      const getResponse = await mppx.fetch(url, getOptions);
+      
+      if (getResponse.ok) {
+        console.log(`[MoltsPay] GET succeeded`);
+        return parseResponse(getResponse);
+      }
+      
+      const getError = await getResponse.text();
+      throw new Error(`MPP request failed (${getResponse.status}): ${getError}`);
+    } catch (getErr: any) {
+      throw new Error(`MPP request failed: ${getErr.message}`);
+    }
   }
 }

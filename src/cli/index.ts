@@ -12,6 +12,12 @@
  *   npx moltspay start <manifest>  - Start server from services.json
  */
 
+// Polyfill crypto for Node.js 18
+import { webcrypto } from 'crypto';
+if (!globalThis.crypto) {
+  (globalThis as any).crypto = webcrypto;
+}
+
 import { Command } from 'commander';
 import { homedir } from 'os';
 import { join, dirname, resolve } from 'path';
@@ -92,7 +98,7 @@ program
     let chain = options.chain;
     
     // Validate chain
-    const supportedChains = ['base', 'polygon', 'base_sepolia'];
+    const supportedChains = ['base', 'polygon', 'base_sepolia', 'tempo_moderato'];
     if (!supportedChains.includes(chain)) {
       console.error(`❌ Unknown chain: ${chain}. Supported: ${supportedChains.join(', ')}`);
       process.exit(1);
@@ -259,15 +265,23 @@ program
 /**
  * npx moltspay faucet
  * 
- * Request testnet USDC from the MoltsPay faucet (Base Sepolia only)
+ * Request testnet tokens from faucets (Base Sepolia or Tempo Moderato)
  */
 program
   .command('faucet')
-  .description('Request testnet USDC from MoltsPay faucet (Base Sepolia)')
+  .description('Request testnet tokens from faucet (Base Sepolia or Tempo Moderato)')
+  .option('--chain <chain>', 'Chain to get tokens on (base_sepolia or tempo_moderato)', 'base_sepolia')
   .option('--address <address>', 'Wallet address (defaults to your wallet)')
   .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
   .action(async (options) => {
     let address = options.address;
+    const chain = options.chain?.toLowerCase() || 'base_sepolia';
+
+    // Validate chain
+    if (!['base_sepolia', 'tempo_moderato'].includes(chain)) {
+      console.log('❌ Invalid chain. Use: base_sepolia or tempo_moderato');
+      return;
+    }
 
     // If no address provided, try to use initialized wallet
     if (!address) {
@@ -287,44 +301,82 @@ program
     }
 
     console.log('\n🚰 MoltsPay Testnet Faucet\n');
-    console.log(`   Requesting 1 USDC on Base Sepolia...`);
-    console.log(`   Address: ${address}\n`);
 
-    try {
-      const FAUCET_API = process.env.MOLTSPAY_FAUCET_API || 'https://moltspay.com/api/v1/faucet';
-      
-      const response = await fetch(FAUCET_API, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address }),
-      });
+    if (chain === 'tempo_moderato') {
+      // Tempo Moderato faucet
+      console.log(`   Requesting testnet tokens on Tempo Moderato...`);
+      console.log(`   Address: ${address}\n`);
 
-      const result = await response.json() as {
-        success?: boolean;
-        amount?: string;
-        transaction?: string;
-        explorer?: string;
-        faucet_balance?: string;
-        error?: string;
-        hint?: string;
-        retry_after?: string;
-      };
+      try {
+        // Tempo docs faucet API - sends all 4 testnet tokens (pathUSD, AlphaUSD, BetaUSD, ThetaUSD)
+        const TEMPO_FAUCET_API = 'https://docs.tempo.xyz/api/faucet';
+        
+        const response = await fetch(TEMPO_FAUCET_API, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address }),
+        });
 
-      if (!response.ok) {
-        console.log(`❌ ${result.error || 'Request failed'}`);
-        if (result.hint) console.log(`   ${result.hint}`);
-        if (result.retry_after) console.log(`   Retry after: ${result.retry_after}`);
-        return;
+        const result = await response.json() as { data?: { hash: string }[]; error?: string };
+
+        if (response.ok && result.data && result.data.length > 0) {
+          console.log(`✅ Received testnet tokens!\n`);
+          console.log(`   Tokens: pathUSD, AlphaUSD, BetaUSD, ThetaUSD (1M each)`);
+          console.log(`   Transactions:`);
+          for (const tx of result.data) {
+            console.log(`     https://explore.testnet.tempo.xyz/tx/${tx.hash}`);
+          }
+          console.log('\n💡 Use these tokens to test MPP payments:');
+          console.log(`   npx moltspay pay <service-url> <service-id> --chain tempo_moderato\n`);
+        } else {
+          console.log(`❌ ${result.error || 'Faucet request failed'}`);
+          console.log('\n   Try again later or use Tempo Wallet: https://wallet.tempo.xyz\n');
+        }
+      } catch (error) {
+        console.log(`❌ ${(error as Error).message}`);
+        console.log('\n   Try Tempo Wallet instead: https://wallet.tempo.xyz\n');
       }
+    } else {
+      // Base Sepolia faucet (existing)
+      console.log(`   Requesting 1 USDC on Base Sepolia...`);
+      console.log(`   Address: ${address}\n`);
 
-      console.log(`✅ Received ${result.amount} USDC!\n`);
-      console.log(`   Transaction: ${result.transaction}`);
-      console.log(`   Explorer: ${result.explorer}`);
-      console.log(`   Faucet balance: ${result.faucet_balance} USDC remaining\n`);
-      console.log('💡 Use this USDC to test x402 payments:');
-      console.log(`   npx moltspay pay <service-url> <service-id> --chain base_sepolia\n`);
-    } catch (error) {
-      console.log(`❌ ${(error as Error).message}`);
+      try {
+        const FAUCET_API = process.env.MOLTSPAY_FAUCET_API || 'https://moltspay.com/api/v1/faucet';
+        
+        const response = await fetch(FAUCET_API, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address }),
+        });
+
+        const result = await response.json() as {
+          success?: boolean;
+          amount?: string;
+          transaction?: string;
+          explorer?: string;
+          faucet_balance?: string;
+          error?: string;
+          hint?: string;
+          retry_after?: string;
+        };
+
+        if (!response.ok) {
+          console.log(`❌ ${result.error || 'Request failed'}`);
+          if (result.hint) console.log(`   ${result.hint}`);
+          if (result.retry_after) console.log(`   Retry after: ${result.retry_after}`);
+          return;
+        }
+
+        console.log(`✅ Received ${result.amount} USDC!\n`);
+        console.log(`   Transaction: ${result.transaction}`);
+        console.log(`   Explorer: ${result.explorer}`);
+        console.log(`   Faucet balance: ${result.faucet_balance} USDC remaining\n`);
+        console.log('💡 Use this USDC to test x402 payments:');
+        console.log(`   npx moltspay pay <service-url> <service-id> --chain base_sepolia\n`);
+      } catch (error) {
+        console.log(`❌ ${(error as Error).message}`);
+      }
     }
   });
 
@@ -370,8 +422,33 @@ program
       console.log('');
       console.log('   Balances:');
       for (const [chainName, balance] of Object.entries(allBalances)) {
-        const chainLabel = chainName.charAt(0).toUpperCase() + chainName.slice(1);
-        console.log(`     ${chainLabel.padEnd(10)} ${balance.usdc.toFixed(2)} USDC | ${balance.usdt.toFixed(2)} USDT`);
+        // Format chain label nicely
+        let chainLabel: string;
+        if (chainName === 'base_sepolia') {
+          chainLabel = 'Base Sepolia';
+        } else if (chainName === 'tempo_moderato') {
+          chainLabel = 'Tempo Moderato';
+        } else {
+          chainLabel = chainName.charAt(0).toUpperCase() + chainName.slice(1);
+        }
+        
+        // Tempo: show all 4 testnet tokens + native balance
+        if (chainName === 'tempo_moderato' && (balance as any).tempo) {
+          const tempo = (balance as any).tempo;
+          // Format large native balance with scientific notation if needed
+          const nativeStr = balance.native > 1e12 
+            ? balance.native.toExponential(2) 
+            : balance.native.toFixed(2);
+          console.log(`     ${chainLabel}:`);
+          console.log(`       Native:    ${nativeStr} TEMPO (for gas)`);
+          console.log(`       pathUSD:   ${tempo.pathUSD.toFixed(2)}`);
+          console.log(`       alphaUSD:  ${tempo.alphaUSD.toFixed(2)}`);
+          console.log(`       betaUSD:   ${tempo.betaUSD.toFixed(2)}`);
+          console.log(`       thetaUSD:  ${tempo.thetaUSD.toFixed(2)}`);
+        } else {
+          // EVM chains: show USDC/USDT
+          console.log(`     ${chainLabel.padEnd(14)} ${balance.usdc.toFixed(2)} USDC | ${balance.usdt.toFixed(2)} USDT`);
+        }
       }
       console.log('');
       console.log('   Spending Limits:');
@@ -405,8 +482,8 @@ program
     const limit = parseInt(options.limit) || 20;
     const chain = options.chain?.toLowerCase() || 'all';
 
-    if (!['base', 'polygon', 'base_sepolia', 'all'].includes(chain)) {
-      console.log('❌ Invalid chain. Use: base, polygon, base_sepolia, or all');
+    if (!['base', 'polygon', 'base_sepolia', 'tempo_moderato', 'all'].includes(chain)) {
+      console.log('❌ Invalid chain. Use: base, polygon, base_sepolia, tempo_moderato, or all');
       return;
     }
 
@@ -430,9 +507,15 @@ program
         usdc: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
         name: 'Base Sepolia',
       },
+      // Tempo explorer doesn't have public API yet
+      tempo_moderato: {
+        api: '', // No API available
+        usdc: '0x20c0000000000000000000000000000000000000',
+        name: 'Tempo Moderato',
+      },
     };
 
-    const chainsToQuery = chain === 'all' ? ['base', 'polygon', 'base_sepolia'] : [chain];
+    const chainsToQuery = chain === 'all' ? ['base', 'polygon', 'base_sepolia', 'tempo_moderato'] : [chain];
 
     console.log(`\n📜 Transactions (last ${days} day${days > 1 ? 's' : ''})\n`);
 
@@ -443,6 +526,7 @@ program
       amount: number;
       other: string;
       hash: string;
+      token?: string; // Token name (e.g., pathUSD, alphaUSD for Tempo)
     }
 
     let allTxns: TokenTx[] = [];
@@ -451,37 +535,167 @@ program
       const explorer = explorers[c];
       
       try {
-        const url = `${explorer.api}/addresses/${wallet}/token-transfers?type=ERC-20&token=${explorer.usdc}`;
-        const response = await fetch(url);
-        const data = await response.json() as { 
-          items: Array<{
-            timestamp: string;
-            from: { hash: string };
-            to: { hash: string };
-            total: { value: string; decimals: string };
-            transaction_hash: string;
-          }>;
-        };
+        if (c === 'tempo_moderato') {
+          // Tempo: use eth_getLogs RPC instead of Blockscout API
+          const tempoTokens = [
+            { address: '0x20c0000000000000000000000000000000000000', name: 'pathUSD' },
+            { address: '0x20c0000000000000000000000000000000000001', name: 'alphaUSD' },
+            { address: '0x20c0000000000000000000000000000000000002', name: 'betaUSD' },
+            { address: '0x20c0000000000000000000000000000000000003', name: 'thetaUSD' },
+          ];
+          
+          // Transfer event topic: keccak256("Transfer(address,address,uint256)")
+          const transferTopic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+          const walletTopic = '0x000000000000000000000000' + wallet.toLowerCase().slice(2);
+          
+          // Get latest block with retry
+          let latestBlock = 0;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+              const blockRes = await fetch('https://rpc.moderato.tempo.xyz', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_blockNumber', params: [], id: 1 }),
+              });
+              const blockData = await blockRes.json() as { result: string };
+              if (blockData.result) {
+                latestBlock = parseInt(blockData.result, 16);
+                break;
+              }
+            } catch (e) {
+              if (attempt === 2) throw e;
+              await new Promise(r => setTimeout(r, 500)); // Wait 500ms before retry
+            }
+          }
+          
+          if (latestBlock === 0) {
+            console.log('   ⚠️  Tempo Moderato: Could not get latest block');
+            continue;
+          }
+          
+          // Tempo RPC has 100000 block limit, so we can only query ~14 hours back
+          // For longer ranges, we'd need multiple queries (not implemented yet)
+          const maxBlocks = 100000;
+          const blocksPerDay = 172800; // at ~0.5s/block
+          const requestedBlocks = blocksPerDay * days;
+          const actualBlocks = Math.min(requestedBlocks, maxBlocks);
+          const fromBlock = '0x' + Math.max(0, latestBlock - actualBlocks).toString(16);
+          const toBlock = '0x' + latestBlock.toString(16); // Use fixed block to avoid range drift
+          
+          // Note: Tempo RPC has 100k block limit (~14 hours at 0.5s/block)
+          if (requestedBlocks > maxBlocks) {
+            console.log(`   ℹ️  Tempo: querying last ~14 hours (RPC limit: 100k blocks)`);
+          }
+          
+          for (const token of tempoTokens) {
+            try {
+              // Query incoming transfers (to = wallet)
+              const inRes = await fetch('https://rpc.moderato.tempo.xyz', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  jsonrpc: '2.0',
+                  method: 'eth_getLogs',
+                  params: [{ fromBlock, toBlock, address: token.address, topics: [transferTopic, null, walletTopic] }],
+                  id: 1,
+                }),
+              });
+              const inData = await inRes.json() as { result?: Array<{ data: string; topics: string[]; transactionHash: string; blockTimestamp: string }>; error?: { message: string } };
+              
+              if (inData.error) {
+                console.log(`   ⚠️  ${token.name}: ${inData.error.message}`);
+                continue;
+              }
+              
+              if (inData.result && Array.isArray(inData.result)) {
+                for (const log of inData.result) {
+                  const timestamp = parseInt(log.blockTimestamp, 16) * 1000;
+                  if (timestamp < cutoffTime) continue;
+                  const amount = parseInt(log.data, 16) / 1e6;
+                  const from = '0x' + log.topics[1].slice(26);
+                  allTxns.push({
+                    chain: c,
+                    timestamp,
+                    type: 'IN',
+                    amount,
+                    other: from,
+                    hash: log.transactionHash,
+                    token: token.name,
+                  });
+                }
+              }
+              
+              // Query outgoing transfers (from = wallet)
+              const outRes = await fetch('https://rpc.moderato.tempo.xyz', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  jsonrpc: '2.0',
+                  method: 'eth_getLogs',
+                  params: [{ fromBlock, toBlock, address: token.address, topics: [transferTopic, walletTopic, null] }],
+                  id: 1,
+                }),
+              });
+              const outData = await outRes.json() as { result?: Array<{ data: string; topics: string[]; transactionHash: string; blockTimestamp: string }>; error?: { message: string } };
+              
+              if (outData.result && Array.isArray(outData.result)) {
+                for (const log of outData.result) {
+                  const timestamp = parseInt(log.blockTimestamp, 16) * 1000;
+                  if (timestamp < cutoffTime) continue;
+                  const amount = parseInt(log.data, 16) / 1e6;
+                  const to = '0x' + log.topics[2].slice(26);
+                  allTxns.push({
+                    chain: c,
+                    timestamp,
+                    type: 'OUT',
+                    amount,
+                    other: to,
+                    hash: log.transactionHash,
+                    token: token.name,
+                  });
+                }
+              }
+            } catch (tokenError) {
+              // Silently continue to next token if one fails
+              continue;
+            }
+          }
+        } else {
+          // Other chains: use Blockscout API
+          const url = `${explorer.api}/addresses/${wallet}/token-transfers?type=ERC-20&token=${explorer.usdc}`;
+          const response = await fetch(url);
+          const data = await response.json() as { 
+            items: Array<{
+              timestamp: string;
+              from: { hash: string };
+              to: { hash: string };
+              total: { value: string; decimals: string };
+              transaction_hash: string;
+            }>;
+          };
 
-        if (data.items && Array.isArray(data.items)) {
-          for (const tx of data.items) {
-            const timestamp = new Date(tx.timestamp).getTime();
-            if (timestamp < cutoffTime) continue;
+          if (data.items && Array.isArray(data.items)) {
+            for (const tx of data.items) {
+              const timestamp = new Date(tx.timestamp).getTime();
+              if (timestamp < cutoffTime) continue;
 
-            const isIncoming = tx.to.hash.toLowerCase() === wallet.toLowerCase();
-            const decimals = parseInt(tx.total.decimals) || 6;
-            allTxns.push({
-              chain: c,
-              timestamp,
-              type: isIncoming ? 'IN' : 'OUT',
-              amount: parseInt(tx.total.value) / Math.pow(10, decimals),
-              other: isIncoming ? tx.from.hash : tx.to.hash,
-              hash: tx.transaction_hash,
-            });
+              const isIncoming = tx.to.hash.toLowerCase() === wallet.toLowerCase();
+              const decimals = parseInt(tx.total.decimals) || 6;
+              allTxns.push({
+                chain: c,
+                timestamp,
+                type: isIncoming ? 'IN' : 'OUT',
+                amount: parseInt(tx.total.value) / Math.pow(10, decimals),
+                other: isIncoming ? tx.from.hash : tx.to.hash,
+                hash: tx.transaction_hash,
+              });
+            }
           }
         }
       } catch (error) {
-        console.log(`   ⚠️  ${explorer.name}: API error`);
+        // Show error details for debugging
+        const errMsg = error instanceof Error ? error.message : String(error);
+        console.log(`   ⚠️  ${explorer.name}: ${errMsg}`);
       }
     }
 
@@ -499,9 +713,13 @@ program
         const color = tx.type === 'IN' ? '\x1b[32m' : '\x1b[31m';
         const reset = '\x1b[0m';
         const date = new Date(tx.timestamp).toISOString().slice(5, 16).replace('T', ' ');
-        const chainTag = chain === 'all' ? `[${tx.chain.toUpperCase()}] ` : '';
+        let chainLabel = tx.chain.toUpperCase();
+        if (tx.chain === 'tempo_moderato') chainLabel = 'TEMPO';
+        else if (tx.chain === 'base_sepolia') chainLabel = 'BASE_SEPOLIA';
+        const chainTag = chain === 'all' ? `[${chainLabel}] ` : '';
         
-        console.log(`   ${color}${sign}${tx.amount.toFixed(2)} USDC${reset} | ${chainTag}${tx.type === 'IN' ? 'from' : 'to'} ${tx.other.slice(0, 10)}...${tx.other.slice(-4)} | ${date}`);
+        const tokenName = tx.token || 'USDC';
+        console.log(`   ${color}${sign}${tx.amount.toFixed(2)} ${tokenName}${reset} | ${chainTag}${tx.type === 'IN' ? 'from' : 'to'} ${tx.other.slice(0, 10)}...${tx.other.slice(-4)} | ${date}`);
       }
       
       // Summary
@@ -515,51 +733,105 @@ program
  * npx moltspay services <url>
  */
 program
-  .command('services <url>')
-  .description('List services from a provider')
+  .command('services [url]')
+  .description('List services from registry or a specific provider')
+  .option('-q, --query <keyword>', 'Search by keyword (name, description, tags)')
+  .option('--max-price <price>', 'Maximum price in USD')
+  .option('--type <type>', 'Filter by type: api_service | file_download')
+  .option('--tag <tag>', 'Filter by tag')
   .option('--json', 'Output as JSON')
   .action(async (url, options) => {
+    const MOLTSPAY_REGISTRY = 'https://moltspay.com';
+    
     try {
-      const client = new MoltsPayClient();
-      const services = await client.getServices(url);
+      let services: any;
+      let isRegistry = false;
+      
+      if (url) {
+        // Query specific provider
+        const client = new MoltsPayClient();
+        services = await client.getServices(url);
+      } else {
+        // Query MoltsPay registry with filters
+        isRegistry = true;
+        const params = new URLSearchParams();
+        if (options.query) params.set('q', options.query);
+        if (options.maxPrice) params.set('maxPrice', options.maxPrice);
+        if (options.type) params.set('type', options.type);
+        if (options.tag) params.set('tag', options.tag);
+        
+        const queryString = params.toString();
+        const registryUrl = `${MOLTSPAY_REGISTRY}/registry/services${queryString ? '?' + queryString : ''}`;
+        
+        const res = await fetch(registryUrl);
+        if (!res.ok) {
+          throw new Error(`Registry request failed: ${res.status}`);
+        }
+        services = await res.json();
+      }
 
       if (options.json) {
         console.log(JSON.stringify(services, null, 2));
       } else {
-        // Handle both single-provider and marketplace (multi-provider) responses
-        if (services.provider) {
-          // Single provider format
-          console.log(`\n🏪 ${services.provider.name}\n`);
-          console.log(`   ${services.provider.description || ''}`);
-          console.log(`   Wallet: ${services.provider.wallet}`);
+        const serviceList = services.services || [];
+        
+        if (isRegistry) {
+          // Registry listing
+          if (options.query) {
+            console.log(`\n🔍 Search: "${options.query}" (${serviceList.length} results)\n`);
+          } else {
+            const filters = [];
+            if (options.maxPrice) filters.push(`max $${options.maxPrice}`);
+            if (options.type) filters.push(options.type);
+            if (options.tag) filters.push(`#${options.tag}`);
+            const filterStr = filters.length > 0 ? ` (${filters.join(', ')})` : '';
+            console.log(`\n🔍 MoltsPay Registry${filterStr} - ${serviceList.length} services\n`);
+          }
           
-          // Display chains (support both old 'chain' and new 'chains' format)
-          const chains = services.provider.chains 
-            ? (Array.isArray(services.provider.chains) 
-                ? services.provider.chains.map((c: any) => typeof c === 'string' ? c : c.chain).join(', ')
-                : services.provider.chains)
-            : services.provider.chain || 'base';
-          console.log(`   Chains: ${chains}`);
+          // Table-like output for registry
+          for (const svc of serviceList) {
+            const name = (svc.name || svc.id).slice(0, 30).padEnd(30);
+            const price = `$${svc.price}`.padEnd(8);
+            const type = (svc.type || 'unknown').padEnd(14);
+            const provider = `@${svc.provider?.username || 'unknown'}`;
+            console.log(`   ${name} ${price} ${type} ${provider}`);
+          }
+          
+          if (serviceList.length > 0) {
+            console.log(`\n   💡 Use: moltspay pay <provider-url> <service-id>\n`);
+          }
         } else {
-          // Marketplace/registry format (multiple providers)
-          console.log(`\n🏪 MoltsPay Service Registry\n`);
-          console.log(`   ${services.services?.length || 0} services available`);
-        }
-        
-        console.log('\n📦 Services:\n');
-        
-        for (const svc of services.services) {
-          const status = svc.available !== false ? '✅' : '❌';
-          console.log(`   ${status} ${svc.id || svc.name}`);
-          console.log(`      ${svc.name} - $${svc.price} ${svc.currency}`);
-          if (svc.description) {
-            console.log(`      ${svc.description}`);
+          // Single provider format
+          if (services.provider) {
+            console.log(`\n🏪 ${services.provider.name}\n`);
+            console.log(`   ${services.provider.description || ''}`);
+            console.log(`   Wallet: ${services.provider.wallet}`);
+            
+            const chains = services.provider.chains 
+              ? (Array.isArray(services.provider.chains) 
+                  ? services.provider.chains.map((c: any) => typeof c === 'string' ? c : c.chain).join(', ')
+                  : services.provider.chains)
+              : services.provider.chain || 'base';
+            console.log(`   Chains: ${chains}`);
+          } else {
+            console.log(`\n🏪 Provider Services\n`);
+            console.log(`   ${serviceList.length} services available`);
           }
-          // Show provider info for marketplace listings
-          if (svc.provider && !services.provider) {
-            console.log(`      Provider: ${svc.provider.name || svc.provider.username}`);
+          
+          console.log('\n📦 Services:\n');
+          
+          for (const svc of serviceList) {
+            const status = svc.available !== false ? '✅' : '❌';
+            console.log(`   ${status} ${svc.id || svc.name}`);
+            console.log(`      ${svc.name} - $${svc.price} ${svc.currency}`);
+            if (svc.description) {
+              console.log(`      ${svc.description}`);
+            }
+            if (svc.provider && !services.provider) {
+              console.log(`      Provider: ${svc.provider.name || svc.provider.username}`);
+            }
+            console.log('');
           }
-          console.log('');
         }
       }
     } catch (err: any) {
@@ -882,7 +1154,7 @@ program
   .option('--prompt <text>', 'Prompt for the service')
   .option('--image <path>', 'Image URL or local file path')
   .option('--token <token>', 'Token to pay with (USDC or USDT)', 'USDC')
-  .option('--chain <chain>', 'Chain to pay on (base, polygon, or base_sepolia). Required if server accepts multiple chains.')
+  .option('--chain <chain>', 'Chain to pay on (base, polygon, base_sepolia, or tempo_moderato).')
   .option('--json', 'Output raw JSON only')
   .action(async (server, service, paramsJson, options) => {
     const client = new MoltsPayClient();
@@ -928,15 +1200,10 @@ program
       }
     }
 
-    if (!params.prompt) {
-      console.error('❌ Missing prompt. Use --prompt or pass JSON params');
-      process.exit(1);
-    }
-
     // Validate chain option (if specified)
-    const chain = options.chain?.toLowerCase() as 'base' | 'polygon' | 'base_sepolia' | undefined;
-    if (chain && !['base', 'polygon', 'base_sepolia'].includes(chain)) {
-      console.error(`❌ Unknown chain: ${chain}. Supported: base, polygon, base_sepolia`);
+    const chain = options.chain?.toLowerCase() as 'base' | 'polygon' | 'base_sepolia' | 'tempo_moderato' | undefined;
+    if (chain && !['base', 'polygon', 'base_sepolia', 'tempo_moderato'].includes(chain)) {
+      console.error(`❌ Unknown chain: ${chain}. Supported: base, polygon, base_sepolia, tempo_moderato`);
       process.exit(1);
     }
 
@@ -970,10 +1237,29 @@ program
     }
 
     try {
-      const result = await client.pay(server, service, params, { 
-        token: token as 'USDC' | 'USDT',
-        chain
-      });
+      let result: any;
+      
+      if (chain === 'tempo_moderato') {
+        // Use MPP protocol for Tempo
+        if (!options.json) {
+          console.log('   Protocol: MPP (Machine Payments Protocol)');
+          console.log('');
+        }
+        
+        // For MPP, we call the URL directly - the service ID is part of the URL
+        // Format: server/service or just server if service is the full endpoint
+        const mppUrl = server.includes(service) ? server : `${server}/${service}`;
+        
+        result = await client.payWithMPP(mppUrl, {
+          body: params,
+        });
+      } else {
+        // Use existing x402 protocol
+        result = await client.pay(server, service, params, { 
+          token: token as 'USDC' | 'USDT',
+          chain
+        });
+      }
       
       if (options.json) {
         console.log(JSON.stringify(result));
