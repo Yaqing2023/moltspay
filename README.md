@@ -98,21 +98,36 @@ npx moltspay pay https://server.com text-to-video --chain polygon --prompt "a ca
 
 ### Testnet Quick Start
 
-Want to test before using real money? Use our testnet faucet:
+Want to test before using real money? Use our testnet faucets:
 
 ```bash
 # 1. Create wallet (if you don't have one)
 npx moltspay init
 
-# 2. Get free testnet USDC (1 USDC per request, once per 24h)
-npx moltspay faucet
+# 2. Get free testnet tokens
+npx moltspay faucet                        # Base Sepolia (1 USDC, once per 24h)
+npx moltspay faucet --chain tempo_moderato # Tempo testnet (pathUSD)
 
-# 3. Test payments on Base Sepolia
+# 3. Test payments
+# Option A: Base Sepolia
 npx moltspay pay https://moltspay.com/a/yaqing text-to-video \
   --chain base_sepolia --prompt "a robot dancing"
+
+# Option B: Tempo Moderato (gas-free, MPP protocol)
+npx moltspay pay https://server.com service-id \
+  --chain tempo_moderato --prompt "test"
 ```
 
-## How x402 Protocol Works
+## Payment Protocols
+
+MoltsPay supports two payment protocols:
+
+| Protocol | Chains | Gas | Description |
+|----------|--------|-----|-------------|
+| x402 | Base, Polygon, Ethereum | Gasless (CDP pays) | HTTP 402 + EIP-3009 signatures |
+| MPP | Tempo Moderato | Gas-free native | HTTP 402 + WWW-Authenticate |
+
+### How x402 Protocol Works
 
 ```
 Client                         Server                      CDP Facilitator
@@ -137,6 +152,33 @@ Client                         Server                      CDP Facilitator
 ```
 
 **Key insight:** Client signs a payment authorization, server submits it. Neither party pays gas - the CDP facilitator handles settlement.
+
+### How MPP Protocol Works (Tempo)
+
+MPP (Machine Payments Protocol) is simpler - client executes the transfer directly:
+
+```
+Client                         Server
+  │                              │
+  │ POST /service                │
+  │ ─────────────────────────>   │
+  │                              │
+  │ 402 + WWW-Authenticate       │
+  │ <─────────────────────────   │
+  │                              │
+  │ [Execute TIP-20 transfer]    │
+  │ [No gas needed on Tempo]     │
+  │                              │
+  │ POST + Authorization: Payment│
+  │ ─────────────────────────>   │
+  │                              │
+  │ [Server verifies on-chain]   │
+  │                              │
+  │ 200 OK + Payment-Receipt     │
+  │ <─────────────────────────   │
+```
+
+**Key insight:** On Tempo, the client executes the transfer directly (gas-free), then retries with the transaction hash. No CDP facilitator needed.
 
 ## Skill Structure
 
@@ -265,11 +307,21 @@ Clients can then pay using `--chain base_sepolia` and get free testnet USDC via 
 # === Client Commands ===
 npx moltspay init                    # Create wallet
 npx moltspay fund <amount>           # Fund wallet via Coinbase (US)
-npx moltspay faucet                  # Get free testnet USDC (Base Sepolia)
-npx moltspay status                  # Check balance
+npx moltspay faucet                  # Get free testnet USDC
+npx moltspay faucet --chain tempo_moderato  # Get Tempo testnet tokens
+npx moltspay status                  # Check balance (all chains)
 npx moltspay config                  # Update limits
 npx moltspay services <url>          # List provider's services
 npx moltspay pay <url> <service>     # Pay and execute service
+
+# === Service Discovery ===
+npx moltspay services                           # List all from registry
+npx moltspay services https://provider.com      # List from specific provider
+npx moltspay services -q "video"                # Search by keyword
+npx moltspay services --max-price 1.00          # Filter by max price
+npx moltspay services --type api_service        # Filter by type
+npx moltspay services --tag ai                  # Filter by tag
+npx moltspay services --json                    # Output as JSON
 
 # === Pay with Chain Selection ===
 npx moltspay pay <url> <service> --chain base          # Pay on Base (default)
@@ -283,10 +335,11 @@ npx moltspay validate <path>         # Validate manifest
 
 # === Options ===
 --port <port>                        # Server port (default 3000)
---chain <chain>                      # Chain: base, polygon, base_sepolia
+--chain <chain>                      # Chain: base, polygon, base_sepolia, tempo_moderato
 --token <token>                      # Token: USDC, USDT
 --max-per-tx <amount>                # Spending limit per transaction
 --max-per-day <amount>               # Daily spending limit
+--config-dir <dir>                   # Custom wallet directory
 ```
 
 ## Programmatic Usage
@@ -324,12 +377,34 @@ server.listen(3000);
 
 ## Supported Chains
 
-| Chain | ID | Type |
-|-------|-----|------|
-| Base | 8453 | Mainnet |
-| Polygon | 137 | Mainnet |
-| Ethereum | 1 | Mainnet |
-| Base Sepolia | 84532 | Testnet |
+| Chain | ID | Type | Notes |
+|-------|-----|------|-------|
+| Base | 8453 | Mainnet | Primary chain |
+| Polygon | 137 | Mainnet | |
+| Ethereum | 1 | Mainnet | |
+| Base Sepolia | 84532 | Testnet | For testing |
+| Tempo Moderato | 42431 | Testnet | MPP protocol, gas-free |
+
+### Tempo Testnet (New!)
+
+Tempo Moderato is a gas-free testnet that supports the **MPP (Machine Payments Protocol)**. Perfect for testing agent-to-agent payments without any gas fees.
+
+**Tempo Stablecoins:**
+- pathUSD (USDC equivalent): `0x20c0000000000000000000000000000000000000`
+- alphaUSD (USDT equivalent): `0x20c0000000000000000000000000000000000001`
+
+```bash
+# Get free Tempo testnet tokens
+npx moltspay faucet --chain tempo_moderato
+
+# Pay on Tempo (gas-free!)
+npx moltspay pay https://server.com service-id --chain tempo_moderato --prompt "test"
+
+# Check Tempo balance
+npx moltspay status
+```
+
+**Explorer:** https://explore.testnet.tempo.xyz
 
 ## Live Example: Zen7 Video Generation
 
