@@ -39,6 +39,11 @@ const PAYMENT_REQUIRED_HEADER = 'x-payment-required';
 const PAYMENT_HEADER = 'x-payment';
 const PAYMENT_RESPONSE_HEADER = 'x-payment-response';
 
+// MPP (Machine Payments Protocol) constants
+const MPP_AUTH_HEADER = 'authorization';
+const MPP_WWW_AUTH_HEADER = 'www-authenticate';
+const MPP_RECEIPT_HEADER = 'payment-receipt';
+
 // Token contract addresses by network
 const TOKEN_ADDRESSES: Record<string, Record<string, string>> = {
   'eip155:8453': {
@@ -53,6 +58,11 @@ const TOKEN_ADDRESSES: Record<string, Record<string, string>> = {
     USDC: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
     USDT: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F',
   },
+  'eip155:42431': {
+    // Tempo Moderato testnet - TIP-20 stablecoins
+    USDC: '0x20c0000000000000000000000000000000000000', // pathUSD
+    USDT: '0x20c0000000000000000000000000000000000001', // alphaUSD
+  },
 };
 
 // Chain name to network ID mapping
@@ -60,6 +70,7 @@ const CHAIN_TO_NETWORK: Record<string, string> = {
   'base': 'eip155:8453',
   'base_sepolia': 'eip155:84532',
   'polygon': 'eip155:137',
+  'tempo_moderato': 'eip155:42431',
 };
 
 // EIP-712 domain info for tokens (per network)
@@ -79,6 +90,11 @@ const TOKEN_DOMAINS: Record<string, Record<string, { name: string; version: stri
   'eip155:137': {
     USDC: { name: 'USD Coin', version: '2' },
     USDT: { name: '(PoS) Tether USD', version: '2' },
+  },
+  // Tempo Moderato testnet - TIP-20 stablecoins
+  'eip155:42431': {
+    USDC: { name: 'pathUSD', version: '1' },
+    USDT: { name: 'alphaUSD', version: '1' },
   },
 };
 
@@ -168,9 +184,12 @@ export class MoltsPayServer {
     this.networkId = this.useMainnet ? 'eip155:8453' : 'eip155:84532';
 
     // Create facilitator registry with config (env vars take precedence)
+    // Always include 'tempo' in fallback for Tempo testnet support
+    const defaultFallback = ['tempo'];
+    const envFallback = process.env.FACILITATOR_FALLBACK?.split(',').filter(Boolean);
     const facilitatorConfig: FacilitatorSelection = options.facilitators || {
       primary: process.env.FACILITATOR_PRIMARY || 'cdp',
-      fallback: process.env.FACILITATOR_FALLBACK?.split(',').filter(Boolean),
+      fallback: envFallback || defaultFallback,
       strategy: (process.env.FACILITATOR_STRATEGY as any) || 'failover',
       config: {
         cdp: { useMainnet: this.useMainnet },
@@ -283,8 +302,8 @@ export class MoltsPayServer {
     // CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Payment');
-    res.setHeader('Access-Control-Expose-Headers', 'X-Payment-Required, X-Payment-Response');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Payment, Authorization');
+    res.setHeader('Access-Control-Expose-Headers', 'X-Payment-Required, X-Payment-Response, WWW-Authenticate, Payment-Receipt');
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
@@ -325,6 +344,17 @@ export class MoltsPayServer {
         const body = await this.readBody(req);
         const paymentHeader = req.headers[PAYMENT_HEADER] as string | undefined;
         return await this.handleProxy(body, paymentHeader, res);
+      }
+
+      // MPP Protocol: Handle service-specific endpoints like /text-to-video, /ping
+      // Check if URL matches a registered service ID
+      const servicePath = url.pathname.replace(/^\//, ''); // Remove leading slash
+      const skill = this.skills.get(servicePath);
+      if (skill && (req.method === 'POST' || req.method === 'GET')) {
+        const body = req.method === 'POST' ? await this.readBody(req) : {};
+        const authHeader = req.headers[MPP_AUTH_HEADER] as string | undefined;
+        const x402Header = req.headers[PAYMENT_HEADER] as string | undefined;
+        return await this.handleMPPRequest(skill, body, authHeader, x402Header, res);
       }
 
       // Not found
@@ -552,6 +582,266 @@ export class MoltsPayServer {
         ? { transaction: settlement.transaction, status: 'settled', facilitator: settlement.facilitator }
         : { status: 'pending' },
     }, responseHeaders);
+  }
+
+  /**
+   * Handle MPP (Machine Payments Protocol) request
+   * Supports both x402 and MPP protocols on service endpoints
+   */
+  private async handleMPPRequest(
+    skill: RegisteredSkill,
+    body: any,
+    authHeader: string | undefined,
+    x402Header: string | undefined,
+    res: ServerResponse
+  ): Promise<void> {
+    const config = skill.config;
+    const params = body || {};
+
+    // Check for x402 payment header first (backward compatibility)
+    if (x402Header) {
+      return await this.handleExecute({ service: config.id, params }, x402Header, res);
+    }
+
+    // Check for MPP payment credential
+    if (authHeader && authHeader.toLowerCase().startsWith('payment ')) {
+      return await this.handleMPPPayment(skill, params, authHeader, res);
+    }
+
+    // No payment provided - return 402 with both x402 and MPP headers
+    return this.sendMPPPaymentRequired(config, res);
+  }
+
+  /**
+   * Handle MPP payment verification and service execution
+   */
+  private async handleMPPPayment(
+    skill: RegisteredSkill,
+    params: any,
+    authHeader: string,
+    res: ServerResponse
+  ): Promise<void> {
+    const config = skill.config;
+
+    // Parse MPP credential: "Payment <base64>"
+    const credentialMatch = authHeader.match(/Payment\s+(.+)/i);
+    if (!credentialMatch) {
+      return this.sendJson(res, 400, { error: 'Invalid Authorization header format' });
+    }
+
+    let mppCredential: {
+      challenge: {
+        id: string;
+        realm: string;
+        method: string;
+        intent: string;
+        request: any;
+      };
+      payload: {
+        hash?: string;
+        signature?: string;
+        type: 'hash' | 'transaction';
+      };
+      source?: string;
+    };
+    
+    try {
+      // mppx uses base64url encoding without padding
+      const base64 = credentialMatch[1].replace(/-/g, '+').replace(/_/g, '/');
+      const decoded = Buffer.from(base64, 'base64').toString('utf-8');
+      mppCredential = JSON.parse(decoded);
+    } catch (err) {
+      console.error('[MoltsPay] Failed to parse MPP credential:', err);
+      return this.sendJson(res, 400, { error: 'Invalid payment credential encoding' });
+    }
+
+    // Extract transaction hash from payload
+    let txHash: string | undefined;
+    if (mppCredential.payload?.type === 'hash' && mppCredential.payload?.hash) {
+      txHash = mppCredential.payload.hash;
+    } else if (mppCredential.payload?.type === 'transaction') {
+      // For 'transaction' type, server would need to submit the signed tx
+      // For now, we only support 'hash' type (push mode)
+      return this.sendJson(res, 400, { 
+        error: 'Transaction type not supported. Please use push mode (hash type).' 
+      });
+    }
+
+    if (!txHash) {
+      return this.sendJson(res, 400, { error: 'Missing transaction hash in credential' });
+    }
+
+    // Extract chainId from challenge or source
+    let chainId = mppCredential.challenge?.request?.methodDetails?.chainId;
+    if (!chainId && mppCredential.source) {
+      const chainMatch = mppCredential.source.match(/eip155:(\d+)/);
+      if (chainMatch) chainId = parseInt(chainMatch[1], 10);
+    }
+    chainId = chainId || 42431; // Default to Tempo Moderato
+
+    // Determine network from chainId
+    const network = `eip155:${chainId}`;
+
+    if (!this.isNetworkAccepted(network)) {
+      return this.sendJson(res, 402, { 
+        error: `Network not accepted: ${network}` 
+      });
+    }
+
+    // Build requirements for verification
+    const requirements = this.buildPaymentRequirements(
+      config,
+      network,
+      this.getWalletForNetwork(network),
+      'USDC'
+    );
+
+    // Create x402-compatible payload for facilitator
+    const paymentPayload: X402PaymentPayload = {
+      x402Version: X402_VERSION,
+      scheme: 'exact',
+      network,
+      payload: {
+        txHash,
+        chainId,
+      },
+    };
+
+    console.log(`[MoltsPay] Verifying MPP payment: txHash=${txHash}, chainId=${chainId}`);
+
+    // Verify payment using facilitator registry
+    const verification = await this.registry.verify(paymentPayload, requirements);
+    
+    if (!verification.valid) {
+      return this.sendJson(res, 402, { 
+        error: `Payment verification failed: ${verification.error}` 
+      });
+    }
+
+    console.log(`[MoltsPay] Payment verified! Executing service: ${config.id}`);
+
+    // Execute the skill
+    let result: any;
+    try {
+      result = await skill.handler(params);
+    } catch (err: any) {
+      console.error(`[MoltsPay] Skill execution error:`, err);
+      return this.sendJson(res, 500, { 
+        error: `Service execution failed: ${err.message}` 
+      });
+    }
+
+    // Build receipt
+    const receipt = {
+      success: true,
+      txHash,
+      network,
+      facilitator: verification.facilitator,
+    };
+    const receiptEncoded = Buffer.from(JSON.stringify(receipt)).toString('base64');
+
+    // Return success with MPP receipt header
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      [MPP_RECEIPT_HEADER]: receiptEncoded,
+    });
+    res.end(JSON.stringify({
+      success: true,
+      result,
+      payment: {
+        txHash,
+        status: 'verified',
+        facilitator: verification.facilitator,
+      },
+    }, null, 2));
+  }
+
+  /**
+   * Return 402 with both x402 and MPP payment requirements
+   */
+  private sendMPPPaymentRequired(config: ServiceConfig, res: ServerResponse): void {
+    const acceptedTokens = getAcceptedCurrencies(config);
+    const providerChains = this.getProviderChains();
+    
+    // === x402 format (existing) ===
+    const accepts: X402PaymentRequirements[] = [];
+    for (const chainConfig of providerChains) {
+      for (const token of acceptedTokens) {
+        if (chainConfig.tokens.includes(token)) {
+          accepts.push(this.buildPaymentRequirements(config, chainConfig.network, chainConfig.wallet, token));
+        }
+      }
+    }
+
+    const x402PaymentRequired = {
+      x402Version: X402_VERSION,
+      accepts,
+      acceptedCurrencies: acceptedTokens,
+      resource: {
+        url: `/${config.id}`,
+        description: `${config.name} - $${config.price} ${config.currency}`,
+      },
+    };
+    const x402Encoded = Buffer.from(JSON.stringify(x402PaymentRequired)).toString('base64');
+
+    // === MPP format ===
+    // Find Tempo chain if available
+    const tempoChain = providerChains.find(c => c.network === 'eip155:42431');
+    
+    let mppWwwAuth = '';
+    if (tempoChain) {
+      const challengeId = this.generateChallengeId();
+      const amountInUnits = Math.floor(config.price * 1e6).toString();
+      const tokenAddress = TOKEN_ADDRESSES['eip155:42431']?.USDC || '0x20c0000000000000000000000000000000000000';
+      
+      const mppRequest = {
+        amount: amountInUnits,
+        currency: tokenAddress,
+        methodDetails: {
+          chainId: 42431,
+          feePayer: true,
+        },
+        recipient: tempoChain.wallet,
+      };
+      const mppRequestEncoded = Buffer.from(JSON.stringify(mppRequest)).toString('base64');
+      
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+      
+      mppWwwAuth = `Payment id="${challengeId}", realm="${this.manifest.provider.name}", method="tempo", intent="charge", request="${mppRequestEncoded}", description="${config.name}", expires="${expiresAt}"`;
+    }
+
+    // Build response headers
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/problem+json',
+      [PAYMENT_REQUIRED_HEADER]: x402Encoded,
+    };
+    
+    if (mppWwwAuth) {
+      headers[MPP_WWW_AUTH_HEADER] = mppWwwAuth;
+    }
+
+    res.writeHead(402, headers);
+    res.end(JSON.stringify({
+      type: 'https://paymentauth.org/problems/payment-required',
+      title: 'Payment Required',
+      status: 402,
+      detail: `Payment is required (${config.name}).`,
+      service: config.id,
+      price: config.price,
+      currency: config.currency,
+      acceptedCurrencies: acceptedTokens,
+    }, null, 2));
+  }
+
+  /**
+   * Generate a unique challenge ID for MPP
+   */
+  private generateChallengeId(): string {
+    const bytes = new Uint8Array(24);
+    for (let i = 0; i < bytes.length; i++) {
+      bytes[i] = Math.floor(Math.random() * 256);
+    }
+    return Buffer.from(bytes).toString('base64url');
   }
 
   /**

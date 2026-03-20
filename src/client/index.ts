@@ -691,12 +691,13 @@ export class MoltsPayClient {
   }
 
   /**
-   * Pay for a service using Tempo MPP protocol
+   * Pay for a service using MPP (Machine Payments Protocol)
    * 
-   * This uses the Machine Payments Protocol (MPP) for Tempo network.
-   * The mppx library handles 402 challenges automatically.
-   * 
-   * Tries POST first, falls back to GET if POST fails.
+   * This implements the MPP flow manually for EOA wallets:
+   * 1. Request service → get 402 with WWW-Authenticate
+   * 2. Parse payment requirements
+   * 3. Execute transfer on Tempo chain
+   * 4. Retry with transaction hash as credential
    * 
    * @param url - Full URL of the MPP-enabled endpoint
    * @param options - Request options (body, headers)
@@ -715,80 +716,144 @@ export class MoltsPayClient {
 
     // Dynamic imports for ESM-only packages
     const { privateKeyToAccount } = await import('viem/accounts');
-    const { Mppx, tempo } = await import('mppx/client');
+    const { createWalletClient, createPublicClient, http } = await import('viem');
+    const { tempoModerato } = await import('viem/chains');
+    const { Actions } = await import('viem/tempo');
 
     // Get private key from wallet data
     const privateKey = this.walletData.privateKey as `0x${string}`;
-    
-    // Create viem account from private key
     const account = privateKeyToAccount(privateKey);
-    
-    // Create mppx client with tempo method
-    const mppx = Mppx.create({
-      methods: [tempo({ account })],
-      polyfill: false, // Don't polyfill global fetch
-    });
 
     console.log(`[MoltsPay] Making MPP request to: ${url}`);
     console.log(`[MoltsPay] Using account: ${account.address}`);
 
-    // Helper to parse response
-    const parseResponse = async (response: Response) => {
-      const contentType = response.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        return response.json();
+    // Step 1: Initial request to get 402 with payment requirements
+    const initResponse = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...options.headers,
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+
+    // If not 402, handle directly
+    if (initResponse.status !== 402) {
+      if (initResponse.ok) {
+        return initResponse.json();
       }
-      return response.text();
+      const errorText = await initResponse.text();
+      throw new Error(`Request failed (${initResponse.status}): ${errorText}`);
+    }
+
+    // Step 2: Parse WWW-Authenticate header
+    const wwwAuth = initResponse.headers.get('www-authenticate');
+    if (!wwwAuth || !wwwAuth.toLowerCase().includes('payment')) {
+      throw new Error('No WWW-Authenticate Payment challenge in 402 response');
+    }
+
+    console.log(`[MoltsPay] Got 402, parsing payment challenge...`);
+
+    // Parse WWW-Authenticate: Payment id="...", method="tempo", request="..."
+    const parseAuthParam = (header: string, key: string): string | null => {
+      const match = header.match(new RegExp(`${key}="([^"]+)"`, 'i'));
+      return match ? match[1] : null;
     };
 
-    // Try POST first
-    console.log(`[MoltsPay] Trying POST...`);
-    try {
-      const postOptions: RequestInit = {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...options.headers,
-        },
-      };
-      if (options.body) {
-        postOptions.body = JSON.stringify(options.body);
-      }
+    const challengeId = parseAuthParam(wwwAuth, 'id');
+    const method = parseAuthParam(wwwAuth, 'method');
+    const realm = parseAuthParam(wwwAuth, 'realm');
+    const requestB64 = parseAuthParam(wwwAuth, 'request');
 
-      const postResponse = await mppx.fetch(url, postOptions);
-      
-      if (postResponse.ok) {
-        console.log(`[MoltsPay] POST succeeded`);
-        return parseResponse(postResponse);
-      }
-      
-      // Check if it's a method not allowed error (405) or similar
-      const postError = await postResponse.text();
-      console.log(`[MoltsPay] POST failed (${postResponse.status}), trying GET...`);
-    } catch (postErr: any) {
-      console.log(`[MoltsPay] POST error: ${postErr.message}, trying GET...`);
+    if (method !== 'tempo') {
+      throw new Error(`Unsupported payment method: ${method}`);
     }
 
-    // Fall back to GET
-    try {
-      const getOptions: RequestInit = {
-        method: 'GET',
-        headers: {
-          ...options.headers,
-        },
-      };
-
-      const getResponse = await mppx.fetch(url, getOptions);
-      
-      if (getResponse.ok) {
-        console.log(`[MoltsPay] GET succeeded`);
-        return parseResponse(getResponse);
-      }
-      
-      const getError = await getResponse.text();
-      throw new Error(`MPP request failed (${getResponse.status}): ${getError}`);
-    } catch (getErr: any) {
-      throw new Error(`MPP request failed: ${getErr.message}`);
+    if (!requestB64) {
+      throw new Error('Missing request in WWW-Authenticate');
     }
+
+    // Decode payment request
+    const requestJson = Buffer.from(requestB64, 'base64').toString('utf-8');
+    const paymentRequest = JSON.parse(requestJson);
+    
+    console.log(`[MoltsPay] Payment request:`, paymentRequest);
+
+    const { amount, currency, recipient, methodDetails } = paymentRequest;
+    const chainId = methodDetails?.chainId || 42431;
+
+    // Step 3: Execute transfer on Tempo
+    console.log(`[MoltsPay] Executing transfer on Tempo (chainId: ${chainId})...`);
+    console.log(`[MoltsPay] Amount: ${amount}, To: ${recipient}`);
+
+    // Create viem client for Tempo (with feeToken for gas-free transactions)
+    const tempoChain = { ...tempoModerato, feeToken: currency as `0x${string}` };
+    
+    const publicClient = createPublicClient({
+      chain: tempoChain,
+      transport: http('https://rpc.moderato.tempo.xyz'),
+    });
+
+    const walletClient = createWalletClient({
+      account,
+      chain: tempoChain,
+      transport: http('https://rpc.moderato.tempo.xyz'),
+    });
+
+    // Use viem's Tempo Actions for TIP-20 transfer
+    const txHash = await Actions.token.transfer(walletClient, {
+      to: recipient as `0x${string}`,
+      amount: BigInt(amount),
+      token: currency as `0x${string}`,
+    });
+
+    console.log(`[MoltsPay] Transaction sent: ${txHash}`);
+
+    // Wait for confirmation
+    console.log(`[MoltsPay] Waiting for confirmation...`);
+    await publicClient.waitForTransactionReceipt({ hash: txHash });
+    console.log(`[MoltsPay] Transaction confirmed!`);
+
+    // Step 4: Build credential and retry
+    const challenge = {
+      id: challengeId,
+      realm,
+      method: 'tempo',
+      intent: 'charge',
+      request: paymentRequest,
+    };
+
+    const credential = {
+      challenge,
+      payload: { hash: txHash, type: 'hash' },
+      source: `did:pkh:eip155:${chainId}:${account.address}`,
+    };
+
+    const credentialB64 = Buffer.from(JSON.stringify(credential))
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, ''); // base64url without padding
+
+    console.log(`[MoltsPay] Retrying with payment credential...`);
+
+    // Retry with credential
+    const paidResponse = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Payment ${credentialB64}`,
+        ...options.headers,
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+
+    if (!paidResponse.ok) {
+      const errorText = await paidResponse.text();
+      throw new Error(`Payment verification failed (${paidResponse.status}): ${errorText}`);
+    }
+
+    console.log(`[MoltsPay] Payment verified! Service completed.`);
+    return paidResponse.json();
   }
 }

@@ -42,6 +42,11 @@ export {
   CDPFacilitatorConfig,
 } from './cdp.js';
 
+// Tempo Facilitator
+export {
+  TempoFacilitator,
+} from './tempo.js';
+
 // Registry
 export {
   FacilitatorRegistry,

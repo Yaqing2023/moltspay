@@ -15,6 +15,7 @@ import {
   HealthCheckResult,
 } from './interface.js';
 import { CDPFacilitator, CDPFacilitatorConfig } from './cdp.js';
+import { TempoFacilitator } from './tempo.js';
 
 /**
  * Selection strategy for choosing facilitators
@@ -59,9 +60,10 @@ export class FacilitatorRegistry {
   constructor(selection?: FacilitatorSelection) {
     // Register built-in facilitators
     this.registerFactory('cdp', (config) => new CDPFacilitator(config as CDPFacilitatorConfig));
+    this.registerFactory('tempo', () => new TempoFacilitator());
     
     // Default selection
-    this.selection = selection || { primary: 'cdp', strategy: 'failover' };
+    this.selection = selection || { primary: 'cdp', fallback: ['tempo'], strategy: 'failover' };
   }
   
   /**

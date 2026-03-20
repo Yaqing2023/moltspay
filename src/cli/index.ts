@@ -1155,9 +1155,10 @@ program
   .option('--image <path>', 'Image URL or local file path')
   .option('--token <token>', 'Token to pay with (USDC or USDT)', 'USDC')
   .option('--chain <chain>', 'Chain to pay on (base, polygon, base_sepolia, or tempo_moderato).')
+  .option('--config-dir <dir>', 'Config directory with wallet.json', DEFAULT_CONFIG_DIR)
   .option('--json', 'Output raw JSON only')
   .action(async (server, service, paramsJson, options) => {
-    const client = new MoltsPayClient();
+    const client = new MoltsPayClient({ configDir: options.configDir });
 
     if (!client.isInitialized) {
       console.error('❌ Wallet not initialized. Run: npx moltspay init');
