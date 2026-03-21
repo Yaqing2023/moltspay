@@ -63,6 +63,13 @@ const TOKEN_ADDRESSES: Record<string, Record<string, string>> = {
     USDC: '0x20c0000000000000000000000000000000000000', // pathUSD
     USDT: '0x20c0000000000000000000000000000000000001', // alphaUSD
   },
+  // Solana networks use mint addresses (SPL tokens)
+  'solana:mainnet': {
+    USDC: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // Circle USDC
+  },
+  'solana:devnet': {
+    USDC: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU', // Devnet USDC
+  },
 };
 
 // Chain name to network ID mapping
@@ -71,7 +78,16 @@ const CHAIN_TO_NETWORK: Record<string, string> = {
   'base_sepolia': 'eip155:84532',
   'polygon': 'eip155:137',
   'tempo_moderato': 'eip155:42431',
+  'bnb': 'eip155:56',
+  'bnb_testnet': 'eip155:97',
+  'solana': 'solana:mainnet',
+  'solana_devnet': 'solana:devnet',
 };
+
+// Helper to check if a network is Solana
+function isSolanaNetwork(network: string): boolean {
+  return network.startsWith('solana:');
+}
 
 // EIP-712 domain info for tokens (per network)
 // Different networks may have different domain names for the same token
@@ -95,6 +111,16 @@ const TOKEN_DOMAINS: Record<string, Record<string, { name: string; version: stri
   'eip155:42431': {
     USDC: { name: 'pathUSD', version: '1' },
     USDT: { name: 'alphaUSD', version: '1' },
+  },
+  // BNB Smart Chain mainnet
+  'eip155:56': {
+    USDC: { name: 'USD Coin', version: '1' },
+    USDT: { name: 'Tether USD', version: '1' },
+  },
+  // BNB Smart Chain testnet
+  'eip155:97': {
+    USDC: { name: 'USD Coin', version: '1' },
+    USDT: { name: 'Tether USD', version: '1' },
   },
 };
 
@@ -184,8 +210,8 @@ export class MoltsPayServer {
     this.networkId = this.useMainnet ? 'eip155:8453' : 'eip155:84532';
 
     // Create facilitator registry with config (env vars take precedence)
-    // Always include 'tempo' in fallback for Tempo testnet support
-    const defaultFallback = ['tempo'];
+    // Always include 'tempo', 'bnb', and 'solana' in fallback for multi-chain support
+    const defaultFallback = ['tempo', 'bnb', 'solana'];
     const envFallback = process.env.FACILITATOR_FALLBACK?.split(',').filter(Boolean);
     const facilitatorConfig: FacilitatorSelection = options.facilitators || {
       primary: process.env.FACILITATOR_PRIMARY || 'cdp',
@@ -237,14 +263,27 @@ export class MoltsPayServer {
   private getProviderChains(): Array<{ network: string; wallet: string; tokens: string[] }> {
     const provider = this.manifest.provider;
     
+    // Helper to get the right wallet for a chain
+    const getWalletForChain = (chainName: string, explicitWallet?: string): string => {
+      // If explicit wallet provided (object format), use it
+      if (explicitWallet) return explicitWallet;
+      // For Solana chains, use solana_wallet if available
+      if ((chainName === 'solana' || chainName === 'solana_devnet') && provider.solana_wallet) {
+        return provider.solana_wallet;
+      }
+      // Default to EVM wallet
+      return provider.wallet;
+    };
+    
     // If chains array is defined, use it
     // Supports both string array ["base", "polygon"] and object array [{chain, wallet, tokens}]
     if (provider.chains && provider.chains.length > 0) {
       return provider.chains.map(c => {
         const chainName = typeof c === 'string' ? c : c.chain;
+        const explicitWallet = typeof c === 'object' ? c.wallet : null;
         return {
           network: CHAIN_TO_NETWORK[chainName] || 'eip155:8453',
-          wallet: (typeof c === 'object' ? c.wallet : null) || provider.wallet,
+          wallet: getWalletForChain(chainName, explicitWallet || undefined),
           tokens: (typeof c === 'object' ? c.tokens : null) || ['USDC'],
         };
       });
@@ -255,7 +294,7 @@ export class MoltsPayServer {
     const network = CHAIN_TO_NETWORK[chain] || this.networkId;
     return [{
       network,
-      wallet: provider.wallet,
+      wallet: getWalletForChain(chain),
       tokens: ['USDC'],
     }];
   }
@@ -1068,21 +1107,28 @@ export class MoltsPayServer {
       return this.sendJson(res, 400, { error: 'Missing required fields: wallet, amount' });
     }
 
-    // Validate wallet format
-    if (!/^0x[a-fA-F0-9]{40}$/.test(wallet)) {
-      return this.sendJson(res, 400, { error: 'Invalid wallet address format' });
+    // Validate chain if provided
+    const supportedChains = ['base', 'polygon', 'base_sepolia', 'tempo_moderato', 'bnb', 'bnb_testnet', 'solana', 'solana_devnet'];
+    if (chain && !supportedChains.includes(chain)) {
+      return this.sendJson(res, 400, { error: `Unsupported chain: ${chain}. Supported: ${supportedChains.join(', ')}` });
+    }
+
+    // Validate wallet format based on chain
+    const isSolanaChain = chain === 'solana' || chain === 'solana_devnet';
+    const isValidEvmAddress = /^0x[a-fA-F0-9]{40}$/.test(wallet);
+    const isValidSolanaAddress = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(wallet);
+    
+    if (isSolanaChain && !isValidSolanaAddress) {
+      return this.sendJson(res, 400, { error: 'Invalid Solana wallet address format' });
+    }
+    if (!isSolanaChain && !isValidEvmAddress) {
+      return this.sendJson(res, 400, { error: 'Invalid EVM wallet address format' });
     }
 
     // Validate amount
     const amountNum = parseFloat(amount);
     if (isNaN(amountNum) || amountNum <= 0) {
       return this.sendJson(res, 400, { error: 'Invalid amount' });
-    }
-    
-    // Validate chain if provided
-    const supportedChains = ['base', 'polygon', 'base_sepolia', 'tempo_moderato'];
-    if (chain && !supportedChains.includes(chain)) {
-      return this.sendJson(res, 400, { error: `Unsupported chain: ${chain}. Supported: ${supportedChains.join(', ')}` });
     }
 
     // Build a synthetic service config for payment

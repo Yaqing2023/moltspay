@@ -3,7 +3,7 @@
  */
 
 import { ethers } from 'ethers';
-import { getChain, getChainById, type ChainConfig, type ChainName, type TokenSymbol } from '../chains';
+import { getChain, getChainById, type ChainConfig, type EvmChainName, type TokenSymbol } from '../chains';
 
 // ERC20 Transfer event signature
 const TRANSFER_EVENT_TOPIC = ethers.id('Transfer(address,address,uint256)');
@@ -41,7 +41,7 @@ export async function verifyPayment(params: VerifyPaymentParams): Promise<Verify
     if (typeof params.chain === 'number') {
       chain = getChainById(params.chain);
     } else {
-      chain = getChain((params.chain || 'base') as ChainName);
+      chain = getChain((params.chain || 'base') as EvmChainName);
     }
     if (!chain) {
       return { verified: false, error: `Unsupported chain: ${params.chain}` };
@@ -151,7 +151,7 @@ export async function getTransactionStatus(
 }> {
   let chainConfig: ChainConfig | undefined;
   try {
-    chainConfig = typeof chain === 'number' ? getChainById(chain) : getChain(chain as ChainName);
+    chainConfig = typeof chain === 'number' ? getChainById(chain) : getChain(chain as EvmChainName);
     if (!chainConfig) return { status: 'not_found' };
   } catch {
     return { status: 'not_found' };
@@ -201,7 +201,7 @@ export async function waitForTransaction(
 ): Promise<VerifyPaymentResult & { confirmed: boolean }> {
   let chainConfig: ChainConfig | undefined;
   try {
-    chainConfig = typeof chain === 'number' ? getChainById(chain) : getChain(chain as ChainName);
+    chainConfig = typeof chain === 'number' ? getChainById(chain) : getChain(chain as EvmChainName);
     if (!chainConfig) {
       return { verified: false, confirmed: false, error: `Unsupported chain: ${chain}` };
     }

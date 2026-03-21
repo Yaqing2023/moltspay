@@ -16,6 +16,8 @@ import {
 } from './interface.js';
 import { CDPFacilitator, CDPFacilitatorConfig } from './cdp.js';
 import { TempoFacilitator } from './tempo.js';
+import { BNBFacilitator } from './bnb.js';
+import { SolanaFacilitator } from './solana.js';
 
 /**
  * Selection strategy for choosing facilitators
@@ -61,9 +63,11 @@ export class FacilitatorRegistry {
     // Register built-in facilitators
     this.registerFactory('cdp', (config) => new CDPFacilitator(config as CDPFacilitatorConfig));
     this.registerFactory('tempo', () => new TempoFacilitator());
+    this.registerFactory('bnb', (config) => new BNBFacilitator(config?.serverPrivateKey as string));
+    this.registerFactory('solana', () => new SolanaFacilitator());
     
     // Default selection
-    this.selection = selection || { primary: 'cdp', fallback: ['tempo'], strategy: 'failover' };
+    this.selection = selection || { primary: 'cdp', fallback: ['tempo', 'bnb', 'solana'], strategy: 'failover' };
   }
   
   /**

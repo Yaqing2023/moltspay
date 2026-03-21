@@ -9,7 +9,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import type { ChainName } from '../types/index.js';
+import type { EvmChainName } from '../types/index.js';
 import { getChain } from '../chains/index.js';
 
 // CDP config file location
@@ -20,7 +20,7 @@ export interface CDPWalletConfig {
   /** Storage directory (default: ~/.moltspay) */
   storageDir?: string;
   /** Chain name */
-  chain?: ChainName;
+  chain?: EvmChainName;
   /** CDP API credentials (or use env vars) */
   apiKeyId?: string;
   apiKeySecret?: string;
@@ -33,7 +33,7 @@ export interface CDPWalletData {
   /** CDP wallet ID */
   walletId: string;
   /** Chain */
-  chain: ChainName;
+  chain: EvmChainName;
   /** Created timestamp */
   createdAt: string;
   /** CDP account data (for restoration) */
@@ -210,7 +210,7 @@ export function getCDPWalletAddress(storageDir?: string): string | null {
  */
 export class CDPWallet {
   readonly address: string;
-  readonly chain: ChainName;
+  readonly chain: EvmChainName;
   readonly chainConfig: ReturnType<typeof getChain>;
   private storageDir: string;
 

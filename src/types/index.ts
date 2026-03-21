@@ -25,9 +25,33 @@ export interface ChainConfig {
   explorer: string;
   explorerTx: string;
   avgBlockTime: number;
+  /** If true, requires one-time approval for pay-for-success flow (e.g., BNB) */
+  requiresApproval?: boolean;
 }
 
-export type ChainName = 'base' | 'polygon' | 'base_sepolia' | 'tempo_moderato';
+export type EvmChainName = 'base' | 'polygon' | 'base_sepolia' | 'tempo_moderato' | 'bnb' | 'bnb_testnet';
+export type SolanaChainName = 'solana' | 'solana_devnet';
+export type ChainName = EvmChainName | SolanaChainName;
+
+// Chain family detection
+export type ChainFamily = 'evm' | 'svm';
+
+/**
+ * Get the chain family (EVM or SVM) for a given chain
+ */
+export function getChainFamily(chain: ChainName): ChainFamily {
+  if (chain === 'solana' || chain === 'solana_devnet') {
+    return 'svm';
+  }
+  return 'evm';
+}
+
+/**
+ * Check if a chain is a Solana chain
+ */
+export function isSolanaChain(chain: ChainName): boolean {
+  return chain === 'solana' || chain === 'solana_devnet';
+}
 
 // ============ Invoice Protocol ============
 

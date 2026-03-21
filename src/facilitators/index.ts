@@ -47,6 +47,20 @@ export {
   TempoFacilitator,
 } from './tempo.js';
 
+// BNB Facilitator
+export {
+  BNBFacilitator,
+  BNBPaymentIntent,
+  createIntentTypedData,
+} from './bnb.js';
+
+// Solana Facilitator
+export {
+  SolanaFacilitator,
+  createSolanaPaymentTransaction,
+  type SolanaPaymentPayload,
+} from './solana.js';
+
 // Registry
 export {
   FacilitatorRegistry,

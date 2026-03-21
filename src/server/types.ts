@@ -50,6 +50,7 @@ export interface ProviderConfig {
   name: string;
   description?: string;
   wallet: string;
+  solana_wallet?: string;  // Solana chains receiving wallet
   chain?: string;  // Single chain (backward compat)
   chains?: ChainConfig[];  // Multi-chain support
 }

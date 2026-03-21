@@ -52,7 +52,10 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "@solana/spl-token": "^0.4.14",
+    "@solana/web3.js": "^1.98.4",
     "@x402/fetch": "^2.7.0",
+    "bs58": "^6.0.0",
     "commander": "^12.0.0",
     "dotenv": "^17.3.1",
     "ethers": "^6.11.0",

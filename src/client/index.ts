@@ -13,7 +13,11 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, chmodSync
 import { homedir } from 'os';
 import { join } from 'path';
 import { Wallet, ethers } from 'ethers';
-import { getChain, type ChainName, type TokenSymbol } from '../chains/index.js';
+import { getChain, type ChainName, type EvmChainName, type TokenSymbol, type ChainConfig } from '../chains/index.js';
+import { SOLANA_CHAINS, type SolanaChainName } from '../chains/solana.js';
+import { loadSolanaWallet, getSolanaAddress } from '../wallet/solana.js';
+import { createSolanaPaymentTransaction } from '../facilitators/solana.js';
+import { Connection, PublicKey, Keypair } from '@solana/web3.js';
 import {
   ClientConfig,
   WalletData,
@@ -28,8 +32,8 @@ export interface PayOptions {
   token?: TokenSymbol;
   /** Auto-select token based on balance (default: false) */
   autoSelect?: boolean;
-  /** Chain to pay on (base, polygon, base_sepolia, or tempo_moderato) */
-  chain?: 'base' | 'polygon' | 'base_sepolia' | 'tempo_moderato';
+  /** Chain to pay on */
+  chain?: 'base' | 'polygon' | 'base_sepolia' | 'tempo_moderato' | 'bnb' | 'bnb_testnet' | 'solana' | 'solana_devnet';
 }
 
 // x402 constants
@@ -100,6 +104,13 @@ export class MoltsPayClient {
    */
   get address(): string | null {
     return this.wallet?.address || null;
+  }
+
+  /**
+   * Get wallet instance (for direct operations like approvals)
+   */
+  getWallet(): Wallet | null {
+    return this.wallet;
   }
 
   /**
@@ -228,6 +239,11 @@ export class MoltsPayClient {
 
     // Helper to convert network ID to chain name
     const networkToChainName = (network: string): string | null => {
+      // Handle Solana networks
+      if (network === 'solana:mainnet') return 'solana';
+      if (network === 'solana:devnet') return 'solana_devnet';
+      
+      // Handle EVM networks
       const match = network.match(/^eip155:(\d+)$/);
       if (!match) return null;
       const chainId = parseInt(match[1]);
@@ -235,6 +251,8 @@ export class MoltsPayClient {
       if (chainId === 137) return 'polygon';
       if (chainId === 84532) return 'base_sepolia';
       if (chainId === 42431) return 'tempo_moderato';
+      if (chainId === 56) return 'bnb';
+      if (chainId === 97) return 'bnb_testnet';
       return null;
     };
 
@@ -244,8 +262,8 @@ export class MoltsPayClient {
       .filter((c): c is string => c !== null);
 
     // Determine which chain to use
-    let chainName: ChainName;
     const userSpecifiedChain = options.chain;
+    let selectedChain: string;
 
     if (userSpecifiedChain) {
       // User specified --chain, validate it's accepted by server
@@ -255,20 +273,35 @@ export class MoltsPayClient {
           `Server accepts: ${serverChains.join(', ')}`
         );
       }
-      chainName = userSpecifiedChain as ChainName;
+      selectedChain = userSpecifiedChain;
     } else {
       // No --chain provided
       if (serverChains.length === 1 && serverChains[0] === 'base') {
         // Only default to base if server ONLY accepts base
-        chainName = 'base';
+        selectedChain = 'base';
       } else {
         throw new Error(
           `Server accepts: ${serverChains.join(', ')}\n` +
-          `Please specify: --chain base, --chain polygon, --chain base_sepolia, or --chain tempo_moderato`
+          `Please specify: --chain <chain_name>`
         );
       }
     }
 
+    // Handle Solana chains separately
+    if (selectedChain === 'solana' || selectedChain === 'solana_devnet') {
+      const solanaChain = selectedChain as SolanaChainName;
+      const network = solanaChain === 'solana' ? 'solana:mainnet' : 'solana:devnet';
+      const req = requirements.find(r => r.network === network);
+      
+      if (!req) {
+        throw new Error(`Failed to find payment requirement for ${selectedChain}`);
+      }
+      
+      return await this.handleSolanaPayment(serverUrl, service, params, req, solanaChain);
+    }
+
+    // EVM chain handling
+    const chainName = selectedChain as EvmChainName;
     const chain = getChain(chainName);
     const network = `eip155:${chain.chainId}`;
     const req = requirements.find(r => r.scheme === 'exact' && r.network === network);
@@ -315,6 +348,22 @@ export class MoltsPayClient {
       console.log(`[MoltsPay] ⚠️  USDT requires gas (~$0.01). Proceeding with payment...`);
     } else {
       console.log(`[MoltsPay] Signing payment: $${amount} ${token} (gasless)`);
+    }
+
+    // BNB chains use intent-based flow (pre-approval + intent signature)
+    if (chainName === 'bnb' || chainName === 'bnb_testnet') {
+      console.log(`[MoltsPay] Using BNB intent-based payment flow...`);
+      const payTo = req.payTo || req.resource;
+      if (!payTo) {
+        throw new Error('Missing payTo address in payment requirements');
+      }
+      return await this.handleBNBPayment(serverUrl, service, params, {
+        to: payTo,
+        amount,
+        token,
+        chainName,
+        chain,
+      });
     }
 
     // Step 4: Sign EIP-3009 authorization (GASLESS - just signing)
@@ -513,6 +562,219 @@ export class MoltsPayClient {
     this.recordSpending(amountDisplay);
 
     console.log(`[MoltsPay] Success!`);
+    return result.result || result;
+  }
+
+  /**
+   * Handle BNB Chain payment flow (pre-approval + intent signature)
+   * 
+   * Flow:
+   * 1. Check client has approved server wallet (done via `moltspay init`)
+   * 2. Sign EIP-712 payment intent (no gas, just signature)
+   * 3. Send intent to server
+   * 4. Server executes service
+   * 5. Server calls transferFrom if successful (pay-for-success)
+   */
+  private async handleBNBPayment(
+    serverUrl: string,
+    service: string,
+    params: Record<string, any>,
+    paymentDetails: {
+      to: string;
+      amount: number;
+      token: TokenSymbol;
+      chainName: ChainName;
+      chain: ChainConfig;
+    }
+  ): Promise<Record<string, any>> {
+    const { to, amount, token, chainName, chain } = paymentDetails;
+    const tokenConfig = chain.tokens[token];
+    
+    // Convert amount to wei (BNB uses 18 decimals)
+    const amountWei = BigInt(Math.floor(amount * (10 ** tokenConfig.decimals))).toString();
+    
+    // Create payment intent
+    const intent = {
+      from: this.wallet!.address,
+      to,
+      amount: amountWei,
+      token: tokenConfig.address,
+      service,
+      nonce: Date.now(), // Use timestamp as nonce for simplicity
+      deadline: Date.now() + 3600000, // 1 hour
+    };
+
+    // EIP-712 domain
+    const domain = {
+      name: 'MoltsPay',
+      version: '1',
+      chainId: chain.chainId,
+    };
+
+    // EIP-712 types
+    const types = {
+      PaymentIntent: [
+        { name: 'from', type: 'address' },
+        { name: 'to', type: 'address' },
+        { name: 'amount', type: 'uint256' },
+        { name: 'token', type: 'address' },
+        { name: 'service', type: 'string' },
+        { name: 'nonce', type: 'uint256' },
+        { name: 'deadline', type: 'uint256' },
+      ],
+    };
+
+    // Sign the intent
+    console.log(`[MoltsPay] Signing BNB payment intent...`);
+    const signature = await this.wallet!.signTypedData(domain, types, intent);
+
+    // Create x402 payment payload with BNB-specific format
+    const network = `eip155:${chain.chainId}`;
+    const payload = {
+      x402Version: 2,
+      scheme: 'exact',
+      network,
+      payload: {
+        intent: {
+          ...intent,
+          signature,
+        },
+        chainId: chain.chainId,
+      },
+      accepted: {
+        scheme: 'exact',
+        network,
+        asset: tokenConfig.address,
+        amount: amountWei,
+        payTo: to,
+        maxTimeoutSeconds: 300,
+      },
+    };
+
+    const paymentHeader = Buffer.from(JSON.stringify(payload)).toString('base64');
+
+    // Send request with payment
+    console.log(`[MoltsPay] Sending BNB payment request...`);
+    const paidRes = await fetch(`${serverUrl}/execute`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Payment': paymentHeader,
+      },
+      body: JSON.stringify({ service, params, chain: chainName }),
+    });
+
+    const result = await paidRes.json() as any;
+
+    if (!paidRes.ok) {
+      throw new Error(result.error || 'BNB payment failed');
+    }
+
+    // Update spending tracking
+    this.recordSpending(amount);
+
+    console.log(`[MoltsPay] Success! BNB payment settled.`);
+    return result.result || result;
+  }
+
+  /**
+   * Handle Solana payment flow
+   * 
+   * Solana uses SPL token transfers with pay-for-success model:
+   * 1. Client creates and signs a transfer transaction
+   * 2. Server submits the transaction after service completes
+   */
+  private async handleSolanaPayment(
+    serverUrl: string,
+    service: string,
+    params: Record<string, any>,
+    requirements: X402PaymentRequirements,
+    chain: SolanaChainName
+  ): Promise<Record<string, any>> {
+    // Load Solana wallet
+    const solanaWallet = loadSolanaWallet(this.configDir);
+    if (!solanaWallet) {
+      throw new Error('No Solana wallet found. Run: npx moltspay init --chain solana_devnet');
+    }
+
+    const amount = Number(requirements.amount);
+    const amountUSDC = amount / 1e6;
+    
+    // Check limits
+    this.checkLimits(amountUSDC);
+
+    console.log(`[MoltsPay] Creating Solana payment: $${amountUSDC} USDC`);
+
+    // Validate payTo address
+    if (!requirements.payTo) {
+      throw new Error('Missing payTo address in payment requirements');
+    }
+
+    // Create the transfer transaction
+    const recipientPubkey = new PublicKey(requirements.payTo);
+    const transaction = await createSolanaPaymentTransaction(
+      solanaWallet.publicKey,
+      recipientPubkey,
+      BigInt(amount),
+      chain
+    );
+
+    // Sign the transaction
+    transaction.sign(solanaWallet);
+    const signedTx = transaction.serialize().toString('base64');
+
+    console.log(`[MoltsPay] Transaction signed, sending to server...`);
+
+    // Create x402 payload with Solana-specific format
+    const network = chain === 'solana' ? 'solana:mainnet' : 'solana:devnet';
+    const payload = {
+      x402Version: 2,
+      scheme: 'exact',
+      network,
+      payload: {
+        signedTransaction: signedTx,
+        sender: solanaWallet.publicKey.toBase58(),
+        chain,
+      },
+      accepted: {
+        scheme: 'exact',
+        network,
+        asset: requirements.asset,
+        amount: requirements.amount,
+        payTo: requirements.payTo,
+        maxTimeoutSeconds: 300,
+      },
+    };
+
+    const paymentHeader = Buffer.from(JSON.stringify(payload)).toString('base64');
+
+    // Send request with payment
+    const paidRes = await fetch(`${serverUrl}/execute`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Payment': paymentHeader,
+      },
+      body: JSON.stringify({ service, params, chain }),
+    });
+
+    const result = await paidRes.json() as any;
+
+    if (!paidRes.ok) {
+      throw new Error(result.error || 'Solana payment failed');
+    }
+
+    // Update spending tracking
+    this.recordSpending(amountUSDC);
+
+    console.log(`[MoltsPay] Success! Solana payment settled.`);
+    if (result.payment?.transaction) {
+      const explorerUrl = chain === 'solana' 
+        ? `https://solscan.io/tx/${result.payment.transaction}`
+        : `https://solscan.io/tx/${result.payment.transaction}?cluster=devnet`;
+      console.log(`[MoltsPay] Transaction: ${explorerUrl}`);
+    }
+
     return result.result || result;
   }
 
@@ -732,7 +994,7 @@ export class MoltsPayClient {
 
     let chain;
     try {
-      chain = getChain(this.config.chain as ChainName);
+      chain = getChain(this.config.chain as EvmChainName);
     } catch {
       throw new Error(`Unknown chain: ${this.config.chain}`);
     }
@@ -762,7 +1024,7 @@ export class MoltsPayClient {
       throw new Error('Client not initialized');
     }
 
-    const supportedChains: ChainName[] = ['base', 'polygon', 'base_sepolia', 'tempo_moderato'];
+    const supportedChains: EvmChainName[] = ['base', 'polygon', 'base_sepolia', 'tempo_moderato', 'bnb', 'bnb_testnet'];
     const tokenAbi = ['function balanceOf(address) view returns (uint256)'];
     const results: Record<string, { usdc: number; usdt: number; native: number; tempo?: { pathUSD: number; alphaUSD: number; betaUSD: number; thetaUSD: number } }> = {};
 

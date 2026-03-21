@@ -2,9 +2,9 @@
  * Blockchain Configuration
  */
 
-import type { ChainConfig, ChainName, TokenSymbol } from '../types/index.js';
+import type { ChainConfig, ChainName, EvmChainName, TokenSymbol } from '../types/index.js';
 
-export const CHAINS: Record<ChainName, ChainConfig> = {
+export const CHAINS: Record<EvmChainName, ChainConfig> = {
   // ============ Mainnet ============
   base: {
     name: 'Base',
@@ -102,12 +102,67 @@ export const CHAINS: Record<ChainName, ChainConfig> = {
     explorerTx: 'https://explore.testnet.tempo.xyz/tx/',
     avgBlockTime: 0.5, // ~500ms finality
   },
+  // ============ BNB Chain Testnet ============
+  bnb_testnet: {
+    name: 'BNB Testnet',
+    chainId: 97,
+    rpc: 'https://data-seed-prebsc-1-s1.binance.org:8545',
+    tokens: {
+      // Note: BNB uses 18 decimals for stablecoins (unlike Base/Polygon which use 6)
+      // Using official Binance-Peg testnet tokens
+      USDC: {
+        address: '0x64544969ed7EBf5f083679233325356EbE738930', // Testnet USDC
+        decimals: 18,
+        symbol: 'USDC',
+        eip712Name: 'USD Coin',
+      },
+      USDT: {
+        address: '0x337610d27c682E347C9cD60BD4b3b107C9d34dDd', // Testnet USDT
+        decimals: 18,
+        symbol: 'USDT',
+        eip712Name: 'Tether USD',
+      },
+    },
+    usdc: '0x64544969ed7EBf5f083679233325356EbE738930',
+    explorer: 'https://testnet.bscscan.com/address/',
+    explorerTx: 'https://testnet.bscscan.com/tx/',
+    avgBlockTime: 3,
+    // BNB-specific: requires approval for pay-for-success flow
+    requiresApproval: true,
+  },
+  // ============ BNB Chain Mainnet ============
+  bnb: {
+    name: 'BNB Smart Chain',
+    chainId: 56,
+    rpc: 'https://bsc-dataseed.binance.org',
+    tokens: {
+      // Note: BNB uses 18 decimals for stablecoins
+      USDC: {
+        address: '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
+        decimals: 18,
+        symbol: 'USDC',
+        eip712Name: 'USD Coin',
+      },
+      USDT: {
+        address: '0x55d398326f99059fF775485246999027B3197955',
+        decimals: 18,
+        symbol: 'USDT',
+        eip712Name: 'Tether USD',
+      },
+    },
+    usdc: '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
+    explorer: 'https://bscscan.com/address/',
+    explorerTx: 'https://bscscan.com/tx/',
+    avgBlockTime: 3,
+    // BNB-specific: requires approval for pay-for-success flow
+    requiresApproval: true,
+  },
 };
 
 /**
  * Get token address for a chain
  */
-export function getTokenAddress(chainName: ChainName, token: TokenSymbol): string {
+export function getTokenAddress(chainName: EvmChainName, token: TokenSymbol): string {
   const chain = CHAINS[chainName];
   if (!chain) {
     throw new Error(`Unsupported chain: ${chainName}`);
@@ -122,7 +177,7 @@ export function getTokenAddress(chainName: ChainName, token: TokenSymbol): strin
 /**
  * Get token config for a chain
  */
-export function getTokenConfig(chainName: ChainName, token: TokenSymbol) {
+export function getTokenConfig(chainName: EvmChainName, token: TokenSymbol) {
   const chain = CHAINS[chainName];
   if (!chain) {
     throw new Error(`Unsupported chain: ${chainName}`);
@@ -133,7 +188,7 @@ export function getTokenConfig(chainName: ChainName, token: TokenSymbol) {
 /**
  * Get chain configuration
  */
-export function getChain(name: ChainName): ChainConfig {
+export function getChain(name: EvmChainName): ChainConfig {
   const config = CHAINS[name];
   if (!config) {
     throw new Error(`Unsupported chain: ${name}. Supported: ${Object.keys(CHAINS).join(', ')}`);
@@ -142,10 +197,10 @@ export function getChain(name: ChainName): ChainConfig {
 }
 
 /**
- * List all supported chains
+ * List all supported EVM chains
  */
-export function listChains(): ChainName[] {
-  return Object.keys(CHAINS) as ChainName[];
+export function listChains(): EvmChainName[] {
+  return Object.keys(CHAINS) as EvmChainName[];
 }
 
 /**
@@ -172,4 +227,4 @@ export const ERC20_ABI = [
   'event Approval(address indexed owner, address indexed spender, uint256 value)',
 ];
 
-export type { ChainConfig, ChainName, TokenSymbol };
+export type { ChainConfig, ChainName, EvmChainName, TokenSymbol };

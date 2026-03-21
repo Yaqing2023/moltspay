@@ -9,7 +9,7 @@
 import { ethers } from 'ethers';
 import { getChain, ERC20_ABI } from '../chains/index.js';
 import type {
-  ChainName,
+  EvmChainName,
   ChainConfig,
   WalletBalance,
   TransferResult,
@@ -17,13 +17,13 @@ import type {
 } from '../types/index.js';
 
 export interface WalletConfig {
-  chain?: ChainName;
+  chain?: EvmChainName;
   privateKey?: string;
   rpcUrl?: string;
 }
 
 export class Wallet {
-  readonly chain: ChainName;
+  readonly chain: EvmChainName;
   readonly chainConfig: ChainConfig;
   readonly address: string;
   

@@ -23,9 +23,22 @@ import { homedir } from 'os';
 import { join, dirname, resolve } from 'path';
 import { existsSync, writeFileSync, readFileSync, unlinkSync, mkdirSync } from 'fs';
 import { spawn } from 'child_process';
+import { ethers } from 'ethers';
 import { MoltsPayClient } from '../client/index.js';
 import { MoltsPayServer } from '../server/index.js';
 import { printQRCode } from '../onramp/index.js';
+import { CHAINS } from '../chains/index.js';
+import { SOLANA_CHAINS, getSolanaExplorerUrl, getSolanaTxExplorerUrl, isSolanaChain } from '../chains/solana.js';
+import { 
+  loadSolanaWallet, 
+  createSolanaWallet, 
+  getSolanaAddress, 
+  getSolanaBalances,
+  solanaWalletExists,
+  requestSolanaAirdrop,
+  isValidSolanaAddress,
+} from '../wallet/solana.js';
+import type { ChainName } from '../types/index.js';
 import * as readline from 'readline';
 
 // Read version from package.json at runtime
@@ -45,6 +58,112 @@ function getVersion(): string {
     } catch { /* ignore */ }
   }
   return '0.0.0'; // fallback
+}
+
+// Server wallet for BNB gas sponsorship (loaded from env)
+const BNB_SPONSOR_KEY = process.env.MOLTSPAY_BNB_SPONSOR_KEY;
+// Server wallet address that will call transferFrom (for pay-for-success)
+const BNB_SPENDER_ADDRESS = process.env.MOLTSPAY_BNB_SPENDER || '0xb8d6f2441e8f8dfB6288A74Cf73804cDd0484E0C';
+
+const ERC20_APPROVE_ABI = [
+  'function approve(address spender, uint256 amount) returns (bool)',
+  'function allowance(address owner, address spender) view returns (uint256)',
+];
+
+/**
+ * Set up BNB chain approvals for pay-for-success flow
+ * This allows the server to call transferFrom after service succeeds
+ */
+async function setupBNBApprovals(
+  client: MoltsPayClient, 
+  chain: 'bnb' | 'bnb_testnet',
+  sponsorGas: boolean = false
+): Promise<void> {
+  const chainConfig = CHAINS[chain];
+  const provider = new ethers.JsonRpcProvider(chainConfig.rpc);
+  
+  // Get wallet from client
+  const wallet = client.getWallet();
+  if (!wallet) {
+    console.log('   ❌ No wallet found');
+    return;
+  }
+  const signer = wallet.connect(provider);
+  
+  // Check BNB balance for gas
+  let bnbBalance = await provider.getBalance(wallet.address);
+  const minGasRequired = ethers.parseEther('0.002'); // ~$0.01 for 2 approvals
+  
+  if (bnbBalance < minGasRequired) {
+    if (sponsorGas && BNB_SPONSOR_KEY) {
+      console.log('   ⏳ Sponsoring BNB gas for approvals...');
+      try {
+        const sponsorWallet = new ethers.Wallet(BNB_SPONSOR_KEY, provider);
+        const tx = await sponsorWallet.sendTransaction({
+          to: wallet.address,
+          value: ethers.parseEther('0.002'),
+        });
+        await tx.wait();
+        console.log(`   ✅ Sponsored 0.002 BNB (tx: ${tx.hash.slice(0, 10)}...)`);
+        bnbBalance = await provider.getBalance(wallet.address);
+      } catch (err: any) {
+        console.log(`   ⚠️  Gas sponsorship failed: ${err.message}`);
+        console.log(`   💡 Get testnet BNB: https://testnet.bnbchain.org/faucet-smart`);
+        return;
+      }
+    } else {
+      console.log(`   ⚠️  Need BNB for gas (~0.002 BNB)`);
+      console.log(`   💡 Get testnet BNB: https://testnet.bnbchain.org/faucet-smart`);
+      console.log(`   Then run: npx moltspay init --chain ${chain}`);
+      return;
+    }
+  }
+  
+  // Approve USDT and USDC for the server spender address
+  for (const tokenSymbol of ['USDT', 'USDC'] as const) {
+    const tokenConfig = chainConfig.tokens[tokenSymbol];
+    const tokenContract = new ethers.Contract(tokenConfig.address, ERC20_APPROVE_ABI, signer);
+    
+    // Check existing allowance
+    const allowance = await tokenContract.allowance(wallet.address, BNB_SPENDER_ADDRESS);
+    if (allowance > 0n) {
+      console.log(`   ✅ ${tokenSymbol}: already approved`);
+      continue;
+    }
+    
+    console.log(`   ⏳ Approving ${tokenSymbol}...`);
+    try {
+      const tx = await tokenContract.approve(BNB_SPENDER_ADDRESS, ethers.MaxUint256);
+      await tx.wait();
+      console.log(`   ✅ ${tokenSymbol}: approved (tx: ${tx.hash.slice(0, 10)}...)`);
+    } catch (err: any) {
+      console.log(`   ❌ ${tokenSymbol}: approval failed - ${err.message}`);
+    }
+  }
+  
+  console.log('');
+}
+
+/**
+ * Check BNB approval status
+ */
+async function checkBNBApprovals(
+  address: string,
+  chain: 'bnb' | 'bnb_testnet'
+): Promise<{ usdt: boolean; usdc: boolean }> {
+  const chainConfig = CHAINS[chain];
+  const provider = new ethers.JsonRpcProvider(chainConfig.rpc);
+  
+  const result = { usdt: false, usdc: false };
+  
+  for (const tokenSymbol of ['USDT', 'USDC'] as const) {
+    const tokenConfig = chainConfig.tokens[tokenSymbol];
+    const tokenContract = new ethers.Contract(tokenConfig.address, ERC20_APPROVE_ABI, provider);
+    const allowance = await tokenContract.allowance(address, BNB_SPENDER_ADDRESS);
+    result[tokenSymbol.toLowerCase() as 'usdt' | 'usdc'] = allowance > 0n;
+  }
+  
+  return result;
 }
 
 const program = new Command();
@@ -85,23 +204,56 @@ program
   .option('--max-per-day <amount>', 'Max amount per day')
   .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
   .action(async (options) => {
-    console.log('\n🔐 MoltsPay Client Setup\n');
-
-    // Check if already initialized
-    if (existsSync(join(options.configDir, 'wallet.json'))) {
-      console.log('⚠️  Already initialized. Use "moltspay config" to update settings.');
-      console.log(`   Config dir: ${options.configDir}`);
-      return;
-    }
-
-    // Get options interactively if not provided
+    // Get chain option
     let chain = options.chain;
     
     // Validate chain
-    const supportedChains = ['base', 'polygon', 'base_sepolia', 'tempo_moderato'];
+    const supportedEVMChains = ['base', 'polygon', 'base_sepolia', 'tempo_moderato', 'bnb', 'bnb_testnet'];
+    const supportedSolanaChains = ['solana', 'solana_devnet'];
+    const supportedChains = [...supportedEVMChains, ...supportedSolanaChains];
+    
     if (!supportedChains.includes(chain)) {
       console.error(`❌ Unknown chain: ${chain}. Supported: ${supportedChains.join(', ')}`);
       process.exit(1);
+    }
+    
+    // Handle Solana chains separately (different wallet)
+    if (supportedSolanaChains.includes(chain)) {
+      console.log('\n🟣 Solana Wallet Setup\n');
+      
+      if (solanaWalletExists(options.configDir)) {
+        const existingAddress = getSolanaAddress(options.configDir);
+        console.log(`⚠️  Solana wallet already exists: ${existingAddress}`);
+        console.log(`   Config dir: ${options.configDir}`);
+        return;
+      }
+      
+      console.log('Creating Solana wallet...');
+      const keypair = createSolanaWallet(options.configDir);
+      const address = keypair.publicKey.toBase58();
+      
+      console.log(`\n✅ Solana wallet created: ${address}`);
+      console.log(`\n📁 Config saved to: ${join(options.configDir, 'wallet-solana.json')}`);
+      console.log(`\n⚠️  IMPORTANT: Back up your wallet file!`);
+      console.log(`   This file contains your private key!\n`);
+      
+      if (chain === 'solana_devnet') {
+        console.log('💡 Get testnet tokens:');
+        console.log('   npx moltspay faucet --chain solana_devnet\n');
+      } else {
+        console.log(`💰 Fund your wallet with SOL and USDC on Solana to start.\n`);
+      }
+      
+      return;
+    }
+
+    // For EVM chains, check if already initialized
+    console.log('\n🔐 MoltsPay Client Setup\n');
+    
+    if (existsSync(join(options.configDir, 'wallet.json'))) {
+      console.log('⚠️  EVM wallet already initialized. Use "moltspay config" to update settings.');
+      console.log(`   Config dir: ${options.configDir}`);
+      return;
     }
     
     let maxPerTx = options.maxPerTx ? parseFloat(options.maxPerTx) : null;
@@ -129,6 +281,14 @@ program
     console.log(`\n📁 Config saved to: ${result.configDir}`);
     console.log(`\n⚠️  IMPORTANT: Back up ${join(result.configDir, 'wallet.json')}`);
     console.log(`   This file contains your private key!\n`);
+
+    // For BNB chains, set up approvals (requires gas sponsorship for new wallets)
+    if (chain === 'bnb' || chain === 'bnb_testnet') {
+      console.log('📋 Setting up BNB chain approvals...\n');
+      const client = new MoltsPayClient({ configDir: options.configDir });
+      await setupBNBApprovals(client, chain, true); // true = sponsor gas for new wallet
+    }
+
     console.log(`💰 Fund your wallet with USDC on ${chain} to start using services.\n`);
   });
 
@@ -194,15 +354,10 @@ program
 program
   .command('fund <amount>')
   .description('Fund wallet with USDC via Coinbase (US debit card / Apple Pay)')
-  .option('--chain <chain>', 'Chain to fund (base, polygon, or base_sepolia)', 'base')
+  .option('--chain <chain>', 'Chain to fund (base, polygon, solana, or base_sepolia)', 'base')
   .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
   .action(async (amountStr, options) => {
     const client = new MoltsPayClient({ configDir: options.configDir });
-
-    if (!client.isInitialized) {
-      console.log('❌ Not initialized. Run: npx moltspay init');
-      return;
-    }
 
     const amount = parseFloat(amountStr);
     if (isNaN(amount) || amount < 5) {
@@ -210,16 +365,39 @@ program
       return;
     }
 
-    const chain = (options.chain?.toLowerCase() || 'base') as 'base' | 'polygon' | 'base_sepolia';
-    if (!['base', 'polygon', 'base_sepolia'].includes(chain)) {
-      console.log('❌ Invalid chain. Use: base, polygon, or base_sepolia');
+    const chain = (options.chain?.toLowerCase() || 'base') as 'base' | 'polygon' | 'base_sepolia' | 'solana';
+    if (!['base', 'polygon', 'base_sepolia', 'solana'].includes(chain)) {
+      console.log('❌ Invalid chain. Use: base, polygon, solana, or base_sepolia');
       return;
+    }
+    
+    // Determine wallet address based on chain
+    let walletAddress: string;
+    if (chain === 'solana') {
+      // Load Solana wallet
+      const solanaWallet = loadSolanaWallet(options.configDir || DEFAULT_CONFIG_DIR);
+      if (!solanaWallet) {
+        console.log('❌ No Solana wallet found. Run: npx moltspay init --chain solana');
+        return;
+      }
+      walletAddress = getSolanaAddress(options.configDir || DEFAULT_CONFIG_DIR) || '';
+      if (!walletAddress) {
+        console.log('❌ Could not get Solana wallet address.');
+        return;
+      }
+    } else {
+      // EVM chains use the client wallet
+      if (!client.isInitialized) {
+        console.log('❌ Not initialized. Run: npx moltspay init');
+        return;
+      }
+      walletAddress = client.address!;
     }
     
     // Testnet: use faucet instead of Coinbase Pay
     if (chain === 'base_sepolia') {
       console.log('\n🧪 Testnet Funding\n');
-      console.log(`   Wallet: ${client.address}`);
+      console.log(`   Wallet: ${walletAddress}`);
       console.log(`   Chain: Base Sepolia (testnet)\n`);
       console.log('💡 Use the MoltsPay faucet to get free testnet USDC:\n');
       console.log('   npx moltspay faucet\n');
@@ -228,8 +406,8 @@ program
     }
 
     console.log('\n💳 Fund your agent wallet\n');
-    console.log(`   Wallet: ${client.address}`);
-    console.log(`   Chain: ${chain}`);
+    console.log(`   Wallet: ${walletAddress}`);
+    console.log(`   Chain: ${chain === 'solana' ? 'Solana' : chain}`);
     console.log(`   Amount: $${amount.toFixed(2)}\n`);
 
     try {
@@ -240,7 +418,7 @@ program
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          address: client.address,
+          address: walletAddress,
           amount,
           chain,
         }),
@@ -269,8 +447,8 @@ program
  */
 program
   .command('faucet')
-  .description('Request testnet tokens from faucet (Base Sepolia or Tempo Moderato)')
-  .option('--chain <chain>', 'Chain to get tokens on (base_sepolia or tempo_moderato)', 'base_sepolia')
+  .description('Request testnet tokens from faucet (Base Sepolia, Tempo Moderato, BNB Testnet, or Solana Devnet)')
+  .option('--chain <chain>', 'Chain to get tokens on (base_sepolia, tempo_moderato, bnb_testnet, or solana_devnet)', 'base_sepolia')
   .option('--address <address>', 'Wallet address (defaults to your wallet)')
   .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
   .action(async (options) => {
@@ -278,12 +456,96 @@ program
     const chain = options.chain?.toLowerCase() || 'base_sepolia';
 
     // Validate chain
-    if (!['base_sepolia', 'tempo_moderato'].includes(chain)) {
-      console.log('❌ Invalid chain. Use: base_sepolia or tempo_moderato');
+    if (!['base_sepolia', 'tempo_moderato', 'bnb_testnet', 'solana_devnet'].includes(chain)) {
+      console.log('❌ Invalid chain. Use: base_sepolia, tempo_moderato, bnb_testnet, or solana_devnet');
       return;
     }
 
-    // If no address provided, try to use initialized wallet
+    // Handle Solana devnet separately
+    if (chain === 'solana_devnet') {
+      // Get Solana address
+      if (!address) {
+        address = getSolanaAddress(options.configDir);
+        if (!address) {
+          console.log('❌ No Solana wallet found. Run: npx moltspay init --chain solana_devnet');
+          return;
+        }
+      }
+
+      // Validate Solana address format
+      if (!isValidSolanaAddress(address)) {
+        console.log('❌ Invalid Solana address');
+        return;
+      }
+
+      console.log('\n🚰 Solana Devnet Faucet\n');
+      console.log(`   Address: ${address}\n`);
+
+      let solSuccess = false;
+      let usdcSuccess = false;
+
+      // Step 1: Request SOL airdrop (for gas)
+      try {
+        console.log('   ⏳ Requesting 1 SOL airdrop (for gas)...');
+        const signature = await requestSolanaAirdrop(address, 'solana_devnet', 1);
+        console.log(`   ✅ Received 1 SOL!`);
+        console.log(`   Transaction: ${getSolanaTxExplorerUrl('solana_devnet', signature)}`);
+        solSuccess = true;
+      } catch (error: any) {
+        console.log(`   ⚠️  SOL airdrop failed: ${error.message}`);
+        console.log('      (Solana devnet faucet may be rate-limited)');
+      }
+
+      // Step 2: Request USDC from MoltsPay faucet API
+      console.log('');
+      try {
+        console.log('   ⏳ Requesting 1 USDC from faucet...');
+        const FAUCET_API = process.env.MOLTSPAY_FAUCET_API || 'https://moltspay.com/api/v1/faucet';
+        
+        const response = await fetch(FAUCET_API, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address, chain: 'solana_devnet' }),
+        });
+
+        const result = await response.json() as {
+          success?: boolean;
+          amount?: string;
+          transaction?: string;
+          explorer?: string;
+          faucet_balance?: string;
+          error?: string;
+          hint?: string;
+          retry_after?: string;
+        };
+
+        if (!response.ok) {
+          console.log(`   ⚠️  USDC faucet: ${result.error || 'Request failed'}`);
+          if (result.hint) console.log(`      ${result.hint}`);
+          if (result.retry_after) console.log(`      Retry after: ${result.retry_after}`);
+        } else {
+          console.log(`   ✅ Received ${result.amount} USDC!`);
+          console.log(`   Transaction: ${result.explorer}`);
+          if (result.faucet_balance) {
+            console.log(`   Faucet balance: ${result.faucet_balance} USDC remaining`);
+          }
+          usdcSuccess = true;
+        }
+      } catch (error: any) {
+        console.log(`   ⚠️  USDC faucet error: ${error.message}`);
+      }
+
+      console.log('');
+      if (solSuccess || usdcSuccess) {
+        console.log('💡 Check your balance:');
+        console.log('   npx moltspay status\n');
+      } else {
+        console.log('❌ Both faucets failed. Try again in a few minutes.\n');
+      }
+      return;
+    }
+
+    // If no address provided, try to use initialized EVM wallet
     if (!address) {
       const client = new MoltsPayClient({ configDir: options.configDir });
       if (client.isInitialized) {
@@ -294,7 +556,7 @@ program
       }
     }
 
-    // Validate address format
+    // Validate EVM address format
     if (!address.match(/^0x[a-fA-F0-9]{40}$/)) {
       console.log('❌ Invalid Ethereum address');
       return;
@@ -336,6 +598,60 @@ program
         console.log(`❌ ${(error as Error).message}`);
         console.log('\n   Try Tempo Wallet instead: https://wallet.tempo.xyz\n');
       }
+    } else if (chain === 'bnb_testnet') {
+      // BNB Testnet faucet - uses unified MoltsPay faucet API
+      console.log(`   Requesting 1 USDC on BNB Testnet...`);
+      console.log(`   Address: ${address}\n`);
+
+      try {
+        const FAUCET_API = process.env.MOLTSPAY_FAUCET_API || 'https://moltspay.com/api/v1/faucet';
+        
+        const response = await fetch(FAUCET_API, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address, chain: 'bnb_testnet' }),
+        });
+
+        const result = await response.json() as {
+          success?: boolean;
+          amount?: string;
+          token?: string;
+          chain_name?: string;
+          transaction?: string;
+          explorer?: string;
+          faucet_balance?: string;
+          error?: string;
+          hint?: string;
+          retry_after?: string;
+        };
+
+        if (!response.ok) {
+          console.log(`❌ ${result.error || 'Request failed'}`);
+          if (result.hint) console.log(`   ${result.hint}`);
+          if (result.retry_after) console.log(`   Retry after: ${result.retry_after}`);
+          
+          // Show manual faucet instructions as fallback
+          console.log('\n💡 Alternatively, get tokens manually:');
+          console.log(`   1. Get test BNB: https://www.bnbchain.org/en/testnet-faucet`);
+          console.log(`   2. Select "Peggy Tokens" -> USDC`);
+          console.log(`   3. Enter: ${address}\n`);
+          return;
+        }
+
+        console.log(`✅ Received ${result.amount} ${result.token || 'USDC'} on ${result.chain_name || 'BNB Testnet'}!\n`);
+        console.log(`   Transaction: ${result.explorer || `https://testnet.bscscan.com/tx/${result.transaction}`}`);
+        if (result.faucet_balance) {
+          console.log(`   Faucet balance: ${result.faucet_balance} USDC`);
+        }
+        console.log('\n💡 Now you can test BNB payments:');
+        console.log(`   npx moltspay pay <service-url> <service-id> --chain bnb_testnet\n`);
+      } catch (error) {
+        console.log(`❌ ${(error as Error).message}`);
+        console.log('\n💡 Get tokens manually:');
+        console.log(`   1. Get test BNB: https://www.bnbchain.org/en/testnet-faucet`);
+        console.log(`   2. Select "Peggy Tokens" -> USDC`);
+        console.log(`   3. Enter: ${address}\n`);
+      }
     } else {
       // Base Sepolia faucet (existing)
       console.log(`   Requesting 1 USDC on Base Sepolia...`);
@@ -347,7 +663,7 @@ program
         const response = await fetch(FAUCET_API, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ address }),
+          body: JSON.stringify({ address, chain: 'base_sepolia' }),
         });
 
         const result = await response.json() as {
@@ -410,12 +726,32 @@ program
       console.error('Warning: Could not fetch balances:', err.message);
     }
 
+    // Check for Solana wallet
+    const solanaAddress = getSolanaAddress(options.configDir);
+    let solanaBalances: { devnet?: { sol: number; usdc: number }; mainnet?: { sol: number; usdc: number } } = {};
+    
+    if (solanaAddress) {
+      try {
+        solanaBalances.devnet = await getSolanaBalances(solanaAddress, 'solana_devnet');
+      } catch { /* ignore */ }
+      try {
+        solanaBalances.mainnet = await getSolanaBalances(solanaAddress, 'solana');
+      } catch { /* ignore */ }
+    }
+
     if (options.json) {
-      console.log(JSON.stringify({
+      const output: any = {
         address: client.address,
         balances: allBalances,
         limits: config.limits,
-      }, null, 2));
+      };
+      if (solanaAddress) {
+        output.solana = {
+          address: solanaAddress,
+          balances: solanaBalances,
+        };
+      }
+      console.log(JSON.stringify(output, null, 2));
     } else {
       console.log('\n📊 MoltsPay Wallet Status\n');
       console.log(`   Address: ${client.address}`);
@@ -445,15 +781,79 @@ program
           console.log(`       alphaUSD:  ${tempo.alphaUSD.toFixed(2)}`);
           console.log(`       betaUSD:   ${tempo.betaUSD.toFixed(2)}`);
           console.log(`       thetaUSD:  ${tempo.thetaUSD.toFixed(2)}`);
+        } else if (chainName === 'bnb' || chainName === 'bnb_testnet') {
+          // BNB chains: show balance + approval status
+          console.log(`     ${chainLabel.padEnd(14)} ${balance.usdc.toFixed(2)} USDC | ${balance.usdt.toFixed(2)} USDT`);
         } else {
           // EVM chains: show USDC/USDT
           console.log(`     ${chainLabel.padEnd(14)} ${balance.usdc.toFixed(2)} USDC | ${balance.usdt.toFixed(2)} USDT`);
         }
       }
+      
+      // Check BNB approval status
+      const address = client.address!;
+      let bnbApprovalStatus: { usdt: boolean; usdc: boolean } | null = null;
+      let bnbTestnetApprovalStatus: { usdt: boolean; usdc: boolean } | null = null;
+      
+      try {
+        if (allBalances['bnb']) {
+          bnbApprovalStatus = await checkBNBApprovals(address, 'bnb');
+        }
+        if (allBalances['bnb_testnet']) {
+          bnbTestnetApprovalStatus = await checkBNBApprovals(address, 'bnb_testnet');
+        }
+      } catch { /* ignore approval check errors */ }
+      
+      if (bnbApprovalStatus || bnbTestnetApprovalStatus) {
+        console.log('');
+        console.log('   BNB Approvals (pay-for-success):');
+        if (bnbApprovalStatus) {
+          const status = bnbApprovalStatus.usdt && bnbApprovalStatus.usdc ? '✅' : '⚠️';
+          const tokens = [
+            bnbApprovalStatus.usdt ? 'USDT✓' : 'USDT✗',
+            bnbApprovalStatus.usdc ? 'USDC✓' : 'USDC✗',
+          ].join(', ');
+          console.log(`     BNB:          ${status} ${tokens}`);
+        }
+        if (bnbTestnetApprovalStatus) {
+          const status = bnbTestnetApprovalStatus.usdt && bnbTestnetApprovalStatus.usdc ? '✅' : '⚠️';
+          const tokens = [
+            bnbTestnetApprovalStatus.usdt ? 'USDT✓' : 'USDT✗',
+            bnbTestnetApprovalStatus.usdc ? 'USDC✓' : 'USDC✗',
+          ].join(', ');
+          console.log(`     BNB Testnet:  ${status} ${tokens}`);
+        }
+      }
+      
       console.log('');
       console.log('   Spending Limits:');
       console.log(`     Per Transaction: $${config.limits.maxPerTx}`);
       console.log(`     Daily:           $${config.limits.maxPerDay}`);
+      
+      // Show Solana wallet status if it exists
+      const solanaAddress = getSolanaAddress(options.configDir);
+      if (solanaAddress) {
+        console.log('');
+        console.log('   ─────────────────────────────────');
+        console.log(`   🟣 Solana: ${solanaAddress}`);
+        
+        try {
+          // Get Solana devnet balances
+          const devnetBalances = await getSolanaBalances(solanaAddress, 'solana_devnet');
+          console.log(`     Devnet:    ${devnetBalances.sol.toFixed(4)} SOL | ${devnetBalances.usdc.toFixed(2)} USDC`);
+        } catch (err: any) {
+          console.log(`     Devnet:    (unable to fetch)`);
+        }
+        
+        try {
+          // Get Solana mainnet balances
+          const mainnetBalances = await getSolanaBalances(solanaAddress, 'solana');
+          console.log(`     Mainnet:   ${mainnetBalances.sol.toFixed(4)} SOL | ${mainnetBalances.usdc.toFixed(2)} USDC`);
+        } catch (err: any) {
+          console.log(`     Mainnet:   (unable to fetch)`);
+        }
+      }
+      
       console.log('');
     }
   });
@@ -1154,7 +1554,7 @@ program
   .option('--prompt <text>', 'Prompt for the service')
   .option('--image <path>', 'Image URL or local file path')
   .option('--token <token>', 'Token to pay with (USDC or USDT)', 'USDC')
-  .option('--chain <chain>', 'Chain to pay on (base, polygon, base_sepolia, or tempo_moderato).')
+  .option('--chain <chain>', 'Chain to pay on (base, polygon, base_sepolia, tempo_moderato, solana, or solana_devnet).')
   .option('--config-dir <dir>', 'Config directory with wallet.json', DEFAULT_CONFIG_DIR)
   .option('--json', 'Output raw JSON only')
   .action(async (server, service, paramsJson, options) => {
@@ -1202,9 +1602,10 @@ program
     }
 
     // Validate chain option (if specified)
-    const chain = options.chain?.toLowerCase() as 'base' | 'polygon' | 'base_sepolia' | 'tempo_moderato' | undefined;
-    if (chain && !['base', 'polygon', 'base_sepolia', 'tempo_moderato'].includes(chain)) {
-      console.error(`❌ Unknown chain: ${chain}. Supported: base, polygon, base_sepolia, tempo_moderato`);
+    const supportedPayChains = ['base', 'polygon', 'base_sepolia', 'tempo_moderato', 'bnb', 'bnb_testnet', 'solana', 'solana_devnet'];
+    const chain = options.chain?.toLowerCase();
+    if (chain && !supportedPayChains.includes(chain)) {
+      console.error(`❌ Unknown chain: ${chain}. Supported: ${supportedPayChains.join(', ')}`);
       process.exit(1);
     }
 
