@@ -1238,29 +1238,12 @@ program
     }
 
     try {
-      let result: any;
-      
-      if (chain === 'tempo_moderato') {
-        // Use MPP protocol for Tempo
-        if (!options.json) {
-          console.log('   Protocol: MPP (Machine Payments Protocol)');
-          console.log('');
-        }
-        
-        // For MPP, we call the URL directly - the service ID is part of the URL
-        // Format: server/service or just server if service is the full endpoint
-        const mppUrl = server.includes(service) ? server : `${server}/${service}`;
-        
-        result = await client.payWithMPP(mppUrl, {
-          body: params,
-        });
-      } else {
-        // Use existing x402 protocol
-        result = await client.pay(server, service, params, { 
-          token: token as 'USDC' | 'USDT',
-          chain
-        });
-      }
+      // All chains use the same pay() flow - protocol detection happens inside
+      // Server's /proxy endpoint handles both x402 and MPP based on chain
+      const result = await client.pay(server, service, params, { 
+        token: token as 'USDC' | 'USDT',
+        chain
+      });
       
       if (options.json) {
         console.log(JSON.stringify(result));

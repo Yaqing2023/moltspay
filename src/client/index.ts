@@ -28,8 +28,8 @@ export interface PayOptions {
   token?: TokenSymbol;
   /** Auto-select token based on balance (default: false) */
   autoSelect?: boolean;
-  /** Chain to pay on (base, polygon, or base_sepolia, default: base) */
-  chain?: 'base' | 'polygon' | 'base_sepolia';
+  /** Chain to pay on (base, polygon, base_sepolia, or tempo_moderato) */
+  chain?: 'base' | 'polygon' | 'base_sepolia' | 'tempo_moderato';
 }
 
 // x402 constants
@@ -191,10 +191,19 @@ export class MoltsPayClient {
       throw new Error(data.error || 'Unexpected response');
     }
 
-    // Step 2: Parse payment requirements from 402 response
+    // Step 2: Detect protocol from 402 response
+    // MPP uses WWW-Authenticate header, x402 uses X-Payment-Required header
+    const wwwAuthHeader = initialRes.headers.get('www-authenticate');
     const paymentRequiredHeader = initialRes.headers.get(PAYMENT_REQUIRED_HEADER);
+    
+    // If WWW-Authenticate with Payment scheme, use MPP flow
+    if (wwwAuthHeader && wwwAuthHeader.toLowerCase().includes('payment')) {
+      console.log('[MoltsPay] Detected MPP protocol, using Tempo flow...');
+      return await this.handleMPPPayment(serverUrl, service, params, wwwAuthHeader);
+    }
+    
     if (!paymentRequiredHeader) {
-      throw new Error('Missing x-payment-required header');
+      throw new Error('Missing payment header (x-payment-required or www-authenticate)');
     }
 
     let requirements: X402PaymentRequirements[];
@@ -225,6 +234,7 @@ export class MoltsPayClient {
       if (chainId === 8453) return 'base';
       if (chainId === 137) return 'polygon';
       if (chainId === 84532) return 'base_sepolia';
+      if (chainId === 42431) return 'tempo_moderato';
       return null;
     };
 
@@ -254,7 +264,7 @@ export class MoltsPayClient {
       } else {
         throw new Error(
           `Server accepts: ${serverChains.join(', ')}\n` +
-          `Please specify: --chain base, --chain polygon, or --chain base_sepolia`
+          `Please specify: --chain base, --chain polygon, --chain base_sepolia, or --chain tempo_moderato`
         );
       }
     }
@@ -378,6 +388,132 @@ export class MoltsPayClient {
     console.log(`[MoltsPay] Success! Payment: ${result.payment?.status || 'claimed'}`);
     
     return result.result;
+  }
+
+  /**
+   * Handle MPP (Machine Payments Protocol) payment flow
+   * Called when pay() detects WWW-Authenticate header in 402 response
+   */
+  private async handleMPPPayment(
+    serverUrl: string,
+    service: string,
+    params: Record<string, any>,
+    wwwAuthHeader: string
+  ): Promise<Record<string, any>> {
+    // Dynamic imports for ESM-only packages
+    const { privateKeyToAccount } = await import('viem/accounts');
+    const { createWalletClient, createPublicClient, http } = await import('viem');
+    const { tempoModerato } = await import('viem/chains');
+    const { Actions } = await import('viem/tempo');
+
+    // Get private key from wallet data
+    const privateKey = this.walletData!.privateKey as `0x${string}`;
+    const account = privateKeyToAccount(privateKey);
+
+    console.log(`[MoltsPay] Using MPP protocol on Tempo`);
+    console.log(`[MoltsPay] Account: ${account.address}`);
+
+    // Parse WWW-Authenticate: Payment id="...", method="tempo", request="..."
+    const parseAuthParam = (header: string, key: string): string | null => {
+      const match = header.match(new RegExp(`${key}="([^"]+)"`, 'i'));
+      return match ? match[1] : null;
+    };
+
+    const challengeId = parseAuthParam(wwwAuthHeader, 'id');
+    const method = parseAuthParam(wwwAuthHeader, 'method');
+    const realm = parseAuthParam(wwwAuthHeader, 'realm');
+    const requestB64 = parseAuthParam(wwwAuthHeader, 'request');
+
+    if (method !== 'tempo') {
+      throw new Error(`Unsupported payment method: ${method}`);
+    }
+
+    if (!requestB64) {
+      throw new Error('Missing request in WWW-Authenticate');
+    }
+
+    // Decode payment request
+    const requestJson = Buffer.from(requestB64, 'base64').toString('utf-8');
+    const paymentRequest = JSON.parse(requestJson);
+    
+    const { amount, currency, recipient, methodDetails } = paymentRequest;
+    const chainId = methodDetails?.chainId || 42431;
+    const amountDisplay = Number(amount) / 1e6;
+
+    console.log(`[MoltsPay] Payment: $${amountDisplay} to ${recipient}`);
+
+    // Check limits
+    this.checkLimits(amountDisplay);
+
+    // Execute transfer on Tempo
+    console.log(`[MoltsPay] Sending transaction on Tempo...`);
+
+    const tempoChain = { ...tempoModerato, feeToken: currency as `0x${string}` };
+    
+    const publicClient = createPublicClient({
+      chain: tempoChain,
+      transport: http('https://rpc.moderato.tempo.xyz'),
+    });
+
+    const walletClient = createWalletClient({
+      account,
+      chain: tempoChain,
+      transport: http('https://rpc.moderato.tempo.xyz'),
+    });
+
+    // TIP-20 transfer
+    const txHash = await Actions.token.transfer(walletClient, {
+      to: recipient as `0x${string}`,
+      amount: BigInt(amount),
+      token: currency as `0x${string}`,
+    });
+
+    console.log(`[MoltsPay] Transaction: ${txHash}`);
+
+    // Wait for confirmation
+    await publicClient.waitForTransactionReceipt({ hash: txHash });
+    console.log(`[MoltsPay] Confirmed! Retrying with credential...`);
+
+    // Build credential
+    const credential = {
+      challenge: {
+        id: challengeId,
+        realm,
+        method: 'tempo',
+        intent: 'charge',
+        request: paymentRequest,
+      },
+      payload: { hash: txHash, type: 'hash' },
+      source: `did:pkh:eip155:${chainId}:${account.address}`,
+    };
+
+    const credentialB64 = Buffer.from(JSON.stringify(credential))
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+
+    // Retry with credential
+    const paidRes = await fetch(`${serverUrl}/execute`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Payment ${credentialB64}`,
+      },
+      body: JSON.stringify({ service, params, chain: 'tempo_moderato' }),
+    });
+
+    const result = await paidRes.json() as any;
+
+    if (!paidRes.ok) {
+      throw new Error(result.error || 'Payment verification failed');
+    }
+
+    // Update spending tracking
+    this.recordSpending(amountDisplay);
+
+    console.log(`[MoltsPay] Success!`);
+    return result.result || result;
   }
 
   /**

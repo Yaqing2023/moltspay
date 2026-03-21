@@ -343,7 +343,8 @@ export class MoltsPayServer {
         }
         const body = await this.readBody(req);
         const paymentHeader = req.headers[PAYMENT_HEADER] as string | undefined;
-        return await this.handleProxy(body, paymentHeader, res);
+        const authHeader = req.headers[MPP_AUTH_HEADER] as string | undefined;
+        return await this.handleProxy(body, paymentHeader, authHeader, res);
       }
 
       // MPP Protocol: Handle service-specific endpoints like /text-to-video, /ping
@@ -1040,18 +1041,24 @@ export class MoltsPayServer {
   /**
    * POST /proxy - Handle payment for external services (moltspay-creators)
    * 
-   * This endpoint allows other services to delegate x402 payment handling.
+   * This endpoint allows other services to delegate x402/MPP payment handling.
    * It does NOT execute any skill - just handles payment verification/settlement.
    * 
    * Request body:
    *   { wallet, amount, currency, chain, memo, serviceId, description }
    * 
-   * Without X-Payment header: returns 402 with payment requirements
-   * With X-Payment header: verifies payment and returns result
+   * For x402 (base, polygon, base_sepolia):
+   *   Without X-Payment header: returns 402 with X-Payment-Required
+   *   With X-Payment header: verifies payment via CDP
+   * 
+   * For MPP (tempo_moderato):
+   *   Without Authorization header: returns 402 with WWW-Authenticate
+   *   With Authorization: Payment header: verifies tx on Tempo chain
    */
   private async handleProxy(
     body: any,
     paymentHeader: string | undefined,
+    authHeader: string | undefined,
     res: ServerResponse
   ): Promise<void> {
     const { wallet, amount, currency, chain, memo, serviceId, description } = body;
@@ -1073,7 +1080,7 @@ export class MoltsPayServer {
     }
     
     // Validate chain if provided
-    const supportedChains = ['base', 'polygon', 'base_sepolia'];
+    const supportedChains = ['base', 'polygon', 'base_sepolia', 'tempo_moderato'];
     if (chain && !supportedChains.includes(chain)) {
       return this.sendJson(res, 400, { error: `Unsupported chain: ${chain}. Supported: ${supportedChains.join(', ')}` });
     }
@@ -1090,6 +1097,12 @@ export class MoltsPayServer {
       output: {},
     };
 
+    // ========== MPP Protocol for tempo_moderato ==========
+    if (chain === 'tempo_moderato') {
+      return await this.handleProxyMPP(body, proxyConfig, authHeader, res);
+    }
+
+    // ========== x402 Protocol for other chains ==========
     // Build payment requirements with the provided wallet and chain
     const requirements = this.buildProxyPaymentRequirements(proxyConfig, wallet, currency, chain);
 
@@ -1237,6 +1250,169 @@ export class MoltsPayServer {
       amount: amountNum,
       currency: currency || 'USDC',
       facilitator: settlement?.facilitator,
+      memo,
+    });
+  }
+
+  /**
+   * Handle MPP payment flow for /proxy endpoint (tempo_moderato chain)
+   */
+  private async handleProxyMPP(
+    body: any,
+    config: ServiceConfig,
+    authHeader: string | undefined,
+    res: ServerResponse
+  ): Promise<void> {
+    const { wallet, amount, memo, serviceId } = body;
+    const amountNum = parseFloat(amount);
+    const amountInUnits = Math.floor(amountNum * 1e6).toString();
+    
+    // If no Authorization header, return 402 with WWW-Authenticate
+    if (!authHeader || !authHeader.toLowerCase().startsWith('payment ')) {
+      const challengeId = this.generateChallengeId();
+      const tokenAddress = TOKEN_ADDRESSES['eip155:42431']?.USDC || '0x20c0000000000000000000000000000000000000';
+      
+      const mppRequest = {
+        amount: amountInUnits,
+        currency: tokenAddress,
+        methodDetails: {
+          chainId: 42431,
+          feePayer: true,
+        },
+        recipient: wallet,
+      };
+      const mppRequestEncoded = Buffer.from(JSON.stringify(mppRequest)).toString('base64');
+      
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+      
+      const wwwAuth = `Payment id="${challengeId}", realm="MoltsPay Proxy", method="tempo", intent="charge", request="${mppRequestEncoded}", description="${config.name}", expires="${expiresAt}"`;
+      
+      res.writeHead(402, {
+        'Content-Type': 'application/problem+json',
+        [MPP_WWW_AUTH_HEADER]: wwwAuth,
+      });
+      res.end(JSON.stringify({
+        type: 'https://paymentauth.org/problems/payment-required',
+        title: 'Payment Required',
+        status: 402,
+        detail: `Payment is required (${config.name}).`,
+        service: serviceId || 'proxy',
+        price: amountNum,
+        currency: 'USDC',
+      }, null, 2));
+      return;
+    }
+
+    // Parse MPP credential: "Payment <base64>"
+    const credentialMatch = authHeader.match(/Payment\s+(.+)/i);
+    if (!credentialMatch) {
+      return this.sendJson(res, 400, { error: 'Invalid Authorization header format' });
+    }
+
+    let mppCredential: {
+      challenge: { id: string; realm: string; method: string; intent: string; request: any };
+      payload: { hash?: string; type: 'hash' | 'transaction' };
+      source?: string;
+    };
+    
+    try {
+      const base64 = credentialMatch[1].replace(/-/g, '+').replace(/_/g, '/');
+      const decoded = Buffer.from(base64, 'base64').toString('utf-8');
+      mppCredential = JSON.parse(decoded);
+    } catch (err) {
+      console.error('[MoltsPay] /proxy MPP: Failed to parse credential:', err);
+      return this.sendJson(res, 400, { error: 'Invalid payment credential encoding' });
+    }
+
+    // Extract transaction hash
+    let txHash: string | undefined;
+    if (mppCredential.payload?.type === 'hash' && mppCredential.payload?.hash) {
+      txHash = mppCredential.payload.hash;
+    } else {
+      return this.sendJson(res, 400, { error: 'Missing transaction hash in credential' });
+    }
+
+    console.log(`[MoltsPay] /proxy MPP: Verifying tx ${txHash} on Tempo...`);
+
+    // Build requirements for verification
+    const requirements = this.buildPaymentRequirements(config, 'eip155:42431', wallet, 'USDC');
+
+    // Create x402-compatible payload for facilitator
+    const paymentPayload: X402PaymentPayload = {
+      x402Version: X402_VERSION,
+      scheme: 'exact',
+      network: 'eip155:42431',
+      payload: { txHash, chainId: 42431 },
+    };
+
+    // Verify payment using facilitator registry
+    const verification = await this.registry.verify(paymentPayload, requirements);
+    
+    if (!verification.valid) {
+      return this.sendJson(res, 402, { 
+        error: `Payment verification failed: ${verification.error}` 
+      });
+    }
+
+    console.log(`[MoltsPay] /proxy MPP: Payment verified by ${verification.facilitator}`);
+
+    // Check if execution requested
+    const { execute, service, params } = body;
+    
+    if (execute && service) {
+      console.log(`[MoltsPay] /proxy MPP: Executing skill: ${service}`);
+      const skill = this.skills.get(service);
+      if (!skill) {
+        return this.sendJson(res, 404, {
+          success: false,
+          paymentSettled: true,  // Payment already happened on Tempo
+          error: `Service not found: ${service}`,
+        });
+      }
+
+      // Execute skill
+      const timeoutSeconds = parseInt(process.env.SKILL_TIMEOUT_SECONDS || '1200');
+      let result: any;
+      try {
+        result = await Promise.race([
+          skill.handler(params || {}),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error(`Skill timeout after ${timeoutSeconds}s`)), timeoutSeconds * 1000)
+          )
+        ]);
+      } catch (err: any) {
+        console.error(`[MoltsPay] /proxy MPP: Skill failed: ${err.message}`);
+        return this.sendJson(res, 500, {
+          success: false,
+          paymentSettled: true,
+          error: `Service execution failed: ${err.message}`,
+        });
+      }
+
+      return this.sendJson(res, 200, {
+        success: true,
+        verified: true,
+        txHash,
+        chain: 'tempo_moderato',
+        paidTo: wallet,
+        amount: amountNum,
+        currency: 'USDC',
+        facilitator: verification.facilitator,
+        memo,
+        result,
+      });
+    }
+
+    // No execution requested - just return verification success
+    this.sendJson(res, 200, {
+      success: true,
+      verified: true,
+      txHash,
+      chain: 'tempo_moderato',
+      paidTo: wallet,
+      amount: amountNum,
+      currency: 'USDC',
+      facilitator: verification.facilitator,
       memo,
     });
   }
