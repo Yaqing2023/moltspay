@@ -94,7 +94,7 @@ async function setupBNBApprovals(
   
   // Check BNB balance for gas
   let bnbBalance = await provider.getBalance(wallet.address);
-  const minGasRequired = ethers.parseEther('0.002'); // ~$0.01 for 2 approvals
+  const minGasRequired = ethers.parseEther('0.0005'); // ~0.0002 per approval × 2 + buffer
   
   if (bnbBalance < minGasRequired) {
     if (sponsorGas && BNB_SPONSOR_KEY) {
@@ -103,10 +103,10 @@ async function setupBNBApprovals(
         const sponsorWallet = new ethers.Wallet(BNB_SPONSOR_KEY, provider);
         const tx = await sponsorWallet.sendTransaction({
           to: wallet.address,
-          value: ethers.parseEther('0.002'),
+          value: ethers.parseEther('0.001'),
         });
         await tx.wait();
-        console.log(`   ✅ Sponsored 0.002 BNB (tx: ${tx.hash.slice(0, 10)}...)`);
+        console.log(`   ✅ Sponsored 0.001 BNB (tx: ${tx.hash.slice(0, 10)}...)`);
         bnbBalance = await provider.getBalance(wallet.address);
       } catch (err: any) {
         console.log(`   ⚠️  Gas sponsorship failed: ${err.message}`);
@@ -114,8 +114,8 @@ async function setupBNBApprovals(
         return;
       }
     } else {
-      console.log(`   ⚠️  Need BNB for gas (~0.002 BNB)`);
-      console.log(`   💡 Get testnet BNB: https://testnet.bnbchain.org/faucet-smart`);
+      console.log(`   ⚠️  Need BNB for gas (~0.0005 BNB)`);
+      console.log(`   💡 Run: npx moltspay faucet --chain bnb_testnet`);
       console.log(`   Then run: npx moltspay approve --chain ${chain} --spender ${spenderAddress}`);
       return;
     }
