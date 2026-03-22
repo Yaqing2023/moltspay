@@ -151,17 +151,32 @@ async function setupBNBApprovals(
  */
 async function checkBNBApprovals(
   address: string,
-  chain: 'bnb' | 'bnb_testnet'
-): Promise<{ usdt: boolean; usdc: boolean }> {
+  chain: 'bnb' | 'bnb_testnet',
+  configDir: string = DEFAULT_CONFIG_DIR
+): Promise<{ usdt: boolean; usdc: boolean; spender: string | null }> {
   const chainConfig = CHAINS[chain];
   const provider = new ethers.JsonRpcProvider(chainConfig.rpc);
   
-  const result = { usdt: false, usdc: false };
+  // Read spender from wallet config (saved during approve command)
+  let spenderAddress: string | null = null;
+  try {
+    const walletPath = join(configDir, 'wallet.json');
+    const walletData = JSON.parse(readFileSync(walletPath, 'utf-8'));
+    spenderAddress = walletData.approvals?.[chain] || null;
+  } catch {
+    // No saved spender
+  }
+  
+  const result = { usdt: false, usdc: false, spender: spenderAddress };
+  
+  if (!spenderAddress) {
+    return result; // No spender saved, can't check approvals
+  }
   
   for (const tokenSymbol of ['USDT', 'USDC'] as const) {
     const tokenConfig = chainConfig.tokens[tokenSymbol];
     const tokenContract = new ethers.Contract(tokenConfig.address, ERC20_APPROVE_ABI, provider);
-    const allowance = await tokenContract.allowance(address, BNB_SPENDER_ADDRESS);
+    const allowance = await tokenContract.allowance(address, spenderAddress);
     result[tokenSymbol.toLowerCase() as 'usdt' | 'usdc'] = allowance > 0n;
   }
   
@@ -505,7 +520,19 @@ program
     
     console.log(`\n🔐 Approving spender for ${chain}...\n`);
     await setupBNBApprovals(client, chain, options.spender, false);
-    console.log('✅ Approval complete!\n');
+    
+    // Save approved spender to wallet config for status command
+    const walletPath = join(options.configDir || DEFAULT_CONFIG_DIR, 'wallet.json');
+    try {
+      const walletData = JSON.parse(readFileSync(walletPath, 'utf-8'));
+      walletData.approvals = walletData.approvals || {};
+      walletData.approvals[chain] = options.spender;
+      writeFileSync(walletPath, JSON.stringify(walletData, null, 2));
+      console.log(`✅ Approval complete! Spender saved for ${chain}.\n`);
+    } catch (err) {
+      console.log('✅ Approval complete!\n');
+      console.log('⚠️  Could not save spender to wallet config');
+    }
   });
 
 /**
@@ -848,15 +875,15 @@ program
       
       // Check BNB approval status
       const address = client.address!;
-      let bnbApprovalStatus: { usdt: boolean; usdc: boolean } | null = null;
-      let bnbTestnetApprovalStatus: { usdt: boolean; usdc: boolean } | null = null;
+      let bnbApprovalStatus: { usdt: boolean; usdc: boolean; spender: string | null } | null = null;
+      let bnbTestnetApprovalStatus: { usdt: boolean; usdc: boolean; spender: string | null } | null = null;
       
       try {
         if (allBalances['bnb']) {
-          bnbApprovalStatus = await checkBNBApprovals(address, 'bnb');
+          bnbApprovalStatus = await checkBNBApprovals(address, 'bnb', options.configDir);
         }
         if (allBalances['bnb_testnet']) {
-          bnbTestnetApprovalStatus = await checkBNBApprovals(address, 'bnb_testnet');
+          bnbTestnetApprovalStatus = await checkBNBApprovals(address, 'bnb_testnet', options.configDir);
         }
       } catch { /* ignore approval check errors */ }
       
@@ -864,31 +891,41 @@ program
         console.log('');
         console.log('   BNB Approvals (pay-for-success):');
         if (bnbApprovalStatus) {
-          const status = bnbApprovalStatus.usdt && bnbApprovalStatus.usdc ? '✅' : '⚠️';
-          const tokens = [
-            bnbApprovalStatus.usdt ? 'USDT✓' : 'USDT✗',
-            bnbApprovalStatus.usdc ? 'USDC✓' : 'USDC✗',
-          ].join(', ');
-          console.log(`     BNB:          ${status} ${tokens}`);
-          
-          // Show warning if no approval and low BNB
-          const bnbNative = allBalances['bnb']?.native || 0;
-          if (!bnbApprovalStatus.usdc && !bnbApprovalStatus.usdt && bnbNative < 0.0005) {
-            console.log('     ⚠️  Need ~0.001 BNB for first approval tx. Get from exchange.');
+          if (!bnbApprovalStatus.spender) {
+            console.log('     BNB:          ⚠️ No spender configured');
+            console.log('     └─ Run a payment first, or: npx moltspay approve --chain bnb --spender <address>');
+          } else {
+            const status = bnbApprovalStatus.usdt && bnbApprovalStatus.usdc ? '✅' : '⚠️';
+            const tokens = [
+              bnbApprovalStatus.usdt ? 'USDT✓' : 'USDT✗',
+              bnbApprovalStatus.usdc ? 'USDC✓' : 'USDC✗',
+            ].join(', ');
+            console.log(`     BNB:          ${status} ${tokens}`);
+            
+            // Show warning if no approval and low BNB
+            const bnbNative = allBalances['bnb']?.native || 0;
+            if (!bnbApprovalStatus.usdc && !bnbApprovalStatus.usdt && bnbNative < 0.0005) {
+              console.log('     ⚠️  Need ~0.001 BNB for first approval tx. Get from exchange.');
+            }
           }
         }
         if (bnbTestnetApprovalStatus) {
-          const status = bnbTestnetApprovalStatus.usdt && bnbTestnetApprovalStatus.usdc ? '✅' : '⚠️';
-          const tokens = [
-            bnbTestnetApprovalStatus.usdt ? 'USDT✓' : 'USDT✗',
-            bnbTestnetApprovalStatus.usdc ? 'USDC✓' : 'USDC✗',
-          ].join(', ');
-          console.log(`     BNB Testnet:  ${status} ${tokens}`);
-          
-          // Show warning if no approval and low tBNB
-          const tbnbNative = allBalances['bnb_testnet']?.native || 0;
-          if (!bnbTestnetApprovalStatus.usdc && !bnbTestnetApprovalStatus.usdt && tbnbNative < 0.0005) {
-            console.log('     ⚠️  Need tBNB for approval. Run: npx moltspay faucet --chain bnb_testnet');
+          if (!bnbTestnetApprovalStatus.spender) {
+            console.log('     BNB Testnet:  ⚠️ No spender configured');
+            console.log('     └─ Run a payment first, or: npx moltspay approve --chain bnb_testnet --spender <address>');
+          } else {
+            const status = bnbTestnetApprovalStatus.usdt && bnbTestnetApprovalStatus.usdc ? '✅' : '⚠️';
+            const tokens = [
+              bnbTestnetApprovalStatus.usdt ? 'USDT✓' : 'USDT✗',
+              bnbTestnetApprovalStatus.usdc ? 'USDC✓' : 'USDC✗',
+            ].join(', ');
+            console.log(`     BNB Testnet:  ${status} ${tokens}`);
+            
+            // Show warning if no approval and low tBNB
+            const tbnbNative = allBalances['bnb_testnet']?.native || 0;
+            if (!bnbTestnetApprovalStatus.usdc && !bnbTestnetApprovalStatus.usdt && tbnbNative < 0.0005) {
+              console.log('     ⚠️  Need tBNB for approval. Run: npx moltspay faucet --chain bnb_testnet');
+            }
           }
         }
       }
