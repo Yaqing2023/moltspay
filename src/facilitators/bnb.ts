@@ -25,6 +25,7 @@ import {
   HealthCheckResult,
 } from './interface.js';
 import { CHAINS, ChainConfig } from '../chains/index.js';
+import { privateKeyToAccount } from 'viem/accounts';
 
 // ERC20 Transfer event signature
 const TRANSFER_EVENT_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
@@ -98,12 +99,13 @@ export class BNBFacilitator extends BaseFacilitator {
     super();
     this.serverPrivateKey = serverPrivateKey || process.env.BNB_SERVER_PRIVATE_KEY || '';
     
-    // Pre-compute spender address synchronously using ethers
+    // Pre-compute spender address synchronously using viem
     if (this.serverPrivateKey) {
-      // Use ethers compute address (sync)
-      const { ethers } = require('ethers');
-      const wallet = new ethers.Wallet(this.serverPrivateKey);
-      this.spenderAddress = wallet.address;
+      const key = this.serverPrivateKey.startsWith('0x') 
+        ? this.serverPrivateKey as `0x${string}`
+        : `0x${this.serverPrivateKey}` as `0x${string}`;
+      const account = privateKeyToAccount(key);
+      this.spenderAddress = account.address;
     }
     
     this.chainConfigs = {

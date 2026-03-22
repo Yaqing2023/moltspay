@@ -63,6 +63,16 @@ const TOKEN_ADDRESSES: Record<string, Record<string, string>> = {
     USDC: '0x20c0000000000000000000000000000000000000', // pathUSD
     USDT: '0x20c0000000000000000000000000000000000001', // alphaUSD
   },
+  // BNB Smart Chain mainnet
+  'eip155:56': {
+    USDC: '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
+    USDT: '0x55d398326f99059fF775485246999027B3197955',
+  },
+  // BNB Smart Chain testnet
+  'eip155:97': {
+    USDC: '0x64544969ed7EBf5f083679233325356EbE738930',
+    USDT: '0x337610d27c682E347C9cD60BD4b3b107C9d34dDd',
+  },
   // Solana networks use mint addresses (SPL tokens)
   'solana:mainnet': {
     USDC: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // Circle USDC
