@@ -62,7 +62,7 @@ function getVersion(): string {
 // Server wallet for BNB gas sponsorship (loaded from env)
 const BNB_SPONSOR_KEY = process.env.MOLTSPAY_BNB_SPONSOR_KEY;
 // Server wallet address that will call transferFrom (for pay-for-success)
-const BNB_SPENDER_ADDRESS = process.env.MOLTSPAY_BNB_SPENDER || '0xb8d6f2441e8f8dfB6288A74Cf73804cDd0484E0C';
+const BNB_SPENDER_ADDRESS = process.env.MOLTSPAY_BNB_SPENDER || '0xEBB45208D806A0c73F9673E0c5713FF720DD6b79';
 
 const ERC20_APPROVE_ABI = [
   'function approve(address spender, uint256 amount) returns (bool)',
