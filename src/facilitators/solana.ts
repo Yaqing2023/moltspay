@@ -50,7 +50,17 @@ export interface SolanaPaymentPayload {
 }
 
 /**
+ * Solana Facilitator configuration
+ */
+export interface SolanaFacilitatorConfig {
+  /** Optional fee payer keypair for gasless transactions */
+  feePayerKeypair?: Keypair;
+}
+
+/**
  * Solana Facilitator for pay-for-success payments
+ * 
+ * Supports gasless mode: if feePayerKeypair is provided, server pays tx fees
  */
 export class SolanaFacilitator extends BaseFacilitator {
   readonly name = 'solana';
@@ -58,9 +68,12 @@ export class SolanaFacilitator extends BaseFacilitator {
   readonly supportedNetworks = ['solana:mainnet', 'solana:devnet'];
 
   private connections: Map<SolanaChainName, Connection> = new Map();
+  private feePayerKeypair?: Keypair;
 
-  constructor() {
+  constructor(config?: SolanaFacilitatorConfig) {
     super();
+    this.feePayerKeypair = config?.feePayerKeypair;
+    
     // Initialize connections
     for (const [chain, config] of Object.entries(SOLANA_CHAINS)) {
       this.connections.set(
@@ -68,6 +81,17 @@ export class SolanaFacilitator extends BaseFacilitator {
         new Connection(config.rpc, 'confirmed')
       );
     }
+    
+    if (this.feePayerKeypair) {
+      console.log(`[SolanaFacilitator] Gasless mode enabled. Fee payer: ${this.feePayerKeypair.publicKey.toBase58()}`);
+    }
+  }
+  
+  /**
+   * Get fee payer public key (for gasless transactions)
+   */
+  getFeePayerPubkey(): string | null {
+    return this.feePayerKeypair?.publicKey.toBase58() || null;
   }
 
   private getConnection(chain: SolanaChainName): Connection {
@@ -147,9 +171,14 @@ export class SolanaFacilitator extends BaseFacilitator {
         tx = VersionedTransaction.deserialize(txBuffer);
       }
 
-      // Verify signature exists
+      // Verify at least one signature exists (may be partial in gasless mode)
       if (tx instanceof Transaction) {
-        if (!tx.signature || tx.signature.every(b => b === 0)) {
+        // In gasless mode, fee payer signature is added by server
+        // Client only signs for token transfer authority
+        const hasAnySignature = tx.signatures.some(sig => 
+          sig.signature && !sig.signature.every(b => b === 0)
+        );
+        if (!hasAnySignature) {
           return { valid: false, error: 'Transaction not signed' };
         }
       }
@@ -177,7 +206,8 @@ export class SolanaFacilitator extends BaseFacilitator {
   /**
    * Settle a Solana payment
    * 
-   * Submits the signed transaction to the network
+   * Submits the signed transaction to the network.
+   * In gasless mode, adds fee payer signature before submitting.
    */
   async settle(
     paymentPayload: X402PaymentPayload,
@@ -192,25 +222,38 @@ export class SolanaFacilitator extends BaseFacilitator {
       const chain = solanaPayload.chain || 'solana_devnet';
       const connection = this.getConnection(chain);
 
-      // Decode and send the transaction
+      // Decode the transaction
       const txBuffer = Buffer.from(solanaPayload.signedTransaction, 'base64');
       
-      let signature: string;
+      let txToSend: Buffer;
+      
       try {
         // Try legacy transaction
         const tx = Transaction.from(txBuffer);
-        signature = await connection.sendRawTransaction(txBuffer, {
-          skipPreflight: false,
-          preflightCommitment: 'confirmed',
-        });
+        
+        // Check if we need to add fee payer signature (gasless mode)
+        if (this.feePayerKeypair && tx.feePayer) {
+          const feePayerPubkey = this.feePayerKeypair.publicKey.toBase58();
+          const txFeePayer = tx.feePayer.toBase58();
+          
+          if (txFeePayer === feePayerPubkey) {
+            // Gasless mode: add fee payer signature
+            console.log(`[SolanaFacilitator] Gasless mode: adding fee payer signature`);
+            tx.partialSign(this.feePayerKeypair);
+          }
+        }
+        
+        txToSend = tx.serialize();
       } catch (e: any) {
-        // Try versioned transaction
-        const tx = VersionedTransaction.deserialize(txBuffer);
-        signature = await connection.sendRawTransaction(txBuffer, {
-          skipPreflight: false,
-          preflightCommitment: 'confirmed',
-        });
+        // Fall back to versioned transaction (no gasless support for versioned yet)
+        txToSend = txBuffer;
       }
+
+      // Send the transaction
+      const signature = await connection.sendRawTransaction(txToSend, {
+        skipPreflight: false,
+        preflightCommitment: 'confirmed',
+      });
 
       // Wait for confirmation
       const confirmation = await connection.confirmTransaction(signature, 'confirmed');
@@ -242,16 +285,26 @@ export class SolanaFacilitator extends BaseFacilitator {
  * Create a Solana payment transaction for signing
  * 
  * This is called by the client to create the transaction to sign.
+ * 
+ * @param senderPubkey - The sender's public key (token owner)
+ * @param recipientPubkey - The recipient's public key
+ * @param amount - Amount in token base units
+ * @param chain - Solana chain (solana or solana_devnet)
+ * @param feePayerPubkey - Optional fee payer public key for gasless transactions
  */
 export async function createSolanaPaymentTransaction(
   senderPubkey: PublicKey,
   recipientPubkey: PublicKey,
   amount: bigint,
   chain: SolanaChainName,
+  feePayerPubkey?: PublicKey,
 ): Promise<Transaction> {
   const chainConfig = SOLANA_CHAINS[chain];
   const connection = new Connection(chainConfig.rpc, 'confirmed');
   const mint = new PublicKey(chainConfig.tokens.USDC.mint);
+
+  // Determine who pays fees (gasless mode uses server's fee payer)
+  const actualFeePayer = feePayerPubkey || senderPubkey;
 
   // Get ATAs
   const senderATA = await getAssociatedTokenAddress(mint, senderPubkey);
@@ -263,13 +316,13 @@ export async function createSolanaPaymentTransaction(
   try {
     await getAccount(connection, recipientATA);
   } catch {
-    // Create ATA for recipient (sender pays rent)
+    // Create ATA for recipient (fee payer pays rent in gasless mode)
     transaction.add(
       createAssociatedTokenAccountInstruction(
-        senderPubkey,  // payer
-        recipientATA,  // ata to create
+        actualFeePayer,  // payer (fee payer in gasless mode)
+        recipientATA,    // ata to create
         recipientPubkey, // owner
-        mint           // mint
+        mint             // mint
       )
     );
   }
@@ -280,7 +333,7 @@ export async function createSolanaPaymentTransaction(
       senderATA,      // source
       mint,           // mint
       recipientATA,   // destination
-      senderPubkey,   // owner
+      senderPubkey,   // owner (sender still authorizes the transfer)
       amount,         // amount
       chainConfig.tokens.USDC.decimals // decimals
     )
@@ -289,7 +342,7 @@ export async function createSolanaPaymentTransaction(
   // Get recent blockhash
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
   transaction.recentBlockhash = blockhash;
-  transaction.feePayer = senderPubkey;
+  transaction.feePayer = actualFeePayer;
 
   return transaction;
 }

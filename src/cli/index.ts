@@ -35,7 +35,6 @@ import {
   getSolanaAddress, 
   getSolanaBalances,
   solanaWalletExists,
-  requestSolanaAirdrop,
   isValidSolanaAddress,
 } from '../wallet/solana.js';
 import type { ChainName } from '../types/index.js';
@@ -241,7 +240,7 @@ program
         console.log('💡 Get testnet tokens:');
         console.log('   npx moltspay faucet --chain solana_devnet\n');
       } else {
-        console.log(`💰 Fund your wallet with SOL and USDC on Solana to start.\n`);
+        console.log(`💰 Fund your wallet with USDC on Solana to start (gasless - no SOL needed).\n`);
       }
       
       return;
@@ -478,26 +477,12 @@ program
         return;
       }
 
-      console.log('\n🚰 Solana Devnet Faucet\n');
+      console.log('\n🚰 Solana Devnet Faucet (Gasless Mode)\n');
       console.log(`   Address: ${address}\n`);
 
-      let solSuccess = false;
       let usdcSuccess = false;
 
-      // Step 1: Request SOL airdrop (for gas)
-      try {
-        console.log('   ⏳ Requesting 1 SOL airdrop (for gas)...');
-        const signature = await requestSolanaAirdrop(address, 'solana_devnet', 1);
-        console.log(`   ✅ Received 1 SOL!`);
-        console.log(`   Transaction: ${getSolanaTxExplorerUrl('solana_devnet', signature)}`);
-        solSuccess = true;
-      } catch (error: any) {
-        console.log(`   ⚠️  SOL airdrop failed: ${error.message}`);
-        console.log('      (Solana devnet faucet may be rate-limited)');
-      }
-
-      // Step 2: Request USDC from MoltsPay faucet API
-      console.log('');
+      // Request USDC from MoltsPay faucet API (no SOL needed - server pays fees)
       try {
         console.log('   ⏳ Requesting 1 USDC from faucet...');
         const FAUCET_API = process.env.MOLTSPAY_FAUCET_API || 'https://moltspay.com/api/v1/faucet';
@@ -536,11 +521,11 @@ program
       }
 
       console.log('');
-      if (solSuccess || usdcSuccess) {
+      if (usdcSuccess) {
         console.log('💡 Check your balance:');
         console.log('   npx moltspay status\n');
       } else {
-        console.log('❌ Both faucets failed. Try again in a few minutes.\n');
+        console.log('❌ Faucet request failed. Try again in a few minutes.\n');
       }
       return;
     }

@@ -710,18 +710,33 @@ export class MoltsPayClient {
       throw new Error('Missing payTo address in payment requirements');
     }
 
+    // Check for gasless mode (server pays fees)
+    const solanaFeePayer = (requirements.extra as any)?.solanaFeePayer;
+    const feePayerPubkey = solanaFeePayer ? new PublicKey(solanaFeePayer) : undefined;
+    
+    if (feePayerPubkey) {
+      console.log(`[MoltsPay] Gasless mode: server pays fees`);
+    }
+
     // Create the transfer transaction
     const recipientPubkey = new PublicKey(requirements.payTo);
     const transaction = await createSolanaPaymentTransaction(
       solanaWallet.publicKey,
       recipientPubkey,
       BigInt(amount),
-      chain
+      chain,
+      feePayerPubkey  // Optional fee payer for gasless mode
     );
 
-    // Sign the transaction
-    transaction.sign(solanaWallet);
-    const signedTx = transaction.serialize().toString('base64');
+    // Sign the transaction (partial sign if gasless mode)
+    if (feePayerPubkey) {
+      // Gasless mode: only sign for token transfer authority
+      transaction.partialSign(solanaWallet);
+    } else {
+      // Normal mode: sign as both authority and fee payer
+      transaction.sign(solanaWallet);
+    }
+    const signedTx = transaction.serialize({ requireAllSignatures: false }).toString('base64');
 
     console.log(`[MoltsPay] Transaction signed, sending to server...`);
 

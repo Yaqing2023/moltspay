@@ -428,6 +428,8 @@ export class MoltsPayServer {
         description: this.manifest.provider.description,
         wallet: this.manifest.provider.wallet,
         chain: this.manifest.provider.chain || 'base',
+        solana_wallet: this.manifest.provider.solana_wallet,
+        chains: this.manifest.provider.chains,
       },
       services,
       endpoints: {
@@ -572,7 +574,26 @@ export class MoltsPayServer {
     }
     console.log(`[MoltsPay] Verified by ${verifyResult.facilitator}`);
 
-    // Execute skill FIRST (pay-for-success) with timeout
+    // For Solana: settle FIRST (blockhash expires quickly ~60s)
+    // For EVM: pay-for-success (execute first, settle after)
+    const isSolana = isSolanaNetwork(paymentNetwork);
+    let settlement: any = null;
+
+    if (isSolana) {
+      console.log(`[MoltsPay] Solana detected - settling payment FIRST (blockhash expiry protection)`);
+      try {
+        settlement = await this.registry.settle(payment, requirements);
+        console.log(`[MoltsPay] Payment settled by ${settlement.facilitator}: ${settlement.transaction || 'pending'}`);
+      } catch (err: any) {
+        console.error('[MoltsPay] Solana settlement failed:', err.message);
+        return this.sendJson(res, 402, {
+          error: 'Payment settlement failed',
+          message: err.message,
+        });
+      }
+    }
+
+    // Execute skill (with timeout)
     const timeoutSeconds = parseInt(process.env.SKILL_TIMEOUT_SECONDS || '1200');
     console.log(`[MoltsPay] Executing skill: ${service} (timeout: ${timeoutSeconds}s)`);
     let result: any;
@@ -585,20 +606,25 @@ export class MoltsPayServer {
       ]);
     } catch (err: any) {
       console.error('[MoltsPay] Skill execution failed:', err.message);
+      // For Solana: payment already settled, skill failed - no refund (user accepted risk)
+      // For EVM: payment not settled yet, user keeps their money
       return this.sendJson(res, 500, {
         error: 'Service execution failed',
         message: err.message,
+        paymentSettled: isSolana ? true : false,
+        note: isSolana ? 'Payment was settled before execution. Contact support for refund.' : undefined,
       });
     }
 
-    // Skill succeeded - now settle payment with facilitator
-    console.log(`[MoltsPay] Skill succeeded, settling payment...`);
-    let settlement: any = null;
-    try {
-      settlement = await this.registry.settle(payment, requirements);
-      console.log(`[MoltsPay] Payment settled by ${settlement.facilitator}: ${settlement.transaction || 'pending'}`);
-    } catch (err: any) {
-      console.error('[MoltsPay] Settlement failed:', err.message);
+    // For EVM: settle payment now (pay-for-success)
+    if (!isSolana) {
+      console.log(`[MoltsPay] Skill succeeded, settling payment...`);
+      try {
+        settlement = await this.registry.settle(payment, requirements);
+        console.log(`[MoltsPay] Payment settled by ${settlement.facilitator}: ${settlement.transaction || 'pending'}`);
+      } catch (err: any) {
+        console.error('[MoltsPay] Settlement failed:', err.message);
+      }
     }
 
     // Build response
@@ -987,7 +1013,7 @@ export class MoltsPayServer {
     const tokenAddress = tokenAddresses[selectedToken];
     const tokenDomain = getTokenDomain(selectedNetwork, selectedToken);
 
-    return {
+    const requirements: X402PaymentRequirements = {
       scheme: 'exact',
       network: selectedNetwork,
       asset: tokenAddress,
@@ -996,6 +1022,20 @@ export class MoltsPayServer {
       maxTimeoutSeconds: 300,
       extra: tokenDomain,
     };
+    
+    // For Solana: include fee payer pubkey if available (gasless mode)
+    if (selectedNetwork === 'solana:mainnet' || selectedNetwork === 'solana:devnet') {
+      const solanaFacilitator = this.registry.get('solana') as any;
+      const feePayerPubkey = solanaFacilitator?.getFeePayerPubkey?.();
+      if (feePayerPubkey) {
+        (requirements.extra as any) = {
+          ...(requirements.extra || {}),
+          solanaFeePayer: feePayerPubkey,
+        };
+      }
+    }
+    
+    return requirements;
   }
 
   /**
@@ -1199,9 +1239,8 @@ export class MoltsPayServer {
     // Check if execution requested
     const { execute, service, params } = body;
     
-    // If execute requested, run skill BEFORE settling (pay on success)
+    // If execute requested, handle skill + payment
     if (execute && service) {
-      console.log(`[MoltsPay] /proxy: Executing skill first (pay on success): ${service}`);
       const skill = this.skills.get(service);
       if (!skill) {
         // Service not found - don't settle, return error
@@ -1213,7 +1252,39 @@ export class MoltsPayServer {
         });
       }
 
-      // Execute skill first (with timeout)
+      // For Solana: settle FIRST (blockhash expires quickly ~60s)
+      // For EVM: pay-for-success (execute first, settle after)
+      const isSolana = isSolanaNetwork(network);
+      let settlement: any = null;
+
+      if (isSolana) {
+        console.log(`[MoltsPay] /proxy: Solana detected - settling payment FIRST`);
+        try {
+          settlement = await this.registry.settle(payment, requirements);
+          console.log(`[MoltsPay] /proxy: Payment settled by ${settlement.facilitator}: ${settlement.transaction || 'pending'}`);
+          
+          // Check if settlement actually succeeded (registry returns {success: false} on failure)
+          if (!settlement.success) {
+            console.error(`[MoltsPay] /proxy: Solana settlement failed: ${settlement.error}`);
+            return this.sendJson(res, 402, {
+              success: false,
+              paymentSettled: false,
+              error: `Payment settlement failed: ${settlement.error || 'Unknown error'}`,
+            });
+          }
+        } catch (err: any) {
+          console.error('[MoltsPay] /proxy: Solana settlement failed:', err.message);
+          return this.sendJson(res, 402, {
+            success: false,
+            paymentSettled: false,
+            error: `Payment settlement failed: ${err.message}`,
+          });
+        }
+      } else {
+        console.log(`[MoltsPay] /proxy: Executing skill first (pay on success): ${service}`);
+      }
+
+      // Execute skill (with timeout)
       const timeoutSeconds = parseInt(process.env.SKILL_TIMEOUT_SECONDS || '1200');
       let result: any;
       try {
@@ -1223,37 +1294,42 @@ export class MoltsPayServer {
             setTimeout(() => reject(new Error(`Skill timeout after ${timeoutSeconds}s`)), timeoutSeconds * 1000)
           )
         ]);
-        console.log(`[MoltsPay] /proxy: Skill succeeded, now settling payment...`);
+        console.log(`[MoltsPay] /proxy: Skill succeeded`);
       } catch (err: any) {
-        // Skill failed or timeout - don't settle, client keeps their money
-        console.error(`[MoltsPay] /proxy: Skill failed: ${err.message} - NOT settling`);
+        // Skill failed or timeout
+        console.error(`[MoltsPay] /proxy: Skill failed: ${err.message}`);
+        // For Solana: payment already settled, skill failed - no refund (user accepted risk)
+        // For EVM: payment not settled yet, user keeps their money
         return this.sendJson(res, 500, {
           success: false,
-          paymentSettled: false,
+          paymentSettled: isSolana ? true : false,
           error: `Service execution failed: ${err.message}`,
+          note: isSolana ? 'Payment was settled before execution. Contact support for refund.' : undefined,
         });
       }
 
-      // Skill succeeded - now settle payment
-      let settlement: any = null;
-      try {
-        settlement = await this.registry.settle(payment, requirements);
-        console.log(`[MoltsPay] /proxy: Payment settled by ${settlement.facilitator}: ${settlement.transaction || 'pending'}`);
-      } catch (err: any) {
-        console.error('[MoltsPay] /proxy: Settlement failed:', err.message);
-        // Skill succeeded but settlement failed - return result anyway with warning
-        return this.sendJson(res, 200, {
-          success: true,
-          verified: true,
-          settled: false,
-          settlementError: err.message,
-          from: (payment.payload as any)?.authorization?.from,  // Buyer's wallet address
-          paidTo: wallet,
-          amount: amountNum,
-          currency: currency || 'USDC',
-          memo,
-          result,
-        });
+      // For EVM: settle payment now (pay-for-success)
+      if (!isSolana) {
+        console.log(`[MoltsPay] /proxy: Settling payment...`);
+        try {
+          settlement = await this.registry.settle(payment, requirements);
+          console.log(`[MoltsPay] /proxy: Payment settled by ${settlement.facilitator}: ${settlement.transaction || 'pending'}`);
+        } catch (err: any) {
+          console.error('[MoltsPay] /proxy: Settlement failed:', err.message);
+          // Skill succeeded but settlement failed - return result anyway with warning
+          return this.sendJson(res, 200, {
+            success: true,
+            verified: true,
+            settled: false,
+            settlementError: err.message,
+            from: (payment.payload as any)?.authorization?.from,
+            paidTo: wallet,
+            amount: amountNum,
+            currency: currency || 'USDC',
+            memo,
+            result,
+          });
+        }
       }
 
       return this.sendJson(res, 200, {
@@ -1261,7 +1337,7 @@ export class MoltsPayServer {
         verified: true,
         settled: settlement?.success || false,
         txHash: settlement?.transaction,
-        from: (payment.payload as any)?.authorization?.from,  // Buyer's wallet address
+        from: (payment.payload as any)?.authorization?.from,
         paidTo: wallet,
         amount: amountNum,
         currency: currency || 'USDC',

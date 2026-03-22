@@ -17,7 +17,9 @@ import {
 import { CDPFacilitator, CDPFacilitatorConfig } from './cdp.js';
 import { TempoFacilitator } from './tempo.js';
 import { BNBFacilitator } from './bnb.js';
-import { SolanaFacilitator } from './solana.js';
+import { SolanaFacilitator, SolanaFacilitatorConfig } from './solana.js';
+import { Keypair } from '@solana/web3.js';
+import bs58 from 'bs58';
 
 /**
  * Selection strategy for choosing facilitators
@@ -64,7 +66,21 @@ export class FacilitatorRegistry {
     this.registerFactory('cdp', (config) => new CDPFacilitator(config as CDPFacilitatorConfig));
     this.registerFactory('tempo', () => new TempoFacilitator());
     this.registerFactory('bnb', (config) => new BNBFacilitator(config?.serverPrivateKey as string));
-    this.registerFactory('solana', () => new SolanaFacilitator());
+    this.registerFactory('solana', (config) => {
+      // Load fee payer keypair from config or env
+      let feePayerKeypair: Keypair | undefined;
+      const feePayerKey = (config as any)?.feePayerPrivateKey || process.env.SOLANA_FEE_PAYER_KEY;
+      
+      if (feePayerKey) {
+        try {
+          feePayerKeypair = Keypair.fromSecretKey(bs58.decode(feePayerKey));
+        } catch (e: any) {
+          console.warn(`[SolanaFacilitator] Invalid fee payer key: ${e.message}`);
+        }
+      }
+      
+      return new SolanaFacilitator({ feePayerKeypair } as SolanaFacilitatorConfig);
+    });
     
     // Default selection
     this.selection = selection || { primary: 'cdp', fallback: ['tempo', 'bnb', 'solana'], strategy: 'failover' };
