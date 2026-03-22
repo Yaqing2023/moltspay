@@ -358,7 +358,7 @@ program
 program
   .command('fund <amount>')
   .description('Fund wallet with USDC via Coinbase (US debit card / Apple Pay)')
-  .option('--chain <chain>', 'Chain to fund (base, polygon, solana, or base_sepolia)', 'base')
+  .option('--chain <chain>', 'Chain to fund (base, polygon, solana, base_sepolia, bnb, or bnb_testnet)', 'base')
   .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
   .action(async (amountStr, options) => {
     const client = new MoltsPayClient({ configDir: options.configDir });
@@ -369,9 +369,9 @@ program
       return;
     }
 
-    const chain = (options.chain?.toLowerCase() || 'base') as 'base' | 'polygon' | 'base_sepolia' | 'solana';
-    if (!['base', 'polygon', 'base_sepolia', 'solana'].includes(chain)) {
-      console.log('❌ Invalid chain. Use: base, polygon, solana, or base_sepolia');
+    const chain = (options.chain?.toLowerCase() || 'base') as 'base' | 'polygon' | 'base_sepolia' | 'solana' | 'bnb' | 'bnb_testnet';
+    if (!['base', 'polygon', 'base_sepolia', 'solana', 'bnb', 'bnb_testnet'].includes(chain)) {
+      console.log('❌ Invalid chain. Use: base, polygon, solana, base_sepolia, bnb, or bnb_testnet');
       return;
     }
     
@@ -406,6 +406,35 @@ program
       console.log('💡 Use the MoltsPay faucet to get free testnet USDC:\n');
       console.log('   npx moltspay faucet\n');
       console.log('   Or get from Circle Faucet: https://faucet.circle.com/\n');
+      return;
+    }
+    
+    // BNB Testnet: use faucet (gives USDC + tBNB for gas)
+    if (chain === 'bnb_testnet') {
+      console.log('\n🧪 BNB Testnet Funding\n');
+      console.log(`   Wallet: ${walletAddress}`);
+      console.log(`   Chain: BNB Testnet\n`);
+      console.log('💡 Use the MoltsPay faucet to get testnet USDC + tBNB:\n');
+      console.log('   npx moltspay faucet --chain bnb_testnet\n');
+      console.log('   This gives you:\n');
+      console.log('   • 1 USDC (testnet) for payments');
+      console.log('   • 0.001 tBNB for gas (first approval tx)\n');
+      return;
+    }
+    
+    // BNB Mainnet: manual funding required (no Coinbase onramp)
+    if (chain === 'bnb') {
+      console.log('\n📋 BNB Chain Funding\n');
+      console.log(`   Wallet: ${walletAddress}\n`);
+      console.log('   To use MoltsPay on BNB Chain, you need:\n');
+      console.log('   1. USDC for payments');
+      console.log('      → Withdraw from Binance/exchange to your wallet address\n');
+      console.log('   2. Small amount of BNB for gas (~0.001 BNB / ~$0.60)');
+      console.log('      → First approval transaction requires gas');
+      console.log('      → After approval, all payments are gasless\n');
+      console.log('   💡 Tip: Most exchanges include BNB dust when you withdraw to BNB Chain\n');
+      console.log('   ─────────────────────────────────────────────────────────────');
+      console.log('   After funding, check status: npx moltspay status\n');
       return;
     }
 
@@ -807,8 +836,10 @@ program
           console.log(`       betaUSD:   ${tempo.betaUSD.toFixed(2)}`);
           console.log(`       thetaUSD:  ${tempo.thetaUSD.toFixed(2)}`);
         } else if (chainName === 'bnb' || chainName === 'bnb_testnet') {
-          // BNB chains: show balance + approval status
-          console.log(`     ${chainLabel.padEnd(14)} ${balance.usdc.toFixed(2)} USDC | ${balance.usdt.toFixed(2)} USDT`);
+          // BNB chains: show balance + native BNB for gas
+          const bnbBalance = balance.native;
+          const bnbWarning = bnbBalance < 0.0005 ? ' ⚠️ Low gas' : '';
+          console.log(`     ${chainLabel.padEnd(14)} ${balance.usdc.toFixed(2)} USDC | ${balance.usdt.toFixed(2)} USDT | ${bnbBalance.toFixed(4)} BNB${bnbWarning}`);
         } else {
           // EVM chains: show USDC/USDT
           console.log(`     ${chainLabel.padEnd(14)} ${balance.usdc.toFixed(2)} USDC | ${balance.usdt.toFixed(2)} USDT`);
@@ -839,6 +870,12 @@ program
             bnbApprovalStatus.usdc ? 'USDC✓' : 'USDC✗',
           ].join(', ');
           console.log(`     BNB:          ${status} ${tokens}`);
+          
+          // Show warning if no approval and low BNB
+          const bnbNative = allBalances['bnb']?.native || 0;
+          if (!bnbApprovalStatus.usdc && !bnbApprovalStatus.usdt && bnbNative < 0.0005) {
+            console.log('     ⚠️  Need ~0.001 BNB for first approval tx. Get from exchange.');
+          }
         }
         if (bnbTestnetApprovalStatus) {
           const status = bnbTestnetApprovalStatus.usdt && bnbTestnetApprovalStatus.usdc ? '✅' : '⚠️';
@@ -847,6 +884,12 @@ program
             bnbTestnetApprovalStatus.usdc ? 'USDC✓' : 'USDC✗',
           ].join(', ');
           console.log(`     BNB Testnet:  ${status} ${tokens}`);
+          
+          // Show warning if no approval and low tBNB
+          const tbnbNative = allBalances['bnb_testnet']?.native || 0;
+          if (!bnbTestnetApprovalStatus.usdc && !bnbTestnetApprovalStatus.usdt && tbnbNative < 0.0005) {
+            console.log('     ⚠️  Need tBNB for approval. Run: npx moltspay faucet --chain bnb_testnet');
+          }
         }
       }
       

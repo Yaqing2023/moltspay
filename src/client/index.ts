@@ -603,6 +603,36 @@ export class MoltsPayClient {
     const amountWeiCheck = BigInt(Math.floor(amount * (10 ** tokenConfig.decimals)));
     
     if (allowance < amountWeiCheck) {
+      // Check if user has enough BNB for gas to approve
+      const nativeBalance = await provider.getBalance(this.wallet!.address);
+      const minGasBalance = ethers.parseEther('0.0005'); // ~0.0005 BNB minimum for approval
+      
+      if (nativeBalance < minGasBalance) {
+        const nativeBNB = parseFloat(ethers.formatEther(nativeBalance)).toFixed(4);
+        const isTestnet = chainName === 'bnb_testnet';
+        
+        if (isTestnet) {
+          throw new Error(
+            `❌ Insufficient tBNB for approval transaction\n\n` +
+            `   Current tBNB: ${nativeBNB}\n` +
+            `   Required:     ~0.001 tBNB\n\n` +
+            `   Get testnet tokens: npx moltspay faucet --chain bnb_testnet\n` +
+            `   (Gives USDC + tBNB for gas)`
+          );
+        } else {
+          throw new Error(
+            `❌ Insufficient BNB for approval transaction\n\n` +
+            `   Current BNB: ${nativeBNB}\n` +
+            `   Required:    ~0.001 BNB (~$0.60)\n\n` +
+            `   To get BNB:\n` +
+            `   • Withdraw from Binance/exchange to your wallet\n` +
+            `   • Most exchanges include BNB dust with withdrawals\n\n` +
+            `   After funding, run:\n` +
+            `   npx moltspay approve --chain ${chainName} --spender ${spender}`
+          );
+        }
+      }
+      
       throw new Error(
         `Insufficient allowance for ${spender.slice(0, 10)}...\n` +
         `Run: npx moltspay approve --chain ${chainName} --spender ${spender}`
