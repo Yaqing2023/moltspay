@@ -1577,7 +1577,7 @@ export class MoltsPayServer {
     const tokenAddress = tokenAddresses[selectedToken];
     const tokenDomain = getTokenDomain(networkId, selectedToken);
 
-    return {
+    const requirements: X402PaymentRequirements = {
       scheme: 'exact',
       network: networkId,
       asset: tokenAddress,
@@ -1586,6 +1586,20 @@ export class MoltsPayServer {
       maxTimeoutSeconds: 300,
       extra: tokenDomain,
     };
+
+    // For BNB: include spender address for client approval
+    if (networkId === 'eip155:56' || networkId === 'eip155:97') {
+      const bnbFacilitator = this.registry.get('bnb') as any;
+      const spenderAddress = bnbFacilitator?.getSpenderAddress?.();
+      if (spenderAddress) {
+        (requirements.extra as any) = {
+          ...(requirements.extra || {}),
+          bnbSpender: spenderAddress,
+        };
+      }
+    }
+
+    return requirements;
   }
 
   /**
