@@ -76,6 +76,7 @@ const ERC20_APPROVE_ABI = [
 async function setupBNBApprovals(
   client: MoltsPayClient, 
   chain: 'bnb' | 'bnb_testnet',
+  spenderAddress: string,
   sponsorGas: boolean = false
 ): Promise<void> {
   const chainConfig = CHAINS[chain];
@@ -88,6 +89,8 @@ async function setupBNBApprovals(
     return;
   }
   const signer = wallet.connect(provider);
+  
+  console.log(`   Spender: ${spenderAddress}`);
   
   // Check BNB balance for gas
   let bnbBalance = await provider.getBalance(wallet.address);
@@ -113,26 +116,26 @@ async function setupBNBApprovals(
     } else {
       console.log(`   ⚠️  Need BNB for gas (~0.002 BNB)`);
       console.log(`   💡 Get testnet BNB: https://testnet.bnbchain.org/faucet-smart`);
-      console.log(`   Then run: npx moltspay init --chain ${chain}`);
+      console.log(`   Then run: npx moltspay approve --chain ${chain} --spender ${spenderAddress}`);
       return;
     }
   }
   
-  // Approve USDT and USDC for the server spender address
+  // Approve USDT and USDC for the spender address
   for (const tokenSymbol of ['USDT', 'USDC'] as const) {
     const tokenConfig = chainConfig.tokens[tokenSymbol];
     const tokenContract = new ethers.Contract(tokenConfig.address, ERC20_APPROVE_ABI, signer);
     
     // Check existing allowance
-    const allowance = await tokenContract.allowance(wallet.address, BNB_SPENDER_ADDRESS);
+    const allowance = await tokenContract.allowance(wallet.address, spenderAddress);
     if (allowance > 0n) {
-      console.log(`   ✅ ${tokenSymbol}: already approved`);
+      console.log(`   ✅ ${tokenSymbol}: already approved for ${spenderAddress.slice(0, 10)}...`);
       continue;
     }
     
     console.log(`   ⏳ Approving ${tokenSymbol}...`);
     try {
-      const tx = await tokenContract.approve(BNB_SPENDER_ADDRESS, ethers.MaxUint256);
+      const tx = await tokenContract.approve(spenderAddress, ethers.MaxUint256);
       await tx.wait();
       console.log(`   ✅ ${tokenSymbol}: approved (tx: ${tx.hash.slice(0, 10)}...)`);
     } catch (err: any) {
@@ -284,8 +287,10 @@ program
     // For BNB chains, set up approvals (requires gas sponsorship for new wallets)
     if (chain === 'bnb' || chain === 'bnb_testnet') {
       console.log('📋 Setting up BNB chain approvals...\n');
+      console.log('   ℹ️  Using default spender. For other services, run:');
+      console.log(`   npx moltspay approve --chain ${chain} --spender <address>\n`);
       const client = new MoltsPayClient({ configDir: options.configDir });
-      await setupBNBApprovals(client, chain, true); // true = sponsor gas for new wallet
+      await setupBNBApprovals(client, chain, BNB_SPENDER_ADDRESS, true); // true = sponsor gas
     }
 
     console.log(`💰 Fund your wallet with USDC on ${chain} to start using services.\n`);
@@ -437,6 +442,41 @@ program
     } catch (error) {
       console.log(`❌ ${(error as Error).message}`);
     }
+  });
+
+/**
+ * npx moltspay approve
+ * 
+ * Approve a spender address for BNB chain payments (required before paying)
+ */
+program
+  .command('approve')
+  .description('Approve a spender address for BNB chain payments')
+  .requiredOption('--spender <address>', 'Spender address to approve (from server 402 response)')
+  .option('--chain <chain>', 'BNB chain (bnb or bnb_testnet)', 'bnb_testnet')
+  .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
+  .action(async (options) => {
+    const chain = options.chain as 'bnb' | 'bnb_testnet';
+    
+    if (chain !== 'bnb' && chain !== 'bnb_testnet') {
+      console.log('❌ approve command is only for BNB chains (bnb or bnb_testnet)');
+      return;
+    }
+    
+    if (!options.spender.match(/^0x[a-fA-F0-9]{40}$/)) {
+      console.log('❌ Invalid spender address format');
+      return;
+    }
+    
+    const client = new MoltsPayClient({ configDir: options.configDir });
+    if (!client.isInitialized) {
+      console.log('❌ Wallet not initialized. Run: npx moltspay init --chain ' + chain);
+      return;
+    }
+    
+    console.log(`\n🔐 Approving spender for ${chain}...\n`);
+    await setupBNBApprovals(client, chain, options.spender, false);
+    console.log('✅ Approval complete!\n');
   });
 
 /**

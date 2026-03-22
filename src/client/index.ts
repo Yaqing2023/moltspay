@@ -357,12 +357,18 @@ export class MoltsPayClient {
       if (!payTo) {
         throw new Error('Missing payTo address in payment requirements');
       }
+      // Get spender address from server response (dynamic, not hardcoded)
+      const bnbSpender = (req.extra as any)?.bnbSpender;
+      if (!bnbSpender) {
+        throw new Error('Server did not provide bnbSpender address. Server may not support BNB payments.');
+      }
       return await this.handleBNBPayment(serverUrl, service, params, {
         to: payTo,
         amount,
         token,
         chainName,
         chain,
+        spender: bnbSpender,
       });
     }
 
@@ -585,10 +591,23 @@ export class MoltsPayClient {
       token: TokenSymbol;
       chainName: ChainName;
       chain: ChainConfig;
+      spender: string;
     }
   ): Promise<Record<string, any>> {
-    const { to, amount, token, chainName, chain } = paymentDetails;
+    const { to, amount, token, chainName, chain, spender } = paymentDetails;
     const tokenConfig = chain.tokens[token];
+    
+    // Check approval status
+    const provider = new ethers.JsonRpcProvider(chain.rpc);
+    const allowance = await this.checkAllowance(tokenConfig.address, spender, provider);
+    const amountWeiCheck = BigInt(Math.floor(amount * (10 ** tokenConfig.decimals)));
+    
+    if (allowance < amountWeiCheck) {
+      throw new Error(
+        `Insufficient allowance for ${spender.slice(0, 10)}...\n` +
+        `Run: npx moltspay approve --chain ${chainName} --spender ${spender}`
+      );
+    }
     
     // Convert amount to wei (BNB uses 18 decimals)
     const amountWei = BigInt(Math.floor(amount * (10 ** tokenConfig.decimals))).toString();
@@ -791,6 +810,22 @@ export class MoltsPayClient {
     }
 
     return result.result || result;
+  }
+
+  /**
+   * Check ERC20 allowance for a spender
+   */
+  private async checkAllowance(
+    tokenAddress: string,
+    spender: string,
+    provider: ethers.JsonRpcProvider
+  ): Promise<bigint> {
+    const contract = new ethers.Contract(
+      tokenAddress,
+      ['function allowance(address owner, address spender) view returns (uint256)'],
+      provider
+    );
+    return await contract.allowance(this.wallet!.address, spender);
   }
 
   /**

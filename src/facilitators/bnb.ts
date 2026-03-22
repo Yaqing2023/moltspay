@@ -91,11 +91,20 @@ export class BNBFacilitator extends BaseFacilitator {
   readonly supportedNetworks = ['eip155:56', 'eip155:97']; // Mainnet + Testnet
 
   private serverPrivateKey: string;
+  private spenderAddress: string | null = null;
   private chainConfigs: { [key: number]: { rpc: string; chain: ChainConfig } };
 
   constructor(serverPrivateKey?: string) {
     super();
     this.serverPrivateKey = serverPrivateKey || process.env.BNB_SERVER_PRIVATE_KEY || '';
+    
+    // Pre-compute spender address synchronously using ethers
+    if (this.serverPrivateKey) {
+      // Use ethers compute address (sync)
+      const { ethers } = require('ethers');
+      const wallet = new ethers.Wallet(this.serverPrivateKey);
+      this.spenderAddress = wallet.address;
+    }
     
     this.chainConfigs = {
       56: { rpc: CHAINS.bnb.rpc, chain: CHAINS.bnb },
@@ -346,6 +355,14 @@ export class BNBFacilitator extends BaseFacilitator {
   }
 
   // ==================== Private Methods ====================
+
+  /**
+   * Get the server's spender address (public, for 402 responses)
+   * Returns cached value computed at construction time.
+   */
+  getSpenderAddress(): string | null {
+    return this.spenderAddress;
+  }
 
   private async getServerAddress(): Promise<string> {
     // Derive address from private key using ethers

@@ -1035,6 +1035,18 @@ export class MoltsPayServer {
       }
     }
     
+    // For BNB: include spender address for client approval
+    if (selectedNetwork === 'eip155:56' || selectedNetwork === 'eip155:97') {
+      const bnbFacilitator = this.registry.get('bnb') as any;
+      const spenderAddress = bnbFacilitator?.getSpenderAddress?.();
+      if (spenderAddress) {
+        (requirements.extra as any) = {
+          ...(requirements.extra || {}),
+          bnbSpender: spenderAddress,
+        };
+      }
+    }
+    
     return requirements;
   }
 
