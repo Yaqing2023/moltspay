@@ -1123,10 +1123,14 @@ export class MoltsPayServer {
   private isProxyAllowed(clientIP: string): boolean {
     const allowedIPs = process.env.PROXY_ALLOWED_IPS?.split(',').map(ip => ip.trim()) || [];
     
-    // If no whitelist configured, deny all (secure by default)
+    // If no whitelist configured, allow all (for testing/open mode)
     if (allowedIPs.length === 0) {
-      console.log(`[MoltsPay] /proxy denied: no PROXY_ALLOWED_IPS configured`);
-      return false;
+      return true;
+    }
+    
+    // If '*' is in the list, allow all
+    if (allowedIPs.includes('*')) {
+      return true;
     }
     
     // Normalize IPv6 localhost

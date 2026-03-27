@@ -181,13 +181,27 @@ export class MoltsPayClient {
       throw new Error('Client not initialized. Run: npx moltspay init');
     }
 
-    // Step 1: Make initial request without payment
+    // Step 1: Discover service endpoint
     console.log(`[MoltsPay] Requesting service: ${service}`);
+    let executeUrl = `${serverUrl}/execute`;  // Default fallback
+    
+    try {
+      const services = await this.getServices(serverUrl);
+      const svc = services.services?.find((s: any) => s.id === service);
+      if (svc?.endpoint) {
+        // Use the endpoint from service discovery (for Cloudflare Workers, etc.)
+        executeUrl = `${serverUrl}${svc.endpoint}`;
+        console.log(`[MoltsPay] Using service endpoint: ${svc.endpoint}`);
+      }
+    } catch {
+      // Fall back to /execute if service discovery fails
+    }
+    
     const requestBody: any = { service, params };
     if (options.chain) {
       requestBody.chain = options.chain;
     }
-    const initialRes = await fetch(`${serverUrl}/execute`, {
+    const initialRes = await fetch(executeUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
@@ -210,7 +224,7 @@ export class MoltsPayClient {
     // If WWW-Authenticate with Payment scheme, use MPP flow
     if (wwwAuthHeader && wwwAuthHeader.toLowerCase().includes('payment')) {
       console.log('[MoltsPay] Detected MPP protocol, using Tempo flow...');
-      return await this.handleMPPPayment(serverUrl, service, params, wwwAuthHeader);
+      return await this.handleMPPPayment(executeUrl, service, params, wwwAuthHeader);
     }
     
     if (!paymentRequiredHeader) {
@@ -297,7 +311,7 @@ export class MoltsPayClient {
         throw new Error(`Failed to find payment requirement for ${selectedChain}`);
       }
       
-      return await this.handleSolanaPayment(serverUrl, service, params, req, solanaChain);
+      return await this.handleSolanaPayment(executeUrl, service, params, req, solanaChain);
     }
 
     // EVM chain handling
@@ -362,7 +376,7 @@ export class MoltsPayClient {
       if (!bnbSpender) {
         throw new Error('Server did not provide bnbSpender address. Server may not support BNB payments.');
       }
-      return await this.handleBNBPayment(serverUrl, service, params, {
+      return await this.handleBNBPayment(executeUrl, service, params, {
         to: payTo,
         amount,
         token,
@@ -422,7 +436,7 @@ export class MoltsPayClient {
     if (options.chain) {
       paidRequestBody.chain = options.chain;
     }
-    const paidRes = await fetch(`${serverUrl}/execute`, {
+    const paidRes = await fetch(executeUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -442,7 +456,8 @@ export class MoltsPayClient {
 
     console.log(`[MoltsPay] Success! Payment: ${result.payment?.status || 'claimed'}`);
     
-    return result.result;
+    // Support both MoltsPay Server format ({ result: ... }) and direct response format
+    return result.result || result;
   }
 
   /**
@@ -450,7 +465,7 @@ export class MoltsPayClient {
    * Called when pay() detects WWW-Authenticate header in 402 response
    */
   private async handleMPPPayment(
-    serverUrl: string,
+    executeUrl: string,
     service: string,
     params: Record<string, any>,
     wwwAuthHeader: string
@@ -549,7 +564,7 @@ export class MoltsPayClient {
       .replace(/=+$/, '');
 
     // Retry with credential
-    const paidRes = await fetch(`${serverUrl}/execute`, {
+    const paidRes = await fetch(executeUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -582,7 +597,7 @@ export class MoltsPayClient {
    * 5. Server calls transferFrom if successful (pay-for-success)
    */
   private async handleBNBPayment(
-    serverUrl: string,
+    executeUrl: string,
     service: string,
     params: Record<string, any>,
     paymentDetails: {
@@ -704,7 +719,7 @@ export class MoltsPayClient {
 
     // Send request with payment
     console.log(`[MoltsPay] Sending BNB payment request...`);
-    const paidRes = await fetch(`${serverUrl}/execute`, {
+    const paidRes = await fetch(executeUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -734,7 +749,7 @@ export class MoltsPayClient {
    * 2. Server submits the transaction after service completes
    */
   private async handleSolanaPayment(
-    serverUrl: string,
+    executeUrl: string,
     service: string,
     params: Record<string, any>,
     requirements: X402PaymentRequirements,
@@ -813,7 +828,7 @@ export class MoltsPayClient {
     const paymentHeader = Buffer.from(JSON.stringify(payload)).toString('base64');
 
     // Send request with payment
-    const paidRes = await fetch(`${serverUrl}/execute`, {
+    const paidRes = await fetch(executeUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
