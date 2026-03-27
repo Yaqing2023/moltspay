@@ -19,14 +19,14 @@ MoltsPay enables agent-to-agent commerce using the [x402 protocol](https://www.x
 
 ## Features
 
-- 🔌 **Skill Integration** - Add `moltspay.services.json` to any existing skill
-- 🎫 **x402 Protocol** - HTTP-native payments (402 Payment Required)
-- 💨 **Gasless** - Both client and server pay no gas (facilitators handle it)
-- ✅ **Payment Verification** - Automatic on-chain verification
-- 🔒 **Secure Wallet** - Spending limits, whitelist, and audit logging
-- ⛓️ **Multi-chain** - Base, Polygon, Solana, BNB, Tempo (mainnet & testnet)
-- 🤖 **Agent-to-Agent** - Complete A2A payment flow support
-- 🌐 **Multi-VM** - EVM chains + Solana (SVM) with unified API
+- **Skill Integration** - Add `moltspay.services.json` to any existing skill
+- **x402 Protocol** - HTTP-native payments (402 Payment Required)
+- **Gasless** - Both client and server pay no gas (facilitators handle it)
+- **Payment Verification** - Automatic on-chain verification
+- **Secure Wallet** - Spending limits, whitelist, and audit logging
+- **Multi-chain** - Base, Polygon, Solana, BNB, Tempo (mainnet & testnet)
+- **Agent-to-Agent** - Complete A2A payment flow support
+- **Multi-VM** - EVM chains + Solana (SVM) with unified API
 
 ## Installation
 
@@ -148,24 +148,24 @@ MoltsPay supports multiple payment protocols, each optimized for different chain
 
 ```
 Client                         Server                      CDP Facilitator
-  │                              │                              │
-  │ POST /execute                │                              │
-  │ ─────────────────────────>   │                              │
-  │                              │                              │
-  │ 402 + payment requirements   │                              │
-  │ <─────────────────────────   │                              │
-  │                              │                              │
-  │ [Sign EIP-3009 - NO GAS]     │                              │
-  │                              │                              │
-  │ POST + X-Payment header      │                              │
-  │ ─────────────────────────>   │ Verify signature             │
-  │                              │ ─────────────────────────>   │
-  │                              │                              │
-  │                              │ Execute transfer (pays gas)  │
-  │                              │ <─────────────────────────   │
-  │                              │                              │
-  │ 200 OK + result              │                              │
-  │ <─────────────────────────   │                              │
+  |                              |                              |
+  | POST /execute                |                              |
+  | -------------------------------------------------->   |                              |
+  |                              |                              |
+  | 402 + payment requirements   |                              |
+  | <--------------------------------------------------   |                              |
+  |                              |                              |
+  | [Sign EIP-3009 - NO GAS]     |                              |
+  |                              |                              |
+  | POST + X-Payment header      |                              |
+  | -------------------------------------------------->   | Verify signature             |
+  |                              | -------------------------------------------------->   |
+  |                              |                              |
+  |                              | Execute transfer (pays gas)  |
+  |                              | <--------------------------------------------------   |
+  |                              |                              |
+  | 200 OK + result              |                              |
+  | <--------------------------------------------------   |                              |
 ```
 
 **Key insight:** Client signs a payment authorization, server submits it. Neither party pays gas - the CDP facilitator handles settlement.
@@ -176,23 +176,23 @@ MPP (Machine Payments Protocol) is simpler - client executes the transfer direct
 
 ```
 Client                         Server
-  │                              │
-  │ POST /service                │
-  │ ─────────────────────────>   │
-  │                              │
-  │ 402 + WWW-Authenticate       │
-  │ <─────────────────────────   │
-  │                              │
-  │ [Execute TIP-20 transfer]    │
-  │ [No gas needed on Tempo]     │
-  │                              │
-  │ POST + Authorization: Payment│
-  │ ─────────────────────────>   │
-  │                              │
-  │ [Server verifies on-chain]   │
-  │                              │
-  │ 200 OK + Payment-Receipt     │
-  │ <─────────────────────────   │
+  |                              |
+  | POST /service                |
+  | -------------------------------------------------->   |
+  |                              |
+  | 402 + WWW-Authenticate       |
+  | <--------------------------------------------------   |
+  |                              |
+  | [Execute TIP-20 transfer]    |
+  | [No gas needed on Tempo]     |
+  |                              |
+  | POST + Authorization: Payment|
+  | -------------------------------------------------->   |
+  |                              |
+  | [Server verifies on-chain]   |
+  |                              |
+  | 200 OK + Payment-Receipt     |
+  | <--------------------------------------------------   |
 ```
 
 **Key insight:** On Tempo, the client executes the transfer directly (gas-free), then retries with the transaction hash. No CDP facilitator needed.
@@ -201,24 +201,24 @@ Client                         Server
 
 ```
 Client                         Server (Fee Payer)          Solana Network
-  │                              │                              │
-  │ POST /execute                │                              │
-  │ ─────────────────────────>   │                              │
-  │                              │                              │
-  │ 402 + payment requirements   │                              │
-  │ (includes solana_wallet)     │                              │
-  │ <─────────────────────────   │                              │
-  │                              │                              │
-  │ [Sign SPL Transfer]          │                              │
-  │ [NO GAS - just signing]      │                              │
-  │                              │                              │
-  │ POST + X-Payment (signature) │                              │
-  │ ─────────────────────────>   │ Execute transfer             │
-  │                              │ (server pays ~$0.001 SOL)    │
-  │                              │ ─────────────────────────>   │
-  │                              │                              │
-  │ 200 OK + result              │                              │
-  │ <─────────────────────────   │                              │
+  |                              |                              |
+  | POST /execute                |                              |
+  | -------------------------------------------------->   |                              |
+  |                              |                              |
+  | 402 + payment requirements   |                              |
+  | (includes solana_wallet)     |                              |
+  | <--------------------------------------------------   |                              |
+  |                              |                              |
+  | [Sign SPL Transfer]          |                              |
+  | [NO GAS - just signing]      |                              |
+  |                              |                              |
+  | POST + X-Payment (signature) |                              |
+  | -------------------------------------------------->   | Execute transfer             |
+  |                              | (server pays ~$0.001 SOL)    |
+  |                              | -------------------------------------------------->   |
+  |                              |                              |
+  | 200 OK + result              |                              |
+  | <--------------------------------------------------   |                              |
 ```
 
 **Key insight:** Client only signs the SPL transfer (gasless). Server acts as fee payer and executes the transaction on-chain.
@@ -227,24 +227,24 @@ Client                         Server (Fee Payer)          Solana Network
 
 ```
 Client                         Server                      BNB Network
-  │                              │                              │
-  │ POST /execute                │                              │
-  │ ─────────────────────────>   │                              │
-  │                              │                              │
-  │ 402 + payment requirements   │                              │
-  │ (includes bnbSpender)        │                              │
-  │ <─────────────────────────   │                              │
-  │                              │                              │
-  │ [Sign EIP-712 intent]        │                              │
-  │ [NO GAS - just signing]      │                              │
-  │                              │                              │
-  │ POST + X-Payment (signature) │                              │
-  │ ─────────────────────────>   │ Execute transferFrom         │
-  │                              │ (server pays ~$0.0001 gas)   │
-  │                              │ ─────────────────────────>   │
-  │                              │                              │
-  │ 200 OK + result              │                              │
-  │ <─────────────────────────   │                              │
+  |                              |                              |
+  | POST /execute                |                              |
+  | -------------------------------------------------->   |                              |
+  |                              |                              |
+  | 402 + payment requirements   |                              |
+  | (includes bnbSpender)        |                              |
+  | <--------------------------------------------------   |                              |
+  |                              |                              |
+  | [Sign EIP-712 intent]        |                              |
+  | [NO GAS - just signing]      |                              |
+  |                              |                              |
+  | POST + X-Payment (signature) |                              |
+  | -------------------------------------------------->   | Execute transferFrom         |
+  |                              | (server pays ~$0.0001 gas)   |
+  |                              | -------------------------------------------------->   |
+  |                              |                              |
+  | 200 OK + result              |                              |
+  | <--------------------------------------------------   |                              |
 ```
 
 **Key insight:** Client only signs an intent (gasless). Server executes the actual transfer and pays the minimal gas (~$0.0001). This is the "pay-for-success" model - payment only happens if service succeeds.
@@ -255,9 +255,9 @@ MoltsPay reads your skill's existing structure:
 
 ```
 my-skill/
-├── package.json           # MoltsPay reads "main" field
-├── index.js               # Your existing exports
-└── moltspay.services.json # Only file you add!
++------ package.json           # MoltsPay reads "main" field
++------ index.js               # Your existing exports
++------ moltspay.services.json # Only file you add!
 ```
 
 **Your functions stay untouched.** Just add the JSON config.
@@ -350,8 +350,8 @@ Server does NOT need a private key - the x402 facilitator handles settlement.
 
 The server automatically detects which chain to verify payments on based on the client's payment header:
 
-- Client pays with `--chain base` → Server verifies on Base mainnet
-- Client pays with `--chain base_sepolia` → Server verifies on Base Sepolia
+- Client pays with `--chain base` -> Server verifies on Base mainnet
+- Client pays with `--chain base_sepolia` -> Server verifies on Base Sepolia
 
 **No `USE_MAINNET` env var needed!** Just configure your accepted chains in the manifest.
 
@@ -425,14 +425,61 @@ npx moltspay validate <path>         # Validate manifest
 ```typescript
 import { MoltsPayClient } from 'moltspay/client';
 
-const client = new MoltsPayClient({ chain: 'base' });
+// Initialize client (uses wallet from ~/.moltspay/wallet.json)
+const client = new MoltsPayClient();
 
-// Pay for a service
-const result = await client.execute('https://server.com', 'text-to-video', {
-  prompt: 'a cat dancing'
-});
+// Standard service call (params wrapped in { params: {...} })
+const result = await client.pay(
+  'https://server.com',
+  'text-to-video',
+  { prompt: 'a cat dancing' },
+  { chain: 'base' }
+);
 
 console.log(result.video_url);
+```
+
+#### Custom Input Formats (rawData)
+
+Some services have custom input formats instead of the standard `{ params: { prompt } }`.
+Use `rawData: true` to send your data at the top level:
+
+```typescript
+// Service expects: { text: "...", target_lang: "..." }
+// NOT: { params: { text: "...", target_lang: "..." } }
+
+const result = await client.pay(
+  'https://server.com',
+  'translate',
+  { text: 'Hello world', target_lang: 'es' },
+  { 
+    chain: 'base_sepolia',
+    rawData: true  // Send data at top level
+  }
+);
+
+// Server receives: { service: "translate", text: "Hello world", target_lang: "es", chain: "base_sepolia" }
+```
+
+#### PayOptions Reference
+
+```typescript
+interface PayOptions {
+  token?: 'USDC' | 'USDT';     // Token to pay with (default: USDC)
+  autoSelect?: boolean;         // Auto-select token based on balance
+  chain?: string;               // Chain: base, polygon, solana, bnb, tempo_moderato, + testnets
+  rawData?: boolean;            // Send data at top level (for custom input formats)
+}
+```
+
+#### CLI Equivalent
+
+```bash
+# Standard format (uses { params: { prompt } })
+npx moltspay pay https://server.com text-to-video --prompt "a cat dancing"
+
+# Custom format (uses rawData, sends at top level)
+npx moltspay pay https://server.com translate --data '{"text": "Hello", "target_lang": "es"}'
 ```
 
 ### Server
@@ -493,9 +540,9 @@ A **facilitator** is the entity that executes the on-chain payment and pays the 
 
 | Aspect | CDP (External) | Self-hosted |
 |--------|----------------|-------------|
-| Single point of failure | ❌ Coinbase down = everyone stuck | ✅ Each provider independent |
-| Censorship risk | ❌ Coinbase can block accounts | ✅ Cannot be censored |
-| Dependency | ❌ Relies on third-party | ✅ Fully autonomous |
+| Single point of failure | Coinbase down = everyone stuck | Each provider independent |
+| Censorship risk | Coinbase can block accounts | Cannot be censored |
+| Dependency | Relies on third-party | Fully autonomous |
 
 This self-hosted approach is a key innovation: **any service provider can become their own facilitator** without relying on third-party infrastructure. Unlike CDP where all users depend on Coinbase, self-hosted facilitators create a truly decentralized network with no single point of failure.
 
@@ -628,7 +675,7 @@ npx moltspay pay https://moltspay.com/a/zen7 text-to-video --chain solana_devnet
 
 Join our Discord for help, feedback, and updates:
 
-👉 **[MoltsPay Discord](https://discord.gg/QwCJgVBxVK)** 
+--> **[MoltsPay Discord](https://discord.gg/QwCJgVBxVK)** 
 
 Or visit the [#moltspay-support](https://discord.com/channels/1472602423267819734/1480968496346304522) channel directly.
 
