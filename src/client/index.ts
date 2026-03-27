@@ -34,6 +34,8 @@ export interface PayOptions {
   autoSelect?: boolean;
   /** Chain to pay on */
   chain?: 'base' | 'polygon' | 'base_sepolia' | 'tempo_moderato' | 'bnb' | 'bnb_testnet' | 'solana' | 'solana_devnet';
+  /** Send raw data at top level instead of wrapped in { params } */
+  rawData?: boolean;
 }
 
 // x402 constants
@@ -197,7 +199,15 @@ export class MoltsPayClient {
       // Fall back to /execute if service discovery fails
     }
     
-    const requestBody: any = { service, params };
+    // Build request body - raw mode sends data at top level, standard mode wraps in { params }
+    let requestBody: any;
+    if (options.rawData) {
+      // Raw mode: { service, chain, ...params } - user's data at top level
+      requestBody = { service, ...params };
+    } else {
+      // Standard mode: { service, params } - wrapped format
+      requestBody = { service, params };
+    }
     if (options.chain) {
       requestBody.chain = options.chain;
     }
@@ -224,7 +234,7 @@ export class MoltsPayClient {
     // If WWW-Authenticate with Payment scheme, use MPP flow
     if (wwwAuthHeader && wwwAuthHeader.toLowerCase().includes('payment')) {
       console.log('[MoltsPay] Detected MPP protocol, using Tempo flow...');
-      return await this.handleMPPPayment(executeUrl, service, params, wwwAuthHeader);
+      return await this.handleMPPPayment(executeUrl, service, params, wwwAuthHeader, options);
     }
     
     if (!paymentRequiredHeader) {
@@ -311,7 +321,7 @@ export class MoltsPayClient {
         throw new Error(`Failed to find payment requirement for ${selectedChain}`);
       }
       
-      return await this.handleSolanaPayment(executeUrl, service, params, req, solanaChain);
+      return await this.handleSolanaPayment(executeUrl, service, params, req, solanaChain, options);
     }
 
     // EVM chain handling
@@ -383,7 +393,7 @@ export class MoltsPayClient {
         chainName,
         chain,
         spender: bnbSpender,
-      });
+      }, options);
     }
 
     // Step 4: Sign EIP-3009 authorization (GASLESS - just signing)
@@ -432,7 +442,9 @@ export class MoltsPayClient {
 
     // Step 6: Retry with payment header
     console.log(`[MoltsPay] Sending request with payment...`);
-    const paidRequestBody: any = { service, params };
+    const paidRequestBody: any = options.rawData
+      ? { service, ...params }
+      : { service, params };
     if (options.chain) {
       paidRequestBody.chain = options.chain;
     }
@@ -468,7 +480,8 @@ export class MoltsPayClient {
     executeUrl: string,
     service: string,
     params: Record<string, any>,
-    wwwAuthHeader: string
+    wwwAuthHeader: string,
+    options: PayOptions = {}
   ): Promise<Record<string, any>> {
     // Dynamic imports for ESM-only packages
     const { privateKeyToAccount } = await import('viem/accounts');
@@ -563,14 +576,18 @@ export class MoltsPayClient {
       .replace(/\//g, '_')
       .replace(/=+$/, '');
 
-    // Retry with credential
+    // Retry with credential - respect rawData option
+    const retryBody = options.rawData 
+      ? { service, ...params, chain: 'tempo_moderato' }
+      : { service, params, chain: 'tempo_moderato' };
+    
     const paidRes = await fetch(executeUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Payment ${credentialB64}`,
       },
-      body: JSON.stringify({ service, params, chain: 'tempo_moderato' }),
+      body: JSON.stringify(retryBody),
     });
 
     const result = await paidRes.json() as any;
@@ -607,7 +624,8 @@ export class MoltsPayClient {
       chainName: ChainName;
       chain: ChainConfig;
       spender: string;
-    }
+    },
+    options: PayOptions = {}
   ): Promise<Record<string, any>> {
     const { to, amount, token, chainName, chain, spender } = paymentDetails;
     const tokenConfig = chain.tokens[token];
@@ -717,15 +735,18 @@ export class MoltsPayClient {
 
     const paymentHeader = Buffer.from(JSON.stringify(payload)).toString('base64');
 
-    // Send request with payment
+    // Send request with payment - respect rawData option
     console.log(`[MoltsPay] Sending BNB payment request...`);
+    const bnbRequestBody = options.rawData
+      ? { service, ...params, chain: chainName }
+      : { service, params, chain: chainName };
     const paidRes = await fetch(executeUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Payment': paymentHeader,
       },
-      body: JSON.stringify({ service, params, chain: chainName }),
+      body: JSON.stringify(bnbRequestBody),
     });
 
     const result = await paidRes.json() as any;
@@ -753,7 +774,8 @@ export class MoltsPayClient {
     service: string,
     params: Record<string, any>,
     requirements: X402PaymentRequirements,
-    chain: SolanaChainName
+    chain: SolanaChainName,
+    options: PayOptions = {}
   ): Promise<Record<string, any>> {
     // Load Solana wallet
     const solanaWallet = loadSolanaWallet(this.configDir);
@@ -827,14 +849,17 @@ export class MoltsPayClient {
 
     const paymentHeader = Buffer.from(JSON.stringify(payload)).toString('base64');
 
-    // Send request with payment
+    // Send request with payment - respect rawData option
+    const solanaRequestBody = options.rawData
+      ? { service, ...params, chain }
+      : { service, params, chain };
     const paidRes = await fetch(executeUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Payment': paymentHeader,
       },
-      body: JSON.stringify({ service, params, chain }),
+      body: JSON.stringify(solanaRequestBody),
     });
 
     const result = await paidRes.json() as any;
