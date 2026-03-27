@@ -6,9 +6,9 @@ Add Solana mainnet and devnet USDC support to MoltsPay payments.
 
 | Decision | Choice |
 |----------|--------|
-| CDP support? | ❌ No - Solana not EVM |
+| CDP support? | [NO] No - Solana not EVM |
 | Gasless method | SPL Token Transfer (rent paid by sender) |
-| Pay-for-success? | ✅ Yes - via durable nonces or server-side execution |
+| Pay-for-success? | [OK] Yes - via durable nonces or server-side execution |
 | Token support | USDC only (official Circle SPL token) |
 | Transaction cost | ~0.000005 SOL (~$0.001) |
 
@@ -44,7 +44,7 @@ Add Solana mainnet and devnet USDC support to MoltsPay payments.
 | Address format | 0x... (40 hex chars) | Base58 (32-44 chars) |
 | Key type | secp256k1 (ECDSA) | ed25519 (EdDSA) |
 | Token standard | ERC-20 | SPL Token |
-| Gas model | Gas price × gas used | Fixed per-signature + rent |
+| Gas model | Gas price x gas used | Fixed per-signature + rent |
 | Account model | EOA + Contract | Program + Data accounts |
 | Token accounts | Balance on token contract | Associated Token Accounts (ATAs) |
 | Transaction format | RLP encoded | Borsh serialized |
@@ -93,8 +93,8 @@ Add Solana mainnet and devnet USDC support to MoltsPay payments.
 **Option A: Separate Solana Wallet (Recommended)**
 ```
 ~/.moltspay/
-├── wallet.json           # EVM wallet (existing)
-└── wallet-solana.json    # Solana wallet (NEW)
++------ wallet.json           # EVM wallet (existing)
++------ wallet-solana.json    # Solana wallet (NEW)
 ```
 
 Pros:
@@ -108,9 +108,9 @@ Cons:
 
 **Option B: Unified Seed with Derivation Paths**
 ```
-Same mnemonic → 
-  - m/44'/60'/0'/0/0 → EVM address
-  - m/44'/501'/0'/0' → Solana address
+Same mnemonic -> 
+  - m/44'/60'/0'/0/0 -> EVM address
+  - m/44'/501'/0'/0' -> Solana address
 ```
 
 Pros:
@@ -121,7 +121,7 @@ Cons:
 - More complex implementation
 - Need to store mnemonic (security concern)
 
-**Decision: Option A** - Separate wallets for simplicity in v1. ✅ CONFIRMED 2026-03-21
+**Decision: Option A** - Separate wallets for simplicity in v1. [OK] CONFIRMED 2026-03-21
 
 ### 2. Pay-for-Success Flow
 
@@ -133,8 +133,8 @@ Solana doesn't have EIP-2612 permits, but we have options:
 2. Client signs tx with durable nonce (offline)
 3. Client sends signature to server
 4. Server executes service
-5. Success → Server submits pre-signed tx
-6. Fail → Server discards tx (nonce unused)
+5. Success -> Server submits pre-signed tx
+6. Fail -> Server discards tx (nonce unused)
 ```
 
 **Option B: Delegated Authority**
@@ -325,7 +325,7 @@ export function createSolanaWallet(): Keypair {
     createdAt: new Date().toISOString(),
   };
   writeFileSync(SOLANA_WALLET_PATH, JSON.stringify(data, null, 2));
-  console.log(`🔐 Created Solana wallet: ${keypair.publicKey.toBase58()}`);
+  console.log(`[LOCK] Created Solana wallet: ${keypair.publicKey.toBase58()}`);
   return keypair;
 }
 
@@ -350,10 +350,10 @@ async function initWallet(options: { chain?: string }) {
   if (!options.chain || options.chain === 'solana' || options.chain === 'solana_devnet') {
     let solanaWallet = loadSolanaWallet();
     if (!solanaWallet) {
-      console.log('\n📋 Setting up Solana wallet...');
+      console.log('\n[CLIP] Setting up Solana wallet...');
       solanaWallet = createSolanaWallet();
     } else {
-      console.log(`✅ Solana wallet: ${solanaWallet.publicKey.toBase58()}`);
+      console.log(`[OK] Solana wallet: ${solanaWallet.publicKey.toBase58()}`);
     }
   }
 }
@@ -365,7 +365,7 @@ async function showStatus() {
   // Show Solana status
   const solanaAddress = getSolanaAddress();
   if (solanaAddress) {
-    console.log(`\n🟣 Solana: ${solanaAddress}`);
+    console.log(`\n[SOL] Solana: ${solanaAddress}`);
     const balance = await getSolanaUSDCBalance(solanaAddress, 'solana');
     console.log(`   USDC: ${balance.toFixed(2)}`);
   }
@@ -762,16 +762,16 @@ npx moltspay send 0.01 YOUR_ADDRESS --chain solana_devnet
 
 | File | Changes | Status |
 |------|---------|--------|
-| `package.json` | Add @solana/web3.js, @solana/spl-token, bs58 | ⬜ TODO |
-| `src/chains/solana.ts` | NEW - Solana chain configs | ⬜ TODO |
-| `src/types/index.ts` | Add solana, solana_devnet to ChainName | ⬜ TODO |
-| `src/wallet/solana.ts` | NEW - Solana wallet management | ⬜ TODO |
-| `src/transfers/solana.ts` | NEW - USDC transfer logic | ⬜ TODO |
-| `src/facilitators/solana.ts` | NEW - Pay-for-success with durable nonces | ⬜ TODO |
-| `src/cli/index.ts` | Add Solana to init, status, faucet commands | ⬜ TODO |
-| `src/client/index.ts` | Handle Solana payments | ⬜ TODO |
-| `moltspay-creators/src/routes/agent.js` | Add Solana chain support | ⬜ TODO |
-| `moltspay-creators/src/routes/faucet.js` | Add Solana devnet faucet | ⬜ TODO |
+| `package.json` | Add @solana/web3.js, @solana/spl-token, bs58 | [ ] TODO |
+| `src/chains/solana.ts` | NEW - Solana chain configs | [ ] TODO |
+| `src/types/index.ts` | Add solana, solana_devnet to ChainName | [ ] TODO |
+| `src/wallet/solana.ts` | NEW - Solana wallet management | [ ] TODO |
+| `src/transfers/solana.ts` | NEW - USDC transfer logic | [ ] TODO |
+| `src/facilitators/solana.ts` | NEW - Pay-for-success with durable nonces | [ ] TODO |
+| `src/cli/index.ts` | Add Solana to init, status, faucet commands | [ ] TODO |
+| `src/client/index.ts` | Handle Solana payments | [ ] TODO |
+| `moltspay-creators/src/routes/agent.js` | Add Solana chain support | [ ] TODO |
+| `moltspay-creators/src/routes/faucet.js` | Add Solana devnet faucet | [ ] TODO |
 
 ## Effort Estimate
 

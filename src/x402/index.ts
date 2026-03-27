@@ -14,7 +14,8 @@ export type { X402Client, X402ClientConfig } from './client.js';
 
 import { ethers } from 'ethers';
 import { getChain } from '../chains/index.js';
-import type { ChainName } from '../types/index.js';
+import type { ChainName, EvmChainName } from '../types/index.js';
+import { isEvmChain } from '../types/index.js';
 
 // x402 protocol version
 export const X402_VERSION = 2;
@@ -83,9 +84,9 @@ export function encodePaymentPayload(payload: X402PaymentPayload): string {
 }
 
 /**
- * Convert chain name to x402 network identifier
+ * Convert chain name to x402 network identifier (EVM chains only)
  */
-export function chainToNetwork(chain: ChainName): string {
+export function chainToNetwork(chain: EvmChainName): string {
   const chainConfig = getChain(chain);
   return `eip155:${chainConfig.chainId}`;
 }
@@ -123,7 +124,7 @@ export interface EIP3009Authorization {
 
 /**
  * Sign EIP-3009 transferWithAuthorization
- * Used for x402 "exact" scheme with USDC
+ * Used for x402 "exact" scheme with USDC (EVM chains only)
  */
 export async function signEIP3009(
   wallet: ethers.Wallet,
@@ -132,7 +133,7 @@ export async function signEIP3009(
     amount: number;
     validAfter?: number;
     validBefore?: number;
-    chain: ChainName;
+    chain: EvmChainName;
   }
 ): Promise<{
   authorization: EIP3009Authorization;
@@ -187,7 +188,7 @@ export async function signEIP3009(
 export async function createExactEvmPayload(
   wallet: ethers.Wallet,
   requirements: X402PaymentRequirements,
-  chain: ChainName
+  chain: EvmChainName
 ): Promise<X402PaymentPayload> {
   const amount = Number(requirements.maxAmountRequired) / 1e6;
   
@@ -225,7 +226,7 @@ export async function createExactEvmPayload(
  */
 export function wrapFetchWith402(
   fetchFn: typeof fetch,
-  wallet: { address: string; chain: ChainName },
+  wallet: { address: string; chain: EvmChainName },
   privateKey: string
 ): (input: string | URL | Request, init?: RequestInit) => Promise<Response> {
   return async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {

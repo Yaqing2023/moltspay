@@ -10,14 +10,14 @@
 
 | Severity | Count | Status |
 |----------|-------|--------|
-| 🔴 HIGH | 0 | ✅ Fixed in v0.8.12 |
-| 🟠 MEDIUM | 3 | Should fix |
-| 🟡 LOW | 3 | Nice to have |
-| ✅ GOOD | 3 | No issues |
+| [HIGH] HIGH | 0 | [OK] Fixed in v0.8.12 |
+| [MED] MEDIUM | 3 | Should fix |
+| [LOW] LOW | 3 | Nice to have |
+| [OK] GOOD | 3 | No issues |
 
 ---
 
-## ✅ FIXED - Previously HIGH Severity
+## [OK] FIXED - Previously HIGH Severity
 
 ### 1. Private Key Stored in Plaintext (Client) - FIXED in v0.8.12
 
@@ -40,11 +40,11 @@ if (mode !== 0o600) {
 }
 ```
 
-**Status:** ✅ Fixed - matches SSH private key security model
+**Status:** [OK] Fixed - matches SSH private key security model
 
 ---
 
-## 🟠 MEDIUM Severity Issues
+## [MED] MEDIUM Severity Issues
 
 ### 2. Daily Spending Limit Not Persisted (Client)
 
@@ -52,8 +52,8 @@ if (mode !== 0o600) {
 
 **Problem:**
 ```typescript
-private todaySpending: number = 0;       // ← In memory only!
-private lastSpendingReset: number = 0;   // ← Lost on restart!
+private todaySpending: number = 0;       // <- In memory only!
+private lastSpendingReset: number = 0;   // <- Lost on restart!
 ```
 
 **Risk:**
@@ -157,7 +157,7 @@ spawn('sh', ['-c', service.command], { ... });
 
 ---
 
-## 🟡 LOW Severity Issues
+## [LOW] LOW Severity Issues
 
 ### 5. CORS Allows All Origins (Server)
 
@@ -220,29 +220,29 @@ if (serverUrl.startsWith('http://') && !serverUrl.includes('localhost')) {
 
 ---
 
-## ✅ Good Security Practices
+## [OK] Good Security Practices
 
 ### Replay Attack Protection
-- ✅ EIP-3009 uses unique nonce per authorization
-- ✅ `validBefore` timestamp provides expiration (1 hour)
-- ✅ Facilitator tracks used nonces
+- [OK] EIP-3009 uses unique nonce per authorization
+- [OK] `validBefore` timestamp provides expiration (1 hour)
+- [OK] Facilitator tracks used nonces
 
 ### Amount Tampering Protection
-- ✅ Amount is part of EIP-712 signed payload
-- ✅ Cannot modify amount without invalidating signature
+- [OK] Amount is part of EIP-712 signed payload
+- [OK] Cannot modify amount without invalidating signature
 
 ### Pay-for-Success Model
-- ✅ Service executes before settlement
-- ✅ If service fails, payment is not settled
-- ✅ Client only charged on success
+- [OK] Service executes before settlement
+- [OK] If service fails, payment is not settled
+- [OK] Client only charged on success
 
 ---
 
 ## Recommendations Summary
 
 ### Before v1.0 Release (Must Have)
-1. [x] ~~Encrypt private keys at rest (or use keychain)~~ → Using 0o600 permissions (like SSH)
-2. [x] ~~Set file permissions on wallet.json (0o600)~~ → ✅ Fixed in v0.8.12
+1. [x] ~~Encrypt private keys at rest (or use keychain)~~ -> Using 0o600 permissions (like SSH)
+2. [x] ~~Set file permissions on wallet.json (0o600)~~ -> [OK] Fixed in v0.8.12
 3. [ ] Persist daily spending limits to disk
 
 ### Before Production Use (Should Have)
@@ -261,9 +261,9 @@ if (serverUrl.startsWith('http://') && !serverUrl.includes('localhost')) {
 
 | File | Current | Should Be | Status |
 |------|---------|-----------|--------|
-| `~/.moltspay/wallet.json` | 0o600 | 0o600 | ✅ Fixed |
-| `~/.moltspay/config.json` | 0o644 | 0o644 | ✅ OK |
-| `~/.moltspay/.env` | 0o600 | 0o600 | ✅ OK |
+| `~/.moltspay/wallet.json` | 0o600 | 0o600 | [OK] Fixed |
+| `~/.moltspay/config.json` | 0o644 | 0o644 | [OK] OK |
+| `~/.moltspay/.env` | 0o600 | 0o600 | [OK] OK |
 
 ---
 

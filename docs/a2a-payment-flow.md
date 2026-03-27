@@ -5,7 +5,7 @@
 ## Flow Overview
 
 ```
-START → Capability Check → Settlement Negotiation → Onboarding → Service Request → Quote → Payment → Verification → Delivery → Receipt → END
+START -> Capability Check -> Settlement Negotiation -> Onboarding -> Service Request -> Quote -> Payment -> Verification -> Delivery -> Receipt -> END
 ```
 
 ## Two-Layer Expression

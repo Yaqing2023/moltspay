@@ -15,7 +15,7 @@
 - Zero-config where possible
 - Convention over configuration
 - One import, one function call
-- Progressive disclosure (simple → advanced)
+- Progressive disclosure (simple -> advanced)
 
 ---
 
@@ -93,12 +93,12 @@ serve({ textToVideo }); // Auto-derives service ID from function name
 
 ```
 moltspay/
-├── index.ts          # Main exports (pay, serve, discover)
-├── client.ts         # MoltsPayClient (advanced)
-├── server.ts         # MoltsPayServer (advanced)
-├── wallet.ts         # Wallet management
-├── types.ts          # Shared types
-└── cli/              # CLI implementation
++------ index.ts          # Main exports (pay, serve, discover)
++------ client.ts         # MoltsPayClient (advanced)
++------ server.ts         # MoltsPayServer (advanced)
++------ wallet.ts         # Wallet management
++------ types.ts          # Shared types
++------ cli/              # CLI implementation
 ```
 
 ### 3.2 New Primary API
@@ -272,7 +272,7 @@ moltspay discover <url>            # List services from provider
 # Setup (first time)
 $ moltspay setup
 Creating new wallet...
-✓ Wallet created: 0x1234...abcd
+[OK] Wallet created: 0x1234...abcd
 
 How would you like to fund your wallet?
 1. Coinbase Onramp (card/bank)
@@ -281,13 +281,13 @@ How would you like to fund your wallet?
 
 > 3
 
-✓ Sent 1 USDC to your wallet (base_sepolia testnet)
-✓ Ready to use! Run `moltspay status` to check balance.
+[OK] Sent 1 USDC to your wallet (base_sepolia testnet)
+[OK] Ready to use! Run `moltspay status` to check balance.
 
 # Pay for service
 $ moltspay pay https://zen7.example.com/text-to-video --prompt "a happy cat"
 Paying $0.99 USDC to zen7...
-✓ Video generated: https://cdn.example.com/video123.mp4
+[OK] Video generated: https://cdn.example.com/video123.mp4
 
 # Check status
 $ moltspay status
@@ -304,8 +304,8 @@ Limits:
 
 # Start server
 $ moltspay serve ./services.json
-✓ Loaded 2 services from services.json
-✓ Server running on http://0.0.0.0:3000
+[OK] Loaded 2 services from services.json
+[OK] Server running on http://0.0.0.0:3000
   - POST /text-to-video ($0.99)
   - POST /image-to-video ($1.49)
 ```
@@ -379,15 +379,15 @@ export default {
 **Current (~/.moltspay/):**
 ```
 ~/.moltspay/
-├── config.json      # Limits, chain preference
-├── wallet.json      # Private key + address
-└── spending.json    # Daily spending tracker
++------ config.json      # Limits, chain preference
++------ wallet.json      # Private key + address
++------ spending.json    # Daily spending tracker
 ```
 
 **New (Consolidated):**
 ```
 ~/.moltspay/
-└── wallet.json      # Everything in one file
++------ wallet.json      # Everything in one file
 
 {
   "address": "0x...",
@@ -647,9 +647,9 @@ serve({
 - `src/server/index.ts` - Support inline service definitions
 
 ### Deprecated (Keep for Compatibility)
-- `MoltsPayClient` class → use `pay()`
-- `MoltsPayServer` class → use `serve()`
-- Separate config/wallet files → consolidated wallet.json
+- `MoltsPayClient` class -> use `pay()`
+- `MoltsPayServer` class -> use `serve()`
+- Separate config/wallet files -> consolidated wallet.json
 
 ---
 

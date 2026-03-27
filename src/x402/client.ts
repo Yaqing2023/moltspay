@@ -18,12 +18,12 @@
  * ```
  */
 
-import type { ChainName } from '../types/index.js';
+import type { ChainName, EvmChainName } from '../types/index.js';
 import { getChain } from '../chains/index.js';
 
 export interface X402ClientConfig {
-  /** Chain to use */
-  chain?: ChainName;
+  /** Chain to use (x402 only supports EVM chains) */
+  chain?: EvmChainName;
   /** Use CDP wallet instead of local wallet */
   useCDP?: boolean;
   /** Custom private key (overrides stored wallet) */
@@ -37,8 +37,8 @@ export interface X402Client {
   fetch: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
   /** Wallet address */
   address: string;
-  /** Chain being used */
-  chain: ChainName;
+  /** Chain being used (x402 only supports EVM chains) */
+  chain: EvmChainName;
 }
 
 /**
@@ -60,19 +60,19 @@ export function isX402Available(): boolean {
 async function createLocalX402Client(config: X402ClientConfig): Promise<X402Client> {
   const { AgentWallet } = await import('../agent/AgentWallet.js');
   const { ethers } = await import('ethers');
-  
-  const wallet = new AgentWallet({
-    chain: config.chain,
-    storageDir: config.storageDir,
-  });
-
-  // Load private key
-  const fs = await import('fs');
   const path = await import('path');
+  const fs = await import('fs');
+  
+  // Load private key from storage
   const storageDir = config.storageDir || path.join(process.env.HOME || '.', '.moltspay');
   const walletPath = path.join(storageDir, 'wallet.json');
   const walletData = JSON.parse(fs.readFileSync(walletPath, 'utf-8'));
   const privateKey = config.privateKey || walletData.privateKey;
+  
+  const wallet = new AgentWallet({
+    chain: config.chain,
+    privateKey,
+  });
 
   // Create viem account from private key
   const { privateKeyToAccount } = await import('viem/accounts');

@@ -47,10 +47,17 @@ export function getChainFamily(chain: ChainName): ChainFamily {
 }
 
 /**
- * Check if a chain is a Solana chain
+ * Check if a chain is a Solana chain (type guard)
  */
-export function isSolanaChain(chain: ChainName): boolean {
+export function isSolanaChain(chain: ChainName): chain is SolanaChainName {
   return chain === 'solana' || chain === 'solana_devnet';
+}
+
+/**
+ * Check if a chain is an EVM chain (type guard)
+ */
+export function isEvmChain(chain: ChainName): chain is EvmChainName {
+  return !isSolanaChain(chain);
 }
 
 // ============ Invoice Protocol ============
@@ -143,7 +150,7 @@ export interface SecurityLimits {
 }
 
 export interface SecureWalletConfig {
-  chain?: ChainName;
+  chain?: EvmChainName;
   privateKey?: string;
   walletAddress?: string;
   limits?: Partial<SecurityLimits>;

@@ -1658,6 +1658,7 @@ program
   .description('Pay for a service and get the result')
   .option('--prompt <text>', 'Prompt for the service')
   .option('--image <path>', 'Image URL or local file path')
+  .option('--data <json>', 'Raw JSON data to send (for custom input formats)')
   .option('--token <token>', 'Token to pay with (USDC or USDT)', 'USDC')
   .option('--chain <chain>', 'Chain to pay on (base, polygon, base_sepolia, tempo_moderato, solana, or solana_devnet).')
   .option('--config-dir <dir>', 'Config directory with wallet.json', DEFAULT_CONFIG_DIR)
@@ -1672,8 +1673,18 @@ program
 
     // Build params from JSON string or options
     let params: Record<string, any> = {};
+    let useRawData = false;
     
-    if (paramsJson) {
+    // --data flag: raw JSON for custom input formats (takes priority)
+    if (options.data) {
+      try {
+        params = JSON.parse(options.data);
+        useRawData = true;
+      } catch {
+        console.error('❌ Invalid JSON in --data flag');
+        process.exit(1);
+      }
+    } else if (paramsJson) {
       try {
         params = JSON.parse(paramsJson);
       } catch {
@@ -1682,8 +1693,8 @@ program
       }
     }
     
-    // Override with CLI options
-    if (options.prompt) params.prompt = options.prompt;
+    // Override with CLI options (only if not using --data)
+    if (!useRawData && options.prompt) params.prompt = options.prompt;
     
     // Handle --image: URL or local file
     if (options.image) {
@@ -1735,7 +1746,11 @@ program
       console.log(`\n💳 MoltsPay - Paying for service\n`);
       console.log(`   Server: ${server}`);
       console.log(`   Service: ${service}`);
-      console.log(`   Prompt: ${params.prompt}`);
+      if (useRawData) {
+        console.log(`   Data: ${JSON.stringify(params).slice(0, 50)}${JSON.stringify(params).length > 50 ? '...' : ''}`);
+      } else {
+        console.log(`   Prompt: ${params.prompt}`);
+      }
       if (imageDisplay) console.log(`   Image: ${imageDisplay}`);
       console.log(`   Chain: ${chain || '(auto)'}`);  // Will be determined by server
       console.log(`   Token: ${token}`);
@@ -1748,7 +1763,8 @@ program
       // Server's /proxy endpoint handles both x402 and MPP based on chain
       const result = await client.pay(server, service, params, { 
         token: token as 'USDC' | 'USDT',
-        chain
+        chain,
+        rawData: useRawData
       });
       
       if (options.json) {

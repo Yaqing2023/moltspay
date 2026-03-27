@@ -41,8 +41,8 @@ from moltspay import MoltsPay
 # Initialize - auto-creates wallet if not exists
 client = MoltsPay()
 # Checks ~/.moltspay/wallet.json
-# If exists → load it
-# If not → create new wallet automatically
+# If exists -> load it
+# If not -> create new wallet automatically
 
 # Or specify custom path
 client = MoltsPay(wallet_path="~/my-agent/wallet.json")
@@ -118,8 +118,8 @@ print(f"Loaded wallet: {client.address}")
 
 **Auto-creation flow:**
 1. Check if `~/.moltspay/wallet.json` exists
-2. If yes → load and validate
-3. If no → generate new keypair, save to file
+2. If yes -> load and validate
+3. If no -> generate new keypair, save to file
 4. Return initialized client
 
 **Wallet file is compatible with Node.js CLI** - same format, same location.
@@ -141,26 +141,26 @@ print(f"Spent today: {limits.spent_today}")
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Python SDK                           │
-├─────────────────────────────────────────────────────────┤
-│  MoltsPay / AsyncMoltsPay                               │
-│    ├── discover(url) → List[Service]                   │
-│    ├── pay(url, service_id, **params) → Result         │
-│    ├── balance() → Balance                              │
-│    └── limits() → Limits                                │
-├─────────────────────────────────────────────────────────┤
-│  x402 Client                                            │
-│    ├── Request service                                  │
-│    ├── Parse 402 response                               │
-│    ├── Sign permit (EIP-712)                            │
-│    └── Retry with payment header                        │
-├─────────────────────────────────────────────────────────┤
-│  Wallet                                                 │
-│    ├── Load from ~/.moltspay/wallet.json               │
-│    ├── Sign messages (eth_account)                      │
-│    └── Check spending limits                            │
-└─────────────────────────────────────────────────────────┘
++----------------------------------------------------------------------------------------------------------------------+
+|                    Python SDK                           |
++--------------------------------------------------------------------------------------------------------------------|
+|  MoltsPay / AsyncMoltsPay                               |
+|    +------ discover(url) -> List[Service]                   |
+|    +------ pay(url, service_id, **params) -> Result         |
+|    +------ balance() -> Balance                              |
+|    +------ limits() -> Limits                                |
++--------------------------------------------------------------------------------------------------------------------|
+|  x402 Client                                            |
+|    +------ Request service                                  |
+|    +------ Parse 402 response                               |
+|    +------ Sign permit (EIP-712)                            |
+|    +------ Retry with payment header                        |
++--------------------------------------------------------------------------------------------------------------------|
+|  Wallet                                                 |
+|    +------ Load from ~/.moltspay/wallet.json               |
+|    +------ Sign messages (eth_account)                      |
+|    +------ Check spending limits                            |
++----------------------------------------------------------------------------------------------------------------------+
 ```
 
 ---
@@ -283,20 +283,20 @@ client = MoltsPay()  # Loads ~/.moltspay/wallet.json
 
 ```
 moltspay-python/
-├── pyproject.toml
-├── README.md
-├── src/
-│   └── moltspay/
-│       ├── __init__.py
-│       ├── client.py        # MoltsPay, AsyncMoltsPay
-│       ├── wallet.py        # Wallet loading, signing
-│       ├── x402.py          # x402 protocol implementation
-│       ├── models.py        # Pydantic models
-│       └── exceptions.py    # Custom exceptions
-└── tests/
-    ├── test_client.py
-    ├── test_wallet.py
-    └── test_x402.py
++------ pyproject.toml
++------ README.md
++------ src/
+|   +------ moltspay/
+|       +------ __init__.py
+|       +------ client.py        # MoltsPay, AsyncMoltsPay
+|       +------ wallet.py        # Wallet loading, signing
+|       +------ x402.py          # x402 protocol implementation
+|       +------ models.py        # Pydantic models
+|       +------ exceptions.py    # Custom exceptions
++------ tests/
+    +------ test_client.py
+    +------ test_wallet.py
+    +------ test_x402.py
 ```
 
 ---
@@ -356,7 +356,7 @@ def generate_video(prompt: str) -> str:
 ## Resolved
 
 1. ~~**Wallet creation in Python?**~~
-   - ✅ Yes. Auto-create if not exists. Compatible with Node.js CLI wallet format.
+   - [OK] Yes. Auto-create if not exists. Compatible with Node.js CLI wallet format.
 
 ---
 

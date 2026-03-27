@@ -16,7 +16,7 @@
 
 import { ethers } from 'ethers';
 import { getChain, ERC20_ABI } from '../chains/index.js';
-import type { ChainName, ChainConfig } from '../types/index.js';
+import type { EvmChainName, ChainConfig } from '../types/index.js';
 
 export interface OwnerPermit {
   /** Owner's wallet address (USDC holder, e.g., MetaMask) */
@@ -34,7 +34,7 @@ export interface OwnerPermit {
 }
 
 export interface AllowanceWalletConfig {
-  chain?: ChainName;
+  chain?: EvmChainName;
   /** Agent's private key (only for gas, not for USDC) */
   privateKey: string;
   rpcUrl?: string;
@@ -79,7 +79,7 @@ const PERMIT_ABI = [
 ];
 
 export class AllowanceWallet {
-  readonly chain: ChainName;
+  readonly chain: EvmChainName;
   readonly chainConfig: ChainConfig;
   readonly address: string;  // Agent's address
   
@@ -322,7 +322,7 @@ export function generatePermitInstructions(params: {
   agentAddress: string;
   amount: number;
   deadlineHours?: number;
-  chain?: ChainName;
+  chain?: EvmChainName;
 }): {
   instructions: string;
   typedData: object;

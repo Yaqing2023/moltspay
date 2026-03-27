@@ -13,7 +13,7 @@ Add MoonPay as a second fiat-to-crypto onramp option alongside existing Coinbase
 **QR Code Flow** (same as Coinbase):
 1. Generate MoonPay URL with pre-filled wallet address and currency
 2. Display as QR code
-3. User scans with phone → opens MoonPay on mobile
+3. User scans with phone -> opens MoonPay on mobile
 4. User completes purchase (KYC + payment)
 5. USDC arrives in wallet
 
@@ -22,7 +22,7 @@ Add MoonPay as a second fiat-to-crypto onramp option alongside existing Coinbase
 | Option | Domain Setup | Effort | UX |
 |--------|--------------|--------|-----|
 | iFrame/Overlay | Required | Medium | Embedded on page |
-| **QR → Direct URL** | **Not required** | **Low** | Opens on phone |
+| **QR -> Direct URL** | **Not required** | **Low** | Opens on phone |
 | Redirect | Not required | Low | Leaves page |
 
 QR code approach:
@@ -54,24 +54,24 @@ https://buy.moonpay.com?
 
 ### Current Flow
 ```
-[Add Funds] → Coinbase QR
+[Add Funds] -> Coinbase QR
 ```
 
 ### New Flow
 ```
-[Add Funds] → Provider Selection
-               ├── Coinbase
-               └── MoonPay
-            → Show QR for selected provider
+[Add Funds] -> Provider Selection
+               +------ Coinbase
+               +------ MoonPay
+            -> Show QR for selected provider
 ```
 
 ### Component Changes
 
 ```
 WalletFund.tsx
-├── Add provider selector (tabs or buttons)
-├── Generate MoonPay URL when selected
-└── Display QR code (reuse existing QR component)
++------ Add provider selector (tabs or buttons)
++------ Generate MoonPay URL when selected
++------ Display QR code (reuse existing QR component)
 ```
 
 ## Setup Requirements
@@ -122,13 +122,13 @@ Useful for:
 
 | Feature | Coinbase | MoonPay |
 |---------|----------|---------|
-| QR code flow | ✅ | ✅ |
-| Pre-fill wallet | ✅ | ✅ |
-| Pre-fill amount | ✅ | ✅ |
-| App deep link | ✅ Coinbase app | ❌ Browser only |
+| QR code flow | [OK] | [OK] |
+| Pre-fill wallet | [OK] | [OK] |
+| Pre-fill amount | [OK] | [OK] |
+| App deep link | [OK] Coinbase app | [NO] Browser only |
 | Supported chains | Base, Polygon, ETH | Base, Polygon, ETH, + more |
-| KYC in widget | ✅ | ✅ |
-| Webhook | ✅ | ✅ |
+| KYC in widget | [OK] | [OK] |
+| Webhook | [OK] | [OK] |
 
 ## Files to Modify
 

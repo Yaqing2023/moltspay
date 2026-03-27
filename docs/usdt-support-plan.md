@@ -132,7 +132,7 @@ Backward compatible: services without `acceptedCurrencies` only accept the prima
   }]
 }
 ```
-→ Automatically accepts only USDC
+-> Automatically accepts only USDC
 
 **New config (multi-token):**
 ```json
@@ -145,7 +145,7 @@ Backward compatible: services without `acceptedCurrencies` only accept the prima
   }]
 }
 ```
-→ Accepts both USDC and USDT
+-> Accepts both USDC and USDT
 
 **Implementation in `src/server/index.ts`:**
 ```typescript

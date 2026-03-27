@@ -11,25 +11,25 @@
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Client Wallet                            │
-│  Address: 0xABC123...                                           │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
-│  │    Base     │  │   Polygon   │  │  Arbitrum   │             │
-│  │  50.0 USDC  │  │  25.0 USDC  │  │  10.0 USDC  │             │
-│  │  10.0 USDT  │  │  15.0 USDT  │  │   0.0 USDT  │             │
-│  └─────────────┘  └─────────────┘  └─────────────┘             │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              │ Client chooses: Polygon + USDC
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Service Provider                            │
-│  Wallet: 0xDEF456...                                            │
-│  Accepts: Base, Polygon, Arbitrum                               │
-│                                                                  │
-│  Payment arrives on Polygon → Provider receives on Polygon      │
-└─────────────────────────────────────────────────────────────────┘
++--------------------------------------------------------------------------------------------------------------------------------------+
+|                         Client Wallet                            |
+|  Address: 0xABC123...                                           |
+|  +------------------------------+  +------------------------------+  +------------------------------+             |
+|  |    Base     |  |   Polygon   |  |  Arbitrum   |             |
+|  |  50.0 USDC  |  |  25.0 USDC  |  |  10.0 USDC  |             |
+|  |  10.0 USDT  |  |  15.0 USDT  |  |   0.0 USDT  |             |
+|  +------------------------------+  +------------------------------+  +------------------------------+             |
++--------------------------------------------------------------------------------------------------------------------------------------+
+                              |
+                              | Client chooses: Polygon + USDC
+                              v
++--------------------------------------------------------------------------------------------------------------------------------------+
+|                      Service Provider                            |
+|  Wallet: 0xDEF456...                                            |
+|  Accepts: Base, Polygon, Arbitrum                               |
+|                                                                  |
+|  Payment arrives on Polygon -> Provider receives on Polygon      |
++--------------------------------------------------------------------------------------------------------------------------------------+
 ```
 
 ## Supported Chains (Phase 1)
@@ -209,9 +209,9 @@ Server validates:
 
 ## Open Questions
 
-1. ~~Who picks the chain?~~ → Client
-2. ~~Cross-chain payments?~~ → No
-3. ~~Same or different wallet addresses?~~ → Same
-4. ~~Schema changes needed?~~ → No, existing `chain` field is enough
+1. ~~Who picks the chain?~~ -> Client
+2. ~~Cross-chain payments?~~ -> No
+3. ~~Same or different wallet addresses?~~ -> Same
+4. ~~Schema changes needed?~~ -> No, existing `chain` field is enough
 5. Should we show gas estimates before payment?
 6. Minimum balance to enable a chain?

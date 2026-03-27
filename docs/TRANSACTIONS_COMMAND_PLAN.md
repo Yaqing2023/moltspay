@@ -36,7 +36,7 @@ Options:
 ### Default (grouped by source):
 
 ```
-📜 Transactions (last 7 days)
+[SCROLL] Transactions (last 7 days)
 
 ON-CHAIN:
   +$4.88 USDC | [BASE] from 0xd86cAdB4... | 03-13 02:43
@@ -48,7 +48,7 @@ SERVICES (x402):
   03-12 02:20 | delivered | $0.99 | text-to-video | "polygon test"
   03-11 22:14 | delivered | $0.99 | text-to-video | "test"
 
-📊 Summary:
+[STATS] Summary:
    On-chain: +$5.88 in, -$0.99 out
    Services: 48 delivered, $5.98 spent
 ```
@@ -56,14 +56,14 @@ SERVICES (x402):
 ### Alternative (chronological with icons):
 
 ```
-📜 Transactions (last 7 days)
+[SCROLL] Transactions (last 7 days)
 
-  ⛓️  +$4.88 USDC | [BASE] from 0xd86cAdB4... | 03-13 02:43
-  📦 -$0.99 USDC | text-to-video | "give me cat" | 03-12 17:45
-  ⛓️  +$1.00 USDC | [POLYGON] from 0xD94D14... | 03-12 02:02
-  📦 -$0.99 USDC | text-to-video | "polygon test" | 03-12 02:20
+  [CHAIN]  +$4.88 USDC | [BASE] from 0xd86cAdB4... | 03-13 02:43
+  [PKG] -$0.99 USDC | text-to-video | "give me cat" | 03-12 17:45
+  [CHAIN]  +$1.00 USDC | [POLYGON] from 0xD94D14... | 03-12 02:02
+  [PKG] -$0.99 USDC | text-to-video | "polygon test" | 03-12 02:20
 
-📊 20 transactions | +$5.88 in | -$6.97 out
+[STATS] 20 transactions | +$5.88 in | -$6.97 out
 ```
 
 ---
@@ -89,9 +89,9 @@ SERVICES (x402):
 - x402 payments create BOTH a DB record AND an on-chain transfer
 - Match by `tx_hash` to identify service payments
 - Classification:
-  - Has matching tx_hash in DB → "service payment"
-  - Only on-chain → "direct transfer"
-  - Only in DB (no tx_hash) → "pending/failed service"
+  - Has matching tx_hash in DB -> "service payment"
+  - Only on-chain -> "direct transfer"
+  - Only in DB (no tx_hash) -> "pending/failed service"
 
 ### Phase 4: Unified Display
 - Merge both sources into single list

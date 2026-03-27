@@ -43,6 +43,7 @@ export interface ServiceInfo {
   output: Record<string, any>;
   available: boolean;
   provider?: ProviderInfo;  // For marketplace listings
+  endpoint?: string;  // Custom endpoint path (e.g., for Cloudflare Workers)
 }
 
 // Provider info from server

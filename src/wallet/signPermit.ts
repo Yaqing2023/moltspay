@@ -7,7 +7,7 @@
 
 import { ethers } from 'ethers';
 import { getChain, ERC20_ABI } from '../chains/index.js';
-import type { ChainName } from '../types/index.js';
+import type { EvmChainName } from '../types/index.js';
 
 export interface SignPermitParams {
   /** Spender address (service provider's wallet) */
@@ -38,7 +38,7 @@ export interface SignPermitResult {
 }
 
 export interface SignPermitConfig {
-  chain?: ChainName;
+  chain?: EvmChainName;
   privateKey?: string;
   rpcUrl?: string;
 }

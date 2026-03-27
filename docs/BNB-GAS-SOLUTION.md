@@ -3,8 +3,8 @@
 ## Problem
 
 BNB Chain stablecoins (USDC, USDT) do NOT support gasless methods:
-- ❌ EIP-2612 (permit)
-- ❌ EIP-3009 (transferWithAuthorization)
+- [NO] EIP-2612 (permit)
+- [NO] EIP-3009 (transferWithAuthorization)
 
 This means users MUST call `approve()` themselves, which requires BNB for gas.
 
@@ -64,16 +64,16 @@ POST /api/v1/faucet { address, chain: "bnb_testnet" }
 **New for BNB chains:** Show clear instructions
 
 ```
-📋 To use MoltsPay on BNB Chain, you need:
+[CLIP] To use MoltsPay on BNB Chain, you need:
 
 1. USDC for payments
-   → Withdraw from Binance/exchange to: 0xYourAddress
+   -> Withdraw from Binance/exchange to: 0xYourAddress
    
 2. Small amount of BNB for gas (~0.001 BNB / ~$0.60)
-   → First approval transaction requires gas
-   → After approval, all payments are gasless
+   -> First approval transaction requires gas
+   -> After approval, all payments are gasless
    
-💡 Tip: Most exchanges include BNB dust when you withdraw to BNB Chain
+[TIP] Tip: Most exchanges include BNB dust when you withdraw to BNB Chain
 ```
 
 ### Part 3: CLI Status Command Update
@@ -86,8 +86,8 @@ POST /api/v1/faucet { address, chain: "bnb_testnet" }
 BNB Chain:
   USDC: 10.00
   USDT: 0.00
-  BNB:  0.0001 ⚠️ Low - need ~0.001 for approval tx
-  Approval: USDC ✗ USDT ✗
+  BNB:  0.0001 [!] Low - need ~0.001 for approval tx
+  Approval: USDC [NO] USDT [NO]
 ```
 
 **Warning thresholds:**
@@ -99,19 +99,19 @@ BNB Chain:
 **File:** `src/client/index.ts` (handleBNBPayment)
 
 **Before attempting approve, check:**
-1. Does user have approval already? → Skip
-2. Does user have enough BNB? → If not, helpful error
+1. Does user have approval already? -> Skip
+2. Does user have enough BNB? -> If not, helpful error
 
 **Error message:**
 ```
-❌ Insufficient BNB for approval transaction
+[NO] Insufficient BNB for approval transaction
 
 You need ~0.001 BNB (~$0.60) for the first approval.
 After approval, all payments are gasless.
 
 To get BNB:
-• Testnet: npx moltspay faucet --chain bnb_testnet
-• Mainnet: Withdraw from Binance/exchange
+- Testnet: npx moltspay faucet --chain bnb_testnet
+- Mainnet: Withdraw from Binance/exchange
 ```
 
 ### Part 5: Faucet Wallet Setup

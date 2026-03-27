@@ -11,7 +11,7 @@ import { ethers } from 'ethers';
 import { getChain, ERC20_ABI } from '../chains/index.js';
 import { loadWallet } from './createWallet.js';
 import type {
-  ChainName,
+  EvmChainName,
   ChainConfig,
   TransferResult,
   PermitSignature,
@@ -35,7 +35,7 @@ export interface PermitData {
 }
 
 export interface PermitWalletConfig {
-  chain?: ChainName;
+  chain?: EvmChainName;
   /** Agent's private key (for executing transactions) */
   privateKey?: string;
   /** Load private key from file */
@@ -70,7 +70,7 @@ const PERMIT_ABI = [
 ];
 
 export class PermitWallet {
-  readonly chain: ChainName;
+  readonly chain: EvmChainName;
   readonly chainConfig: ChainConfig;
   readonly address: string;
   
@@ -301,7 +301,7 @@ export function formatPermitRequest(params: {
   agentAddress: string;
   amount: number;
   deadlineHours?: number;
-  chain?: ChainName;
+  chain?: EvmChainName;
   reason?: string;
 }): string {
   const { agentAddress, amount, deadlineHours = 24, chain = 'base', reason } = params;

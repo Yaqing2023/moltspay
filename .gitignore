@@ -9,3 +9,8 @@ CHANGELOG.md
 docs/ROADMAP.md
 docs/WHITEPAPER.md
 docs/WHITEPAPER.pdf
+
+# Ignored
+docs/BAZAAR-INTEGRATION-PLAN.md
+docs/articles/
+*.tgz

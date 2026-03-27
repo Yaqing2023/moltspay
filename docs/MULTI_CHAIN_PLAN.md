@@ -8,7 +8,7 @@ Support Base and Polygon with a single wallet.
 
 1. **Explicit chain selection** - No auto-detection
 2. **Default always Base** - For backward compatibility, no config needed
-3. **Fail fast on mismatch** - If client chain ≠ server chain, error immediately
+3. **Fail fast on mismatch** - If client chain != server chain, error immediately
 4. **One wallet, multiple chains** - Same private key works on all EVM chains
 5. **No config migration** - Old configs work as-is
 
@@ -18,8 +18,8 @@ Support Base and Polygon with a single wallet.
 
 | Chain | Chain ID | USDC Contract | CDP Support |
 |-------|----------|---------------|-------------|
-| Base | 8453 | 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 | ✅ |
-| Polygon | 137 | 0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359 | ✅ |
+| Base | 8453 | 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 | [OK] |
+| Polygon | 137 | 0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359 | [OK] |
 
 Note: Ethereum mainnet not supported by CDP x402 facilitator. Solana supported but out of scope (not EVM).
 
@@ -29,8 +29,8 @@ Note: Ethereum mainnet not supported by CDP x402 facilitator. Solana supported b
 
 ```
 ~/.moltspay/
-├── wallet.json    # { address, privateKey }
-└── config.json    # { chain: "base", limits: {...} }
++------ wallet.json    # { address, privateKey }
++------ config.json    # { chain: "base", limits: {...} }
 ```
 
 - Wallet tied to one chain
@@ -83,7 +83,7 @@ moltspay config --max-per-tx 50 --max-per-day 500
 moltspay status
 
 MoltsPay Wallet Status
-━━━━━━━━━━━━━━━━━━━━━━━
+=======================
 Address: 0x1234...5678
 
 Balances:

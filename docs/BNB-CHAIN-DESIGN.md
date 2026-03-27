@@ -6,15 +6,15 @@ Add BNB Smart Chain (BSC) as a supported chain for MoltsPay payments.
 
 | Decision | Choice |
 |----------|--------|
-| CDP support? | ❌ No - BNB not supported |
+| CDP support? | [NO] No - BNB not supported |
 | Gasless method | Pre-approval + server pays gas |
-| Pay-for-success? | ✅ Yes - server controls settlement |
+| Pay-for-success? | [OK] Yes - server controls settlement |
 | Token support | USDT + USDC (18 decimals) |
 | Gas cost | ~$0.01 (absorbed by server) |
 
 **Key difference from Tempo:**
-- Tempo MPP: Client pays first → service might fail → money lost ❌
-- BNB approach: Client approves → service runs → success = payment ✅
+- Tempo MPP: Client pays first -> service might fail -> money lost [NO]
+- BNB approach: Client approves -> service runs -> success = payment [OK]
 
 **UX:** No new commands! Approval integrated into `moltspay init`
 **Onboarding:** Server sponsors ~$0.01 BNB gas for new wallets (seamless)
@@ -24,12 +24,12 @@ Add BNB Smart Chain (BSC) as a supported chain for MoltsPay payments.
 ### Chains Supported
 | Chain | Chain ID | Protocol | Status |
 |-------|----------|----------|--------|
-| Base | 8453 | x402 (CDP) | ✅ Production |
-| Polygon | 137 | x402 (CDP) | ✅ Production |
-| Base Sepolia | 84532 | x402 (CDP) | ✅ Testnet |
-| Tempo Moderato | 42431 | MPP | ✅ Testnet |
-| **BNB** | **56** | **Pre-approval** | **✅ Code Complete** |
-| **BNB Testnet** | **97** | **Pre-approval** | **🧪 Testing Pending** |
+| Base | 8453 | x402 (CDP) | [OK] Production |
+| Polygon | 137 | x402 (CDP) | [OK] Production |
+| Base Sepolia | 84532 | x402 (CDP) | [OK] Testnet |
+| Tempo Moderato | 42431 | MPP | [OK] Testnet |
+| **BNB** | **56** | **Pre-approval** | **[OK] Code Complete** |
+| **BNB Testnet** | **97** | **Pre-approval** | **[TEST] Testing Pending** |
 
 ### Tokens Supported
 - USDC (all chains)
@@ -83,7 +83,7 @@ contract TestUSDT is ERC20 {
 
 **Does Coinbase CDP support BNB chain for gasless payments?**
 
-### Research Result: NO ❌
+### Research Result: NO [NO]
 
 CDP only supports: Base, Polygon, Ethereum, Arbitrum, Optimism (EVM chains in Coinbase ecosystem).
 BNB Chain is NOT supported by CDP.
@@ -97,9 +97,9 @@ For MoltsPay, we have three options:
 
 | Option | Description | Pay-for-Success? | Effort |
 |--------|-------------|------------------|--------|
-| A: Server pays gas | Server holds BNB, executes transfers | ✅ Yes | Medium |
-| B: Meta-tx relayer | EIP-2771 trusted forwarder | ✅ Yes | High |
-| C: Direct on-chain (like Tempo) | Client pays first | ❌ No | Low |
+| A: Server pays gas | Server holds BNB, executes transfers | [OK] Yes | Medium |
+| B: Meta-tx relayer | EIP-2771 trusted forwarder | [OK] Yes | High |
+| C: Direct on-chain (like Tempo) | Client pays first | [NO] No | Low |
 
 ### Chosen Approach: Option A (Server pays gas + Pay-for-Success)
 
@@ -118,10 +118,10 @@ For MoltsPay, we have three options:
 
 ### The Problem with Tempo/MPP
 ```
-1. Client pays on-chain         → Money committed
+1. Client pays on-chain         -> Money committed
 2. Client sends txHash to server
-3. Server executes service      → Service might fail!
-4. Service fails                → Client's money is gone ❌
+3. Server executes service      -> Service might fail!
+4. Service fails                -> Client's money is gone [NO]
 ```
 
 ### Solution: Pre-Approval Flow
@@ -130,8 +130,8 @@ For MoltsPay, we have three options:
 2. Client signs intent (NOT payment)
 3. Server validates intent signature
 4. Server executes service
-5. Success → Server calls transferFrom (server pays gas)
-6. Fail → No transfer, client keeps money ✅
+5. Success -> Server calls transferFrom (server pays gas)
+6. Fail -> No transfer, client keeps money [OK]
 ```
 
 ### How Pre-Approval Works
@@ -142,32 +142,32 @@ For MoltsPay, we have three options:
 ```bash
 $ moltspay init
 
-🔐 Creating new wallet...
+[LOCK] Creating new wallet...
    Address: 0xABC123...
 
-📋 Setting up chain approvals...
-   ✅ Base: gasless (no approval needed)
-   ✅ Polygon: gasless (no approval needed)  
-   ⏳ BNB: approving USDT... (tx: 0x...) ✅
-   ⏳ BNB: approving USDC... (tx: 0x...) ✅
+[CLIP] Setting up chain approvals...
+   [OK] Base: gasless (no approval needed)
+   [OK] Polygon: gasless (no approval needed)  
+   [WAIT] BNB: approving USDT... (tx: 0x...) [OK]
+   [WAIT] BNB: approving USDC... (tx: 0x...) [OK]
 
-💰 Fund your wallet:
+[$] Fund your wallet:
    Send USDC/USDT to 0xABC123... on any supported chain
 
-✅ Wallet ready!
+[OK] Wallet ready!
 ```
 
 **Existing wallet, add BNB support:**
 ```bash
 $ moltspay init --chain bnb
 
-🔐 Wallet found: 0xABC123...
+[LOCK] Wallet found: 0xABC123...
 
-📋 Setting up BNB approvals...
-   ⏳ BNB: approving USDT... (tx: 0x...) ✅
-   ⏳ BNB: approving USDC... (tx: 0x...) ✅
+[CLIP] Setting up BNB approvals...
+   [WAIT] BNB: approving USDT... (tx: 0x...) [OK]
+   [WAIT] BNB: approving USDC... (tx: 0x...) [OK]
 
-✅ BNB chain enabled!
+[OK] BNB chain enabled!
 ```
 
 **Implementation in CLI:**
@@ -181,7 +181,7 @@ async function initWallet(options: { chain?: string }) {
     // Create new wallet
     wallet = createNewWallet();
     saveWallet(wallet);
-    console.log('🔐 Created wallet:', wallet.address);
+    console.log('[LOCK] Created wallet:', wallet.address);
   }
   
   // Setup approvals for requested chain (or all chains)
@@ -193,7 +193,7 @@ async function initWallet(options: { chain?: string }) {
       await setupBNBApprovals(wallet, isNewWallet);
     } else {
       // Base/Polygon are gasless via CDP, no approval needed
-      console.log(`✅ ${chain}: gasless (no approval needed)`);
+      console.log(`[OK] ${chain}: gasless (no approval needed)`);
     }
   }
 }
@@ -208,11 +208,11 @@ async function setupBNBApprovals(wallet: Wallet, sponsorGas: boolean) {
   if (bnbBalance < parseEther('0.001')) {
     if (sponsorGas) {
       // Server sponsors gas for new wallets (~$0.01)
-      console.log('⏳ Sponsoring BNB gas for approval...');
+      console.log('[WAIT] Sponsoring BNB gas for approval...');
       await sponsorBNBGas(wallet.address, '0.001');
       bnbBalance = await provider.getBalance(wallet.address);
     } else {
-      console.log('⚠️  Need ~0.001 BNB for approval gas.');
+      console.log('[!]  Need ~0.001 BNB for approval gas.');
       console.log('   Run: moltspay init --chain bnb (after funding)');
       return;
     }
@@ -225,14 +225,14 @@ async function setupBNBApprovals(wallet: Wallet, sponsorGas: boolean) {
     // Check existing allowance
     const allowance = await contract.allowance(wallet.address, SERVER_WALLET);
     if (allowance > 0) {
-      console.log(`✅ BNB ${token}: already approved`);
+      console.log(`[OK] BNB ${token}: already approved`);
       continue;
     }
     
-    console.log(`⏳ BNB: approving ${token}...`);
+    console.log(`[WAIT] BNB: approving ${token}...`);
     const tx = await contract.approve(SERVER_WALLET, MaxUint256);
     await tx.wait();
-    console.log(`✅ BNB ${token}: approved (tx: ${tx.hash})`);
+    console.log(`[OK] BNB ${token}: approved (tx: ${tx.hash})`);
   }
 }
 
@@ -245,7 +245,7 @@ async function sponsorBNBGas(toAddress: string, amount: string) {
     value: parseEther(amount),
   });
   await tx.wait();
-  console.log(`✅ Sponsored ${amount} BNB (tx: ${tx.hash})`);
+  console.log(`[OK] Sponsored ${amount} BNB (tx: ${tx.hash})`);
 }
 ```
 
@@ -272,7 +272,7 @@ const result = await executeService(params);
 if (result.success) {
   // Server calls transferFrom (server pays gas)
   await facilitator.executePayment(intent, signature);
-  // Money moves from client → provider
+  // Money moves from client -> provider
 }
 // If failed, no transfer happens
 ```
@@ -352,10 +352,10 @@ await usdt.transferFrom(clientAddress, providerAddress, amount);
 
 | Chain | Protocol | Pay-for-Success | Who Pays Gas | Client Action |
 |-------|----------|-----------------|--------------|---------------|
-| Base | x402 (CDP) | ✅ Yes | CDP Facilitator | Sign permit |
-| Polygon | x402 (CDP) | ✅ Yes | CDP Facilitator | Sign permit |
-| Tempo | MPP | ❌ No | Client | Pay on-chain |
-| **BNB** | **Pre-approval** | **✅ Yes** | **Server** | **Approve once + sign intent** |
+| Base | x402 (CDP) | [OK] Yes | CDP Facilitator | Sign permit |
+| Polygon | x402 (CDP) | [OK] Yes | CDP Facilitator | Sign permit |
+| Tempo | MPP | [NO] No | Client | Pay on-chain |
+| **BNB** | **Pre-approval** | **[OK] Yes** | **Server** | **Approve once + sign intent** |
 
 ## Implementation Plan
 
@@ -383,13 +383,13 @@ bnb: {
   tokens: {
     USDC: {
       address: '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
-      decimals: 18,  // ⚠️ Different from Base/Polygon!
+      decimals: 18,  // [!] Different from Base/Polygon!
       symbol: 'USDC',
       eip712Name: 'USD Coin',
     },
     USDT: {
       address: '0x55d398326f99059fF775485246999027B3197955',
-      decimals: 18,  // ⚠️ Different from Base/Polygon!
+      decimals: 18,  // [!] Different from Base/Polygon!
       symbol: 'USDT',
       eip712Name: 'Tether USD',
     },
@@ -652,10 +652,10 @@ BNB gas is cheap (~$0.01), acceptable for non-gasless flow.
 
 | Chain | Token | EIP-2612 Permit? | Gasless? |
 |-------|-------|------------------|----------|
-| Base | USDC | ✅ Yes | ✅ Yes |
-| Base | USDT | ❌ No | ❌ No (needs gas) |
-| BNB | USDC | ⚠️ Check | TBD |
-| BNB | USDT | ❌ Likely No | ❌ No (needs gas) |
+| Base | USDC | [OK] Yes | [OK] Yes |
+| Base | USDT | [NO] No | [NO] No (needs gas) |
+| BNB | USDC | [!] Check | TBD |
+| BNB | USDT | [NO] Likely No | [NO] No (needs gas) |
 
 **USDT generally doesn't support permit** on any chain (legacy contract design).
 
@@ -692,17 +692,17 @@ Skip contract deployment, use server wallet directly:
 
 | File | Changes | Status |
 |------|---------|--------|
-| `src/chains/index.ts` | Add `bnb` and `bnb_testnet` configs (18 decimals!) | ✅ Done |
-| `src/types/index.ts` | Add `bnb`, `bnb_testnet` to `ChainName` type | ✅ Done |
-| `src/facilitators/bnb.ts` | NEW - BNBFacilitator with pay-for-success | ✅ Done |
-| `src/facilitators/index.ts` | Export BNBFacilitator | ✅ Done |
-| `src/facilitators/registry.ts` | Register bnb factory | ✅ Done |
-| `src/client/index.ts` | Add chainId mapping, intent signing (handleBNBPayment) | ✅ Done |
-| `src/server/index.ts` | Add `bnb` to CHAIN_TO_NETWORK, TOKEN_DOMAINS, supportedChains | ✅ Done |
-| `src/cli/index.ts` | Update `init` command to handle BNB approvals | ✅ Done |
-| `moltspay-creators/src/routes/faucet.js` | Multi-chain faucet (base_sepolia + bnb_testnet) | ✅ Done |
-| `/var/www/moltspay/schemas/services.json` | Add bnb/bnb_testnet to schema | ✅ Done |
-| `contracts/BNBFacilitator.sol` | Optional - using server wallet instead | ⏭️ Skipped |
+| `src/chains/index.ts` | Add `bnb` and `bnb_testnet` configs (18 decimals!) | [OK] Done |
+| `src/types/index.ts` | Add `bnb`, `bnb_testnet` to `ChainName` type | [OK] Done |
+| `src/facilitators/bnb.ts` | NEW - BNBFacilitator with pay-for-success | [OK] Done |
+| `src/facilitators/index.ts` | Export BNBFacilitator | [OK] Done |
+| `src/facilitators/registry.ts` | Register bnb factory | [OK] Done |
+| `src/client/index.ts` | Add chainId mapping, intent signing (handleBNBPayment) | [OK] Done |
+| `src/server/index.ts` | Add `bnb` to CHAIN_TO_NETWORK, TOKEN_DOMAINS, supportedChains | [OK] Done |
+| `src/cli/index.ts` | Update `init` command to handle BNB approvals | [OK] Done |
+| `moltspay-creators/src/routes/faucet.js` | Multi-chain faucet (base_sepolia + bnb_testnet) | [OK] Done |
+| `/var/www/moltspay/schemas/services.json` | Add bnb/bnb_testnet to schema | [OK] Done |
+| `contracts/BNBFacilitator.sol` | Optional - using server wallet instead | [SKIP] Skipped |
 
 ## CLI Changes
 
@@ -717,19 +717,19 @@ moltspay init --chain bnb
 
 # Check approval status
 moltspay status
-# Shows: BNB: ✅ approved (USDT, USDC)
+# Shows: BNB: [OK] approved (USDT, USDC)
 ```
 
 ## Implementation Status
 
 **Completed: 2026-03-21**
 
-### Phase 1: Testnet ✅ CODE COMPLETE
+### Phase 1: Testnet [OK] CODE COMPLETE
 
-1. [x] Add `bnb_testnet` chain config (chainId 97) ✅
-2. [x] Use existing testnet USDC (`0x64544969ed7EBf5f083679233325356EbE738930`) ✅
-3. [x] Implement BNBFacilitator (transferFrom flow) ✅
-4. [x] Update `moltspay init` to handle BNB approvals ✅
+1. [x] Add `bnb_testnet` chain config (chainId 97) [OK]
+2. [x] Use existing testnet USDC (`0x64544969ed7EBf5f083679233325356EbE738930`) [OK]
+3. [x] Implement BNBFacilitator (transferFrom flow) [OK]
+4. [x] Update `moltspay init` to handle BNB approvals [OK]
 5. [ ] Test full flow on testnet: **PENDING** (waiting for testnet USDC - 24h faucet cooldown)
    - `moltspay init --chain bnb_testnet` (with gas sponsorship)
    - `moltspay pay --chain bnb_testnet`
@@ -738,7 +738,7 @@ moltspay status
 
 ### Phase 2: Mainnet
 
-7. [x] Add `bnb` mainnet chain config (chainId 56) ✅
+7. [x] Add `bnb` mainnet chain config (chainId 56) [OK]
 8. [ ] Fund server wallet with BNB for gas sponsorship
 9. [ ] Test with small amounts ($0.01)
 10. [ ] Full production deployment
@@ -770,7 +770,7 @@ moltspay status
    - Or: Deploy facilitator contract (more decentralized)
 
 2. ~~**User onboarding:** Approval step adds friction~~
-   - ✅ Solved: Server sponsors ~$0.01 BNB gas for new wallets
+   - [OK] Solved: Server sponsors ~$0.01 BNB gas for new wallets
    - Seamless UX: `moltspay init` handles everything
 
 3. **Nonce management:** Need to track per-user nonces
