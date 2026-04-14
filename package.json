@@ -1,6 +1,6 @@
 {
   "name": "moltspay",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Payment infrastructure for AI Agents - Server & Client SDK",
   "keywords": [
     "ai-agent",
@@ -37,10 +37,16 @@
       "require": "./dist/facilitators/index.js",
       "import": "./dist/facilitators/index.mjs",
       "types": "./dist/facilitators/index.d.ts"
+    },
+    "./mcp": {
+      "require": "./dist/mcp/index.js",
+      "import": "./dist/mcp/index.mjs",
+      "types": "./dist/mcp/index.d.ts"
     }
   },
   "bin": {
-    "moltspay": "./dist/cli/index.js"
+    "moltspay": "./dist/cli/index.js",
+    "moltspay-mcp": "./dist/mcp/index.js"
   },
   "scripts": {
     "build": "tsup",
@@ -52,6 +58,7 @@
     "prepublishOnly": "npm run typecheck && npm run build"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.98.4",
     "@x402/fetch": "^2.7.0",
@@ -61,7 +68,8 @@
     "ethers": "^6.11.0",
     "mppx": "^0.4.7",
     "qrcode-terminal": "^0.12.0",
-    "viem": "^2.47.5"
+    "viem": "^2.47.5",
+    "zod": "^4.3.6"
   },
   "peerDependencies": {
     "@coinbase/cdp-sdk": "^1.0.0"

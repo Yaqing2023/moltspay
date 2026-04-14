@@ -1050,19 +1050,22 @@ export class MoltsPayClient {
   private loadWallet(): WalletData | null {
     const walletPath = join(this.configDir, 'wallet.json');
     if (existsSync(walletPath)) {
-      // Security check: warn and fix if permissions are too open
-      try {
-        const stats = statSync(walletPath);
-        const mode = stats.mode & 0o777;
-        if (mode !== 0o600) {
-          console.warn(`[MoltsPay] WARNING: wallet.json has insecure permissions (${mode.toString(8)})`);
-          console.warn(`[MoltsPay] Fixing permissions to 0600...`);
-          chmodSync(walletPath, 0o600);
+      // POSIX-only: Windows reports synthesized mode bits and chmod can't
+      // express NTFS ACLs, so the check is meaningless there.
+      if (process.platform !== 'win32') {
+        try {
+          const stats = statSync(walletPath);
+          const mode = stats.mode & 0o777;
+          if (mode !== 0o600) {
+            console.warn(`[MoltsPay] WARNING: wallet.json has insecure permissions (${mode.toString(8)})`);
+            console.warn(`[MoltsPay] Fixing permissions to 0600...`);
+            chmodSync(walletPath, 0o600);
+          }
+        } catch {
+          /* ignored */
         }
-      } catch (err) {
-        // Ignore permission check errors on Windows
       }
-      
+
       const content = readFileSync(walletPath, 'utf-8');
       return JSON.parse(content);
     }

@@ -6,6 +6,7 @@ export default defineConfig({
     'src/server/index.ts',
     'src/client/index.ts',
     'src/cli/index.ts',
+    'src/mcp/index.ts',
     'src/chains/index.ts',
     'src/wallet/index.ts',
     'src/verify/index.ts',
