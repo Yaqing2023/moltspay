@@ -27,6 +27,7 @@ MoltsPay enables agent-to-agent commerce using the [x402 protocol](https://www.x
 - **Multi-chain** - Base, Polygon, Solana, BNB, Tempo (mainnet & testnet)
 - **Agent-to-Agent** - Complete A2A payment flow support
 - **Multi-VM** - EVM chains + Solana (SVM) with unified API
+- **MCP Server** - Expose wallet + payments to Claude Desktop, Cursor, and other MCP hosts
 
 ## Installation
 
@@ -132,6 +133,50 @@ npx moltspay pay https://moltspay.com/a/zen7 text-to-video \
 npx moltspay pay https://server.com service-id \
   --chain tempo_moderato --prompt "test"
 ```
+
+## MCP Server (For AI Assistants)
+
+MoltsPay ships an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) stdio server that lets MCP-compatible hosts (Cursor, Windsurf, Claude Code, Zed, etc.) browse services, check wallet status, and pay for x402 services on your behalf.
+
+It is a thin wrapper around `MoltsPayClient` — wallet custody, spending limits, and all payment protocols (x402, MPP, Solana, BNB) are reused from the SDK.
+
+### Setup
+
+**1. Create a wallet and set spending limits** (the MCP server refuses to start without a wallet):
+
+```bash
+npx moltspay init
+npx moltspay config --max-per-tx 2 --max-per-day 10
+npx moltspay fund 5    # or: npx moltspay faucet for testnet
+```
+
+**2. Point your MCP host at the `moltspay-mcp` binary over stdio:**
+
+```bash
+npx -y moltspay-mcp              # normal mode
+npx -y moltspay-mcp --dry-run    # preview payments without signing
+```
+
+Each host has its own config file for registering stdio MCP servers — check your host's docs for the exact location. For a safer first run, use `--dry-run` so `moltspay_pay` returns a preview instead of spending real funds.
+
+### Tools
+
+| Tool | What it does | Destructive? |
+|---|---|---|
+| `moltspay_status` | Wallet address, balances across all supported chains, spending limits | No |
+| `moltspay_services` | Fetch services manifest from a provider URL; optional `query`/`maxPrice` filter | No |
+| `moltspay_pay` | Execute an x402/MPP/SOL/BNB payment and return the service result | **Yes** |
+| `moltspay_config` | Read or update `maxPerTx` / `maxPerDay` limits | Updates config file |
+
+### Safety Layers
+
+`moltspay_pay` is the only tool that moves money. Three guards stack on top of the MCP host's own tool-approval prompt:
+
+1. **SDK spending limits** — `maxPerTx` / `maxPerDay` enforced before signing.
+2. **Dry-run mode** — launch with `--dry-run` and payments return a preview instead of signing.
+3. **Confirmation gate** — set `MOLTSPAY_MCP_REQUIRE_CONFIRM=1` to require a second tool call (`confirmed: true`) for any payment exceeding `maxPerTx / 10`.
+
+Private keys and mnemonics are never exposed over MCP — wallet creation stays on the CLI (`npx moltspay init`) by design. See [`docs/MCP-USAGE.md`](docs/MCP-USAGE.md) for full tool arguments and troubleshooting.
 
 ## Payment Protocols
 
