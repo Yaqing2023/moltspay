@@ -107,6 +107,19 @@ export interface Charge {
   completedAt?: number;
 }
 
+/**
+ * CORS configuration. See MoltsPayServerOptions.cors.
+ * Fine-grained shape for providers that need allowlist origins or custom control.
+ */
+export interface CorsOptions {
+  /** Explicit origin allowlist. Either an array of origins, or a predicate function. */
+  origins: string[] | ((origin: string) => boolean);
+  /** Emit `Access-Control-Allow-Credentials: true`. Default false. */
+  credentials?: boolean;
+  /** Preflight cache seconds (`Access-Control-Max-Age`). Default 600. */
+  maxAge?: number;
+}
+
 // Server options
 export interface MoltsPayServerOptions {
   port?: number;
@@ -114,4 +127,20 @@ export interface MoltsPayServerOptions {
   chargeExpirySecs?: number;
   /** x402 Facilitator URL (default: https://x402.org/facilitator) */
   facilitatorUrl?: string;
+
+  /**
+   * CORS configuration.
+   *
+   * - `undefined` or `true` (default): allow any origin (`Access-Control-Allow-Origin: *`).
+   *   This matches the 1.5.x behavior — browser clients from any origin can call this server.
+   * - `false`: emit no CORS headers (same-origin only).
+   * - `string[]`: explicit origin allowlist. Request's Origin must match an entry.
+   * - `CorsOptions` object: fine-grained control (origins + credentials + maxAge).
+   *
+   * When CORS is active, the server always exposes the following response headers via
+   * `Access-Control-Expose-Headers`: `X-Payment-Required`, `X-Payment-Response`,
+   * `WWW-Authenticate`, `Payment-Receipt`. These are required for browser clients to
+   * read the 402 challenge and the payment receipt on successful responses.
+   */
+  cors?: boolean | string[] | CorsOptions;
 }

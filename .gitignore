@@ -14,3 +14,8 @@ docs/WHITEPAPER.pdf
 docs/BAZAAR-INTEGRATION-PLAN.md
 docs/articles/
 *.tgz
+
+# Tempo probe output — contains test private keys; regenerated on demand
+# by `node scripts/probe-tempo-permit.mjs`. Canonical evidence is hard-coded
+# in docs/WEB-CLIENT-DESIGN.md + src/client/core/eip2612.ts TEMPO_EIP2612_DOMAINS.
+scripts/.probe-tempo-output/

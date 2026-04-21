@@ -29,6 +29,7 @@ import {
   SkillFunction,
   RegisteredSkill,
   MoltsPayServerOptions,
+  CorsOptions,
 } from './types.js';
 
 export * from './types.js';
@@ -118,9 +119,13 @@ const TOKEN_DOMAINS: Record<string, Record<string, { name: string; version: stri
     USDT: { name: '(PoS) Tether USD', version: '2' },
   },
   // Tempo Moderato testnet - TIP-20 stablecoins
+  // Domain names verified against on-chain DOMAIN_SEPARATOR values on 2026-04-21.
+  // See docs/TEMPO-WEB-SUPPORT.md Section 2 and test/server/tempo-domain.test.ts.
+  // All 4 Tempo TIP-20 tokens (pathUSD / AlphaUSD / BetaUSD / ThetaUSD) use
+  // the token symbol with first letter capitalized + version "1".
   'eip155:42431': {
-    USDC: { name: 'pathUSD', version: '1' },
-    USDT: { name: 'alphaUSD', version: '1' },
+    USDC: { name: 'PathUSD',  version: '1' },
+    USDT: { name: 'AlphaUSD', version: '1' },
   },
   // BNB Smart Chain mainnet
   'eip155:56': {
@@ -345,14 +350,78 @@ export class MoltsPayServer {
   }
 
   /**
+   * Apply CORS response headers according to the `cors` option.
+   *
+   * Default (`cors` unset or `true`): `Access-Control-Allow-Origin: *`. Matches 1.5.x behavior
+   * and works for every browser client whose origin does not need to send cookies.
+   *
+   * `cors: false`: emit no CORS headers. Same-origin only.
+   * `cors: string[]`: origin allowlist — echo the origin back iff it matches.
+   * `cors: CorsOptions`: full control (allowlist + credentials + maxAge).
+   *
+   * The required-for-Web response headers are always exposed when CORS is active:
+   * `X-Payment-Required, X-Payment-Response, WWW-Authenticate, Payment-Receipt`.
+   */
+  private applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
+    const cors = (this.options as MoltsPayServerOptions).cors;
+
+    // Explicitly disabled: no CORS headers at all (strict same-origin).
+    if (cors === false) {
+      return;
+    }
+
+    const requestOrigin = (req.headers.origin as string | undefined) ?? '*';
+
+    // Default / explicit `true`: open to any origin (legacy 1.5.x behavior).
+    if (cors === undefined || cors === true) {
+      this.writeCorsHeaders(res, '*');
+      return;
+    }
+
+    // Array shortcut: origins allowlist, no credentials, default maxAge.
+    if (Array.isArray(cors)) {
+      if (cors.includes(requestOrigin)) {
+        this.writeCorsHeaders(res, requestOrigin);
+        res.setHeader('Vary', 'Origin');
+      }
+      // Origin not on the allowlist → no CORS headers; browser will block.
+      return;
+    }
+
+    // Full CorsOptions object.
+    const opt = cors as CorsOptions;
+    const isAllowed =
+      typeof opt.origins === 'function'
+        ? opt.origins(requestOrigin)
+        : opt.origins.includes(requestOrigin);
+    if (!isAllowed) {
+      return;
+    }
+    this.writeCorsHeaders(res, requestOrigin);
+    res.setHeader('Vary', 'Origin');
+    if (opt.credentials) {
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
+    const maxAge = opt.maxAge ?? 600;
+    res.setHeader('Access-Control-Max-Age', String(maxAge));
+  }
+
+  private writeCorsHeaders(res: ServerResponse, origin: string): void {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Payment, Authorization');
+    res.setHeader(
+      'Access-Control-Expose-Headers',
+      'X-Payment-Required, X-Payment-Response, WWW-Authenticate, Payment-Receipt'
+    );
+  }
+
+  /**
    * Handle incoming request
    */
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    // CORS
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Payment, Authorization');
-    res.setHeader('Access-Control-Expose-Headers', 'X-Payment-Required, X-Payment-Response, WWW-Authenticate, Payment-Receipt');
+    // CORS — honors the `cors` option (default true = allow any origin, matches 1.5.x).
+    this.applyCorsHeaders(req, res);
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
@@ -1023,8 +1092,13 @@ export class MoltsPayServer {
     const tokenAddress = tokenAddresses[selectedToken];
     const tokenDomain = getTokenDomain(selectedNetwork, selectedToken);
 
+    // Tempo Moderato uses EIP-2612 permit (pathUSD / AlphaUSD don't implement EIP-3009).
+    // Every other network uses the standard x402 "exact" (EIP-3009) scheme.
+    const isTempo = selectedNetwork === 'eip155:42431';
+    const scheme = isTempo ? 'permit' : 'exact';
+
     const requirements: X402PaymentRequirements = {
-      scheme: 'exact',
+      scheme,
       network: selectedNetwork,
       asset: tokenAddress,
       amount: amountInUnits,
@@ -1056,7 +1130,21 @@ export class MoltsPayServer {
         };
       }
     }
-    
+
+    // For Tempo: include the settler EOA so the client can sign Permit(spender=settler).
+    // If TEMPO_SETTLER_KEY is not configured, tempoSpender will be absent and Web Client
+    // will surface a helpful error rather than sign a permit no one can fulfill.
+    if (isTempo) {
+      const tempoFacilitator = this.registry.get('tempo') as any;
+      const tempoSpender = tempoFacilitator?.getSpenderAddress?.();
+      if (tempoSpender) {
+        (requirements.extra as any) = {
+          ...(requirements.extra || {}),
+          tempoSpender,
+        };
+      }
+    }
+
     return requirements;
   }
 
