@@ -134,6 +134,131 @@ npx moltspay pay https://server.com service-id \
   --chain tempo_moderato --prompt "test"
 ```
 
+### For Web Apps (Browser)
+
+`moltspay@1.6.0` adds a browser client. Connect any EIP-1193 wallet (MetaMask, Rainbow, Frame, …) for EVM or a `@solana/wallet-adapter` wallet (Phantom, Solflare, Backpack, …) for Solana and pay for x402 services directly from the page — no private key ever in browser memory, no CLI wrapper.
+
+**Install:**
+
+```bash
+npm install moltspay
+```
+
+**Pay with MetaMask:**
+
+```ts
+import { MoltsPayWebClient, eip1193Signer } from 'moltspay/web';
+
+const client = new MoltsPayWebClient({
+  signer: eip1193Signer(window.ethereum),
+});
+
+// Discover what the provider accepts
+const { provider, services } = await client.getServices('https://provider.example.com');
+
+// Run a paid call — user sees one wallet signature prompt
+const result = await client.pay(
+  'https://provider.example.com',
+  'text-to-video',
+  { prompt: 'a cat dancing' },
+  { chain: 'base' }
+);
+```
+
+**Pay with Phantom (Solana):**
+
+```ts
+import { MoltsPayWebClient, solanaSigner } from 'moltspay/web';
+import { useWallet } from '@solana/wallet-adapter-react';
+
+const wallet = useWallet();
+const client = new MoltsPayWebClient({ signer: solanaSigner(wallet) });
+
+await client.pay(serverUrl, 'text-to-video', params, { chain: 'solana_devnet' });
+```
+
+**EVM + Solana in one client** — use `composeSigners` so the same `MoltsPayWebClient` instance routes to whichever signer matches the picked chain:
+
+```ts
+import { MoltsPayWebClient, composeSigners, eip1193Signer, solanaSigner } from 'moltspay/web';
+
+const client = new MoltsPayWebClient({
+  signer: composeSigners(
+    eip1193Signer(window.ethereum),
+    solanaSigner(phantomAdapter),
+  ),
+});
+```
+
+**Chain coverage.** All 8 chains the CLI supports work from the browser with one signature prompt each:
+
+| Chain | Scheme | User gas? | Notes |
+|---|---|---|---|
+| `base` / `polygon` / `base_sepolia` | EIP-3009 `transferWithAuthorization` | No (gasless) | Provider submits on success |
+| `tempo_moderato` | EIP-2612 `permit` | No (gasless) | Browser never switches to Tempo; server's settler submits permit + transferFrom |
+| `bnb` / `bnb_testnet` | MoltsPay `PaymentIntent` | One-time approve | Call `client.approveBnb({ chain, spender, token })` once, then intent signatures are gasless |
+| `solana` / `solana_devnet` | SPL transfer | No if provider sets a fee payer | `wallet.signTransaction` signs, provider submits |
+
+**BNB approval flow.** The first payment on BNB throws `NeedsApprovalError` with the details needed to approve — catch it, call `approveBnb()`, and retry:
+
+```ts
+try {
+  await client.pay(url, service, params, { chain: 'bnb' });
+} catch (err) {
+  if (err instanceof NeedsApprovalError) {
+    await client.approveBnb({
+      chain: 'bnb',
+      spender: err.details.spender,
+      token: err.details.token,
+    });
+    // User paid ~0.001 BNB gas for the approve. Retry now succeeds without further approve.
+    await client.pay(url, service, params, { chain: 'bnb' });
+  }
+}
+```
+
+**Tempo note.** Tempo Moderato pathUSD is a native precompile that implements EIP-2612 permit but **not** EIP-3009. The web client dispatches to the permit path automatically when the server advertises `scheme: "permit"`. The user signs typed data; the provider's settler submits the `permit()` + `transferFrom()` transactions on-chain. MetaMask never prompts for a chain switch because the browser wallet doesn't touch Tempo at all.
+
+**Error classes** — every error exposes a `code` field so you can branch without string-matching:
+
+```ts
+import {
+  NeedsApprovalError,        // code: 'NEEDS_APPROVAL'       — BNB, call approveBnb()
+  UnsupportedChainError,     // code: 'UNSUPPORTED_CHAIN'    — user picked a chain the server doesn't accept
+  PaymentRejectedError,      // code: 'PAYMENT_REJECTED'     — user cancelled in the wallet
+  InsufficientBalanceError,  // code: 'INSUFFICIENT_BALANCE' — not enough native gas for BNB approve
+  SpendingLimitExceededError,// code: 'SPENDING_LIMIT_EXCEEDED' — only when you opt in to SpendingLedger
+  ServerError,               // code: 'SERVER_ERROR'         — provider returned non-2xx
+  MoltsPayError,             // base class
+} from 'moltspay/web';
+```
+
+**Spending limits (opt-in).** Off by default. External wallets already prompt per-signature; per-browser localStorage limits don't sync across devices. If you want a session-level cap anyway:
+
+```ts
+const client = new MoltsPayWebClient({
+  signer: eip1193Signer(window.ethereum),
+  spendingLimits: { maxPerTx: 5, maxPerDay: 50 },
+});
+```
+
+**Provider CORS.** Providers must enable CORS on `MoltsPayServer` for browser callers — without it the 402 challenge header is invisible to the browser:
+
+```ts
+new MoltsPayServer({
+  // ...
+  cors: true,                              // allow all origins, or
+  cors: ['https://myapp.example.com'],     // explicit allowlist, or
+  cors: { origins: [...], maxAge: 86400 }, // fine-grained
+});
+```
+
+Servers advertising for the web need `cors` enabled; CLI callers are unaffected either way.
+
+**Security posture.** No private key ever enters browser memory. No filesystem access, no `~/.moltspay/` — the wallet is always external. The `signer` object the client receives only has permission to sign typed data and (for BNB) submit one `approve` transaction, which the user explicitly confirms in the wallet UI.
+
+**Reference demo.** `examples/web/` is a runnable React + Vite app that exercises every path above. `cd examples/web && npm install && npm run dev` — it connects to `https://moltspay.com/a/zen7` by default. See [`examples/web/README.md`](examples/web/README.md) for the full matrix of tested wallets + chains.
+
 ## MCP Server (For AI Assistants)
 
 MoltsPay ships an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) stdio server that lets MCP-compatible hosts (Cursor, Windsurf, Claude Code, Zed, etc.) browse services, check wallet status, and pay for x402 services on your behalf.

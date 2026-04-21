@@ -31,6 +31,11 @@
       "import": "./dist/client/index.mjs",
       "types": "./dist/client/index.d.ts"
     },
+    "./web": {
+      "browser": "./dist/client/web/index.mjs",
+      "import": "./dist/client/web/index.mjs",
+      "types": "./dist/client/web/index.d.mts"
+    },
     "./chains": "./dist/chains/index.js",
     "./wallet": "./dist/wallet/index.js",
     "./facilitators": {
@@ -49,13 +54,15 @@
     "moltspay-mcp": "./dist/mcp/index.js"
   },
   "scripts": {
+    "prebuild": "rm -rf dist",
     "build": "tsup",
     "dev": "tsup --watch",
     "test": "vitest",
     "test:run": "vitest run",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run typecheck && npm run build"
+    "verify:web": "node scripts/verify-web-bundle.mjs",
+    "prepublishOnly": "npm run typecheck && npm run build && npm run verify:web"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

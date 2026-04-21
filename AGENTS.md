@@ -82,6 +82,67 @@ else:
     print(f"Error: {result.error}")
 ```
 
+### Web (Browser)
+
+Available since `moltspay@1.6.0`. Connect any EIP-1193 wallet (MetaMask, Rainbow, …) or any `@solana/wallet-adapter` wallet (Phantom, Solflare, …). No private key is ever held in browser memory.
+
+```ts
+import {
+  MoltsPayWebClient,
+  eip1193Signer,
+  solanaSigner,
+  composeSigners,
+  NeedsApprovalError,
+} from 'moltspay/web';
+
+// EVM only
+const client = new MoltsPayWebClient({
+  signer: eip1193Signer(window.ethereum),
+});
+
+// Solana only
+const solClient = new MoltsPayWebClient({
+  signer: solanaSigner(phantomAdapter),  // any Pick<WalletAdapter,'publicKey'|'signTransaction'>
+});
+
+// Both (pay on any chain from one instance)
+const dualClient = new MoltsPayWebClient({
+  signer: composeSigners(
+    eip1193Signer(window.ethereum),
+    solanaSigner(phantomAdapter),
+  ),
+});
+
+// Discover + pay
+const manifest = await client.getServices('https://provider.example.com');
+const result = await client.pay(
+  'https://provider.example.com',
+  'text-to-video',
+  { prompt: 'a cat dancing' },
+  { chain: 'base' }
+);
+
+// BNB one-time approve flow
+try {
+  await client.pay(url, service, params, { chain: 'bnb' });
+} catch (err) {
+  if (err instanceof NeedsApprovalError) {
+    await client.approveBnb({
+      chain: 'bnb',
+      spender: err.details.spender,
+      token: err.details.token,
+    });
+    await client.pay(url, service, params, { chain: 'bnb' });  // retry
+  }
+}
+```
+
+**Chains.** Same 8 chains as the CLI (`base`, `polygon`, `base_sepolia`, `tempo_moderato`, `bnb`, `bnb_testnet`, `solana`, `solana_devnet`). Tempo uses EIP-2612 permit in the browser; MPP stays CLI-only.
+
+**Provider requirement.** Server operators must enable `cors` on `MoltsPayServer` for browser callers — without it the 402 challenge header is invisible to `fetch`. `moltspay.com/a/*` providers are already CORS-enabled.
+
+**Runnable reference:** `examples/web/` (React + Vite). `cd examples/web && npm install && npm run dev`.
+
 ## Supported Chains
 
 | Chain | Type | Facilitator | Gas |
@@ -137,6 +198,9 @@ else:
 | insufficient_sol | Need SOL for Solana gas: fund wallet with ~0.01 SOL |
 | insufficient_bnb | Need BNB for gas: use faucet (includes tBNB) or fund wallet |
 | no_solana_wallet | Run `npx moltspay init` to create Solana wallet |
+| `NEEDS_APPROVAL` (web only) | BNB first payment — call `client.approveBnb({...err.details})` once, then retry `pay()` |
+| `PAYMENT_REJECTED` (web only) | User dismissed the wallet prompt — surface the error, let them retry |
+| CORS error in browser console | Provider must set `cors: true` on `MoltsPayServer` |
 
 ## Links
 
