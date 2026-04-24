@@ -63,6 +63,7 @@ describe('eip1193Signer', () => {
     let seen: unknown;
     const provider = mockProvider({
       eth_requestAccounts: () => ['0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'],
+      eth_chainId: () => '0x2105', // 8453 — already on Base, ensureChainId no-ops
       eth_signTypedData_v4: (params) => {
         seen = params;
         return '0xdeadbeef';
@@ -86,6 +87,7 @@ describe('eip1193Signer', () => {
   it('signTypedData rejection surfaces as PaymentRejectedError', async () => {
     const provider = mockProvider({
       eth_requestAccounts: () => ['0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'],
+      eth_chainId: () => '0x2105',
       eth_signTypedData_v4: () => {
         const err: Error & { code?: number } = new Error('User rejected');
         err.code = 4001;

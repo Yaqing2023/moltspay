@@ -1,5 +1,5 @@
 /**
- * PaymentAgent 单元测试
+ * PaymentAgent unit tests
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';

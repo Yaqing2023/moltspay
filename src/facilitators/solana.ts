@@ -298,9 +298,10 @@ export async function createSolanaPaymentTransaction(
   amount: bigint,
   chain: SolanaChainName,
   feePayerPubkey?: PublicKey,
+  connection?: Connection,
 ): Promise<Transaction> {
   const chainConfig = SOLANA_CHAINS[chain];
-  const connection = new Connection(chainConfig.rpc, 'confirmed');
+  const conn = connection ?? new Connection(chainConfig.rpc, 'confirmed');
   const mint = new PublicKey(chainConfig.tokens.USDC.mint);
 
   // Determine who pays fees (gasless mode uses server's fee payer)
@@ -314,7 +315,7 @@ export async function createSolanaPaymentTransaction(
 
   // Check if recipient ATA exists
   try {
-    await getAccount(connection, recipientATA);
+    await getAccount(conn, recipientATA);
   } catch {
     // Create ATA for recipient (fee payer pays rent in gasless mode)
     transaction.add(
@@ -340,7 +341,7 @@ export async function createSolanaPaymentTransaction(
   );
 
   // Get recent blockhash
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash();
   transaction.recentBlockhash = blockhash;
   transaction.feePayer = actualFeePayer;
 

@@ -27,7 +27,7 @@ import {
 import { EvmPanel } from './EvmPanel';
 import { SolanaPanel } from './SolanaPanel';
 
-const DEFAULT_SERVER_URL = 'https://moltspay.com/a/zen7';
+const DEFAULT_SERVER_URL = 'http://localhost:8402';
 const SOLANA_DEVNET_RPC = 'https://api.devnet.solana.com';
 
 const styles = {

@@ -1,5 +1,5 @@
 /**
- * AuditLog 单元测试
+ * AuditLog unit tests
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -12,7 +12,7 @@ describe('AuditLog', () => {
   let auditLog: AuditLog;
 
   beforeAll(() => {
-    // 清理测试目录
+    // Clean up test directory
     if (fs.existsSync(testDir)) {
       fs.rmSync(testDir, { recursive: true });
     }
@@ -20,7 +20,7 @@ describe('AuditLog', () => {
   });
 
   afterAll(() => {
-    // 清理
+    // Clean up
     if (fs.existsSync(testDir)) {
       fs.rmSync(testDir, { recursive: true });
     }
@@ -117,7 +117,7 @@ describe('AuditLog - Tamper Detection', () => {
     }
     auditLog = new AuditLog(testDir);
 
-    // 创建一些日志
+    // Create some log entries
     await auditLog.log({ action: 'transfer_request', request_id: 'tr_001', amount: 10 });
     await auditLog.log({ action: 'transfer_executed', request_id: 'tr_001', amount: 10 });
   });
@@ -129,21 +129,21 @@ describe('AuditLog - Tamper Detection', () => {
   });
 
   it('should detect tampered entries', () => {
-    // 读取日志文件
+    // Read the log file
     const today = new Date().toISOString().slice(0, 10);
     const filePath = path.join(testDir, `audit_${today}.jsonl`);
     const content = fs.readFileSync(filePath, 'utf-8');
     const lines = content.trim().split('\n');
 
-    // 篡改第一条记录的金额
+    // Tamper with the first entry's amount
     const entry = JSON.parse(lines[0]);
-    entry.amount = 999; // 篡改金额
+    entry.amount = 999; // tampered amount
     lines[0] = JSON.stringify(entry);
 
-    // 写回文件
+    // Write back to file
     fs.writeFileSync(filePath, lines.join('\n') + '\n');
 
-    // 验证应该失败
+    // Verification should fail
     const result = auditLog.verify();
     expect(result.valid).toBe(false);
     expect(result.errors.length).toBeGreaterThan(0);

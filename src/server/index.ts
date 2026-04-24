@@ -703,6 +703,17 @@ export class MoltsPayServer {
         console.log(`[MoltsPay] Payment settled by ${settlement.facilitator}: ${settlement.transaction || 'pending'}`);
       } catch (err: any) {
         console.error('[MoltsPay] Settlement failed:', err.message);
+        settlement = { success: false, error: err.message, facilitator: 'none' };
+      }
+
+      // Match Solana semantics: settle failure → 402, do NOT claim payment
+      // succeeded. Skill was already executed; provider absorbs the cost.
+      if (!settlement?.success) {
+        return this.sendJson(res, 402, {
+          error: 'Payment settlement failed',
+          message: settlement?.error || 'Settlement returned no success state',
+          facilitator: settlement?.facilitator,
+        });
       }
     }
 
@@ -1057,7 +1068,10 @@ export class MoltsPayServer {
     const scheme = payment.accepted?.scheme || payment.scheme;
     const network = payment.accepted?.network || payment.network || this.networkId;
 
-    if (scheme !== 'exact') {
+    // Both schemes are supported: EIP-3009 `exact` (Base/Polygon/BNB/Solana) and
+    // EIP-2612 `permit` (Tempo Moderato, added in 1.6.0). Facilitator routes
+    // permit payloads to TempoFacilitator automatically.
+    if (scheme !== 'exact' && scheme !== 'permit') {
       return { valid: false, error: `Unsupported scheme: ${scheme}` };
     }
 
@@ -1328,7 +1342,7 @@ export class MoltsPayServer {
     const scheme = payment.accepted?.scheme || payment.scheme;
     const network = payment.accepted?.network || payment.network;
 
-    if (scheme !== 'exact') {
+    if (scheme !== 'exact' && scheme !== 'permit') {
       return this.sendJson(res, 402, { error: `Unsupported scheme: ${scheme}` });
     }
 

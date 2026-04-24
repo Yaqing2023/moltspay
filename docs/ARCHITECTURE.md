@@ -1,25 +1,31 @@
-# Payment Agent 架构设计文档
+# Payment Agent Architecture Design
 
-## 第一部分:系统定位
+> **Historical document (v0.1.0).** This document reflects the project's original
+> architecture from early 2026 and is preserved for reference. It describes an
+> earlier scope (`@anthropic/payment-agent`) with fewer chains and no Web
+> Client. For the current 1.6.x architecture, see `docs/WEB-CLIENT-DESIGN.md`,
+> `docs/WHITEPAPER.md`, and the per-chain design docs.
 
-**Payment Agent** 是 AI Agent 之间的区块链支付基础设施, 作为独立的 npm 包发布, 供 Bot(如 Clawdbot)调用. 
+## Part 1: System Positioning
 
-### 架构分层
+**Payment Agent** is blockchain payment infrastructure for AI agents, published as a standalone npm package for bots (e.g. Clawdbot) to consume.
+
+### Architecture Layers
 
 ```
 +----------------------------------------------------------------------------------------------------------------------+
 |                    Bot (Clawdbot)                       |
-|  - 业务逻辑(视频生成、订单管理等)                      |
-|  - 用户交互(WhatsApp/飞书/Moltbook)                   |
-|  - 服务交付                                             |
+|  - Business logic (video generation, order management, …)|
+|  - User interaction (WhatsApp / Feishu / Moltbook)      |
+|  - Service delivery                                     |
 +----------------------------------------------------------------------------------------------------------------------+
-                          v 调用
+                          v calls
 +----------------------------------------------------------------------------------------------------------------------+
-|              Payment Agent (npm 包)                      |
-|  - Invoice 生成/解析                                     |
-|  - 链上支付验证                                          |
-|  - 托管钱包转账                                          |
-|  - 安全控制(限额/白名单/审计)                          |
+|              Payment Agent (npm package)                |
+|  - Invoice generation / parsing                         |
+|  - On-chain payment verification                        |
+|  - Custodial wallet transfers                           |
+|  - Security controls (limits / whitelist / audit)       |
 |  - EIP-2612 Permit                                      |
 +----------------------------------------------------------------------------------------------------------------------+
                           v
@@ -29,137 +35,137 @@
 +----------------------------------------------------------------------------------------------------------------------+
 ```
 
-### 职责边界
+### Responsibility Boundaries
 
-| [OK] Payment Agent 负责 | [NO] Bot 负责 |
+| [OK] Payment Agent handles | [NO] Bot handles |
 |----------------------|-------------|
-| Invoice 生成 | 订单创建/管理 |
-| 支付验证 | 视频生成等业务 |
-| 钱包余额查询 | 文件存储/推送 |
-| USDC 转账 | 用户交互 |
-| 限额/白名单控制 | 业务流程编排 |
-| 审计日志 | 通知推送 |
-| EIP-2612 Permit | 平台集成 |
+| Invoice generation | Order creation / management |
+| Payment verification | Video generation and other business logic |
+| Wallet balance queries | File storage / push delivery |
+| USDC transfers | User interaction |
+| Limit / whitelist controls | Business flow orchestration |
+| Audit log | Notification push |
+| EIP-2612 Permit | Platform integration |
 
 ---
 
-## 第二部分:模块设计
+## Part 2: Module Design
 
-### 1. PaymentAgent(核心支付代理)
+### 1. PaymentAgent (core payment agent)
 
-**文件**: `src/agent/PaymentAgent.ts`
+**File**: `src/agent/PaymentAgent.ts`
 
-**职责**:
-- 生成 Invoice(支付请求)
-- 验证链上支付
-- 生成钱包深度链接
+**Responsibilities**:
+- Generate Invoices (payment requests)
+- Verify on-chain payments
+- Build wallet deep-links
 
-**主要方法**:
+**Primary methods**:
 
-| 方法 | 说明 |
+| Method | Description |
 |------|------|
-| createInvoice(params) | 生成符合协议的支付请求 |
-| verifyPayment(txHash, options) | 验证交易哈希 |
-| scanRecentTransfers(amount, timeout) | 扫描最近转账(按金额匹配) |
-| getBalance(address?) | 获取钱包余额 |
-| formatInvoiceMessage(invoice) | 格式化为人类可读消息 |
+| createInvoice(params) | Generate a protocol-compliant payment request |
+| verifyPayment(txHash, options) | Verify a transaction hash |
+| scanRecentTransfers(amount, timeout) | Scan recent transfers (match by amount) |
+| getBalance(address?) | Fetch a wallet balance |
+| formatInvoiceMessage(invoice) | Format into a human-readable message |
 
-### 2. Wallet(基础钱包)
+### 2. Wallet (basic wallet)
 
-**文件**: `src/wallet/Wallet.ts`
+**File**: `src/wallet/Wallet.ts`
 
-**职责**:
-- 查询余额
-- 发送 USDC 转账
+**Responsibilities**:
+- Query balances
+- Send USDC transfers
 
-**主要方法**:
+**Primary methods**:
 
-| 方法 | 说明 |
+| Method | Description |
 |------|------|
-| getBalance() | 获取 ETH + USDC 余额 |
-| transfer(to, amount) | 发送 USDC |
+| getBalance() | Get ETH + USDC balance |
+| transfer(to, amount) | Send USDC |
 
-### 3. SecureWallet(安全钱包)
+### 3. SecureWallet (secure wallet)
 
-**文件**: `src/wallet/SecureWallet.ts`
+**File**: `src/wallet/SecureWallet.ts`
 
-**职责**:
-- 在基础 Wallet 之上增加安全控制
-- 单笔/日限额
-- 白名单机制
-- 审计日志
-- 超限审批队列
+**Responsibilities**:
+- Add security controls on top of the basic Wallet
+- Per-transfer and daily limits
+- Whitelist enforcement
+- Audit log
+- Over-limit approval queue
 
-**主要方法**:
+**Primary methods**:
 
-| 方法 | 说明 |
+| Method | Description |
 |------|------|
-| transfer(params) | 带安全检查的转账 |
-| approve(requestId, approver) | 审批超限转账 |
-| reject(requestId, rejecter) | 拒绝超限转账 |
-| addToWhitelist(address, addedBy) | 添加白名单 |
-| getPendingTransfers() | 获取待审批列表 |
+| transfer(params) | Transfer with security checks |
+| approve(requestId, approver) | Approve an over-limit transfer |
+| reject(requestId, rejecter) | Reject an over-limit transfer |
+| addToWhitelist(address, addedBy) | Add a whitelist entry |
+| getPendingTransfers() | Get the pending approval list |
 
-**安全控制流程**:
+**Security control flow**:
 
 ```
-转账请求
+Transfer request
     v
-白名单检查 ----否----> 拒绝
-    v是
-单笔限额检查 ----超限----> 审批队列
-    v限额内
-日限额检查 ----超限----> 审批队列
-    v限额内
-余额检查 ----不足----> 拒绝
-    v充足
-执行转账 + 写入审计日志
+Whitelist check ----no----> Reject
+    v yes
+Per-transfer limit ----over----> Approval queue
+    v within limit
+Daily limit ----over----> Approval queue
+    v within limit
+Balance check ----insufficient----> Reject
+    v sufficient
+Execute transfer + write audit log
 ```
 
-### 4. PermitPayment(EIP-2612 无 Gas 预授权)
+### 4. PermitPayment (EIP-2612 gasless pre-authorization)
 
-**文件**: `src/permit/Permit.ts`
+**File**: `src/permit/Permit.ts`
 
-**职责**:
-- 让用户通过签名授权, 服务方代付 Gas
+**Responsibilities**:
+- Allow users to authorize via signature while the service provider covers gas
 
-**主要方法**:
+**Primary methods**:
 
-| 方法 | 说明 |
+| Method | Description |
 |------|------|
-| createPermitRequest(owner, amount, orderId) | 生成 EIP-712 签名请求 |
-| executePermitAndTransfer(owner, amount, sig) | 执行 permit + transferFrom |
-| executePermit(owner, amount, sig) | 仅执行 permit |
+| createPermitRequest(owner, amount, orderId) | Build an EIP-712 signature request |
+| executePermitAndTransfer(owner, amount, sig) | Execute permit + transferFrom |
+| executePermit(owner, amount, sig) | Execute permit only |
 
-**流程**:
+**Flow**:
 
 ```
-1. 服务方调用 createPermitRequest() 生成签名请求
-2. 用户钱包调用 eth_signTypedData_v4 签名(离线, 0 gas)
-3. 用户返回签名 {v, r, s, deadline}
-4. 服务方调用 executePermitAndTransfer()
-5. 链上完成授权 + 转账
+1. Provider calls createPermitRequest() to build the signature request
+2. User wallet calls eth_signTypedData_v4 to sign (offline, 0 gas)
+3. User returns the signature {v, r, s, deadline}
+4. Provider calls executePermitAndTransfer()
+5. Authorization + transfer settle on-chain
 ```
 
-### 5. AuditLog(审计日志)
+### 5. AuditLog (audit log)
 
-**文件**: `src/audit/AuditLog.ts`
+**File**: `src/audit/AuditLog.ts`
 
-**职责**:
-- 不可篡改的操作日志
-- 链式哈希防篡改
-- 按日期分文件存储
+**Responsibilities**:
+- Tamper-resistant operation log
+- Hash-chained entries to detect tampering
+- One file per day
 
-**主要方法**:
+**Primary methods**:
 
-| 方法 | 说明 |
+| Method | Description |
 |------|------|
-| log(params) | 记录日志 |
-| read(date?) | 读取指定日期日志 |
-| verify(date?) | 验证日志完整性 |
-| search(filter) | 搜索日志 |
+| log(params) | Record a log entry |
+| read(date?) | Read entries for a given date |
+| verify(date?) | Verify log integrity |
+| search(filter) | Search log entries |
 
-**日志格式**:
+**Log format**:
 
 ```json
 {
@@ -178,9 +184,9 @@
 
 ---
 
-## 第三部分:协议规范
+## Part 3: Protocol Specification
 
-### Invoice(支付请求)
+### Invoice (payment request)
 
 ```typescript
 interface Invoice {
@@ -188,17 +194,17 @@ interface Invoice {
   version: '1.0';
   order_id: string;
   service: string;
-  amount: string;        // 字符串避免精度问题
+  amount: string;        // string to avoid precision issues
   token: 'USDC';
   chain: string;
   chain_id: number;
   recipient: string;
   expires_at: string;    // ISO8601
-  deep_link?: string;    // MetaMask 深度链接
+  deep_link?: string;    // MetaMask deep link
 }
 ```
 
-### 验证结果
+### Verification result
 
 ```typescript
 interface VerifyResult {
@@ -216,19 +222,19 @@ interface VerifyResult {
 
 ---
 
-## 第四部分:支持的链
+## Part 4: Supported Chains
 
-| 链 | Chain ID | 类型 | USDC 合约 |
+| Chain | Chain ID | Type | USDC contract |
 |---|----------|------|-----------|
-| base | 8453 | 主网 | 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 |
-| polygon | 137 | 主网 | 0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359 |
-| ethereum | 1 | 主网 | 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 |
-| base_sepolia | 84532 | 测试网 | 0x036CbD53842c5426634e7929541eC2318f3dCF7e |
-| sepolia | 11155111 | 测试网 | 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238 |
+| base | 8453 | Mainnet | 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 |
+| polygon | 137 | Mainnet | 0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359 |
+| ethereum | 1 | Mainnet | 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 |
+| base_sepolia | 84532 | Testnet | 0x036CbD53842c5426634e7929541eC2318f3dCF7e |
+| sepolia | 11155111 | Testnet | 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238 |
 
 ---
 
-## 第五部分:目录结构
+## Part 5: Directory Structure
 
 ```
 payment-agent/
@@ -237,67 +243,67 @@ payment-agent/
 +------ tsup.config.ts
 +------ README.md
 +------ src/
-|   +------ index.ts              # 主入口
+|   +------ index.ts              # Main entry point
 |   +------ agent/
-|   |   +------ PaymentAgent.ts   # 核心支付代理
+|   |   +------ PaymentAgent.ts   # Core payment agent
 |   +------ wallet/
 |   |   +------ index.ts
-|   |   +------ Wallet.ts         # 基础钱包
-|   |   +------ SecureWallet.ts   # 安全钱包
+|   |   +------ Wallet.ts         # Basic wallet
+|   |   +------ SecureWallet.ts   # Secure wallet
 |   +------ permit/
 |   |   +------ index.ts
 |   |   +------ Permit.ts         # EIP-2612
 |   +------ chains/
-|   |   +------ index.ts          # 链配置
+|   |   +------ index.ts          # Chain configuration
 |   +------ audit/
-|   |   +------ AuditLog.ts       # 审计日志
+|   |   +------ AuditLog.ts       # Audit log
 |   +------ types/
-|       +------ index.ts          # 类型定义
+|       +------ index.ts          # Type definitions
 +------ bin/
 |   +------ cli.ts                # CLI
 +------ docs/
-|   +------ ARCHITECTURE.md       # 本文档
+|   +------ ARCHITECTURE.md       # This document
 +------ test/
 ```
 
 ---
 
-## 第六部分:使用示例
+## Part 6: Usage Example
 
-### Bot 集成示例
+### Bot integration example
 
 ```typescript
 import { PaymentAgent, SecureWallet } from '@anthropic/payment-agent';
 
 const payment = new PaymentAgent({ chain: 'base' });
-const wallet = new SecureWallet({ 
+const wallet = new SecureWallet({
   chain: 'base',
   limits: { singleMax: 100, dailyMax: 1000 }
 });
 
-// Bot 业务流程
+// Bot business flow
 async function handleServiceRequest(userId: string, service: string) {
-  // 1. Bot 创建订单(Bot 自己管理)
+  // 1. Bot creates an order (managed by the bot itself)
   const orderId = createOrder(userId, service);
-  
-  // 2. 调用 Payment Agent 生成 Invoice
+
+  // 2. Call Payment Agent to generate an Invoice
   const invoice = payment.createInvoice({
     orderId,
     amount: 2.0,
     service,
   });
-  
-  // 3. Bot 发送 Invoice 给用户
+
+  // 3. Bot sends the Invoice to the user
   await sendToUser(userId, payment.formatInvoiceMessage(invoice));
-  
-  // 4. 用户支付后, Bot 调用 Payment Agent 验证
+
+  // 4. After the user pays, the Bot calls Payment Agent to verify
   const verified = await payment.verifyPayment(txHash);
-  
+
   if (verified.success) {
-    // 5. Bot 执行业务(如生成视频)
+    // 5. Bot performs the business action (e.g. video generation)
     await executeService(orderId);
-    
-    // 6. Bot 交付服务
+
+    // 6. Bot delivers the service
     await deliverService(userId);
   }
 }
@@ -305,36 +311,36 @@ async function handleServiceRequest(userId: string, service: string) {
 
 ---
 
-## 第七部分:安全特性
+## Part 7: Security Features
 
-### 三层防护
+### Three layers of protection
 
 ```
 +--------------------------------------------------------------------------------------+
-|  第一层:钱包选择                        |
-|  (Wallet / SecureWallet / Permit)       |
+|  Layer 1: Wallet choice                  |
+|  (Wallet / SecureWallet / Permit)        |
 +--------------------------------------------------------------------------------------+
                   v
 +--------------------------------------------------------------------------------------+
-|  第二层:风控措施                        |
-|  (限额 / 白名单 / 审批队列)              |
+|  Layer 2: Risk controls                  |
+|  (limits / whitelist / approval queue)   |
 +--------------------------------------------------------------------------------------+
                   v
 +--------------------------------------------------------------------------------------+
-|  第三层:审计追溯                        |
-|  (链式哈希日志 / 不可篡改)               |
+|  Layer 3: Audit trail                    |
+|  (hash-chained log / tamper-resistant)   |
 +--------------------------------------------------------------------------------------+
 ```
 
-### 默认限额
+### Default limits
 
-| 限制 | 默认值 |
+| Limit | Default |
 |------|--------|
-| 单笔最大 | $100 |
-| 日最大 | $1000 |
-| 白名单 | 强制开启 |
+| Per-transfer max | $100 |
+| Daily max | $1000 |
+| Whitelist | Enforced by default |
 
 ---
 
-*文档版本: v0.1.0*
-*更新时间: 2026-02-14*
+*Document version: v0.1.0*
+*Last updated: 2026-02-14*

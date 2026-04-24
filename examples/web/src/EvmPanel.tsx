@@ -35,16 +35,41 @@ const EVM_CHAINS: ChainName[] = [
   'bnb_testnet',
 ];
 
-// Injected providers sometimes nest themselves under `window.ethereum.providers[]`
-// when multiple wallets are present. This picks the first MetaMask-like one; if
-// the user has only one wallet, `window.ethereum` itself is used.
+// When multiple wallets are installed (MetaMask + Coinbase Wallet + Rabby, ...)
+// each injects itself and fights for `window.ethereum`, usually exposing the
+// set as `providers[]`. Coinbase Wallet also sets `isMetaMask: true` to spoof
+// MetaMask for dApp compatibility, so naive `providers[0]` or `isMetaMask`
+// filtering picks Coinbase when both are installed.
+type EnhancedProvider = Eip1193Provider & {
+  isMetaMask?: boolean;
+  isCoinbaseWallet?: boolean;
+  isBraveWallet?: boolean;
+  providers?: EnhancedProvider[];
+};
+
+// Coinbase Wallet's `overrideIsMetaMask` flow leaves `isCoinbaseWallet` unset,
+// so identify it by its proxy's internal keys which pure MetaMask lacks.
+function looksLikeCoinbaseWallet(p: EnhancedProvider): boolean {
+  const anyP = p as unknown as Record<string, unknown>;
+  return (
+    anyP.isCoinbaseWallet === true ||
+    'providerMap' in anyP ||
+    'overrideIsMetaMask' in anyP ||
+    'qrUrl' in anyP ||
+    'selectedProvider' in anyP
+  );
+}
+
 function detectProvider(): Eip1193Provider | null {
-  const eth = (window as unknown as { ethereum?: Eip1193Provider & { providers?: Eip1193Provider[] } }).ethereum;
+  const eth = (window as unknown as { ethereum?: EnhancedProvider }).ethereum;
   if (!eth) return null;
-  if (eth.providers && eth.providers.length > 0) {
-    return eth.providers[0];
-  }
-  return eth;
+  const pool = eth.providers && eth.providers.length > 0 ? eth.providers : [eth];
+  const metaMask = pool.find(
+    (p) => p.isMetaMask && !p.isBraveWallet && !looksLikeCoinbaseWallet(p)
+  );
+  if (metaMask) return metaMask;
+  const nonCoinbase = pool.find((p) => !looksLikeCoinbaseWallet(p));
+  return nonCoinbase ?? pool[0];
 }
 
 interface Props {

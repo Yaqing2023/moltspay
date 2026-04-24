@@ -1,13 +1,13 @@
 /**
- * SecureWallet 单元测试
+ * SecureWallet unit tests
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { SecureWallet } from '../src/wallet/SecureWallet.js';
 import * as fs from 'fs';
 
-// 注意：这些测试不会真正执行链上交易
-// 主要测试限额、白名单等安全逻辑
+// Note: these tests do not actually execute on-chain transactions.
+// They exercise security logic such as limits and whitelists.
 
 describe('SecureWallet - Security Checks', () => {
   const testAuditDir = '/tmp/payment-agent-test-secure-wallet';
@@ -18,7 +18,7 @@ describe('SecureWallet - Security Checks', () => {
       fs.rmSync(testAuditDir, { recursive: true });
     }
 
-    // 使用测试私钥（不会真正执行交易）
+    // Use a test private key (no real transactions executed)
     process.env.PAYMENT_AGENT_PRIVATE_KEY = '0x' + '1'.repeat(64);
 
     wallet = new SecureWallet({
@@ -29,8 +29,8 @@ describe('SecureWallet - Security Checks', () => {
         requireWhitelist: true,
       },
       whitelist: [
-        '0xb8d6f2441e8f8dfB6288A74Cf73804cDd0484E0C',
-        '0x9513ed2C1E861CA4020195538FcB42654C9B3DFa',
+        '0xAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAa',
+        '0xBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBb',
       ],
       auditPath: testAuditDir,
     });
@@ -44,12 +44,12 @@ describe('SecureWallet - Security Checks', () => {
 
   describe('Whitelist', () => {
     it('should check if address is whitelisted', () => {
-      expect(wallet.isWhitelisted('0xb8d6f2441e8f8dfB6288A74Cf73804cDd0484E0C')).toBe(true);
+      expect(wallet.isWhitelisted('0xAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAa')).toBe(true);
       expect(wallet.isWhitelisted('0x0000000000000000000000000000000000000000')).toBe(false);
     });
 
     it('should be case-insensitive', () => {
-      expect(wallet.isWhitelisted('0xB8D6F2441E8F8DFB6288A74CF73804CDD0484E0C')).toBe(true);
+      expect(wallet.isWhitelisted('0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')).toBe(true);
     });
 
     it('should reject transfer to non-whitelisted address', async () => {
@@ -75,8 +75,8 @@ describe('SecureWallet - Security Checks', () => {
 
     it('should reject transfer exceeding single limit', async () => {
       const result = await wallet.transfer({
-        to: '0xb8d6f2441e8f8dfB6288A74Cf73804cDd0484E0C',
-        amount: 150, // 超过单笔限额 100
+        to: '0xAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAa',
+        amount: 150, // exceeds the single-transfer limit of 100
         reason: 'test large transfer',
       });
 
@@ -96,7 +96,7 @@ describe('SecureWallet - Security Checks', () => {
       const initialCount = wallet.getPendingTransfers().length;
       
       await wallet.transfer({
-        to: '0xb8d6f2441e8f8dfB6288A74Cf73804cDd0484E0C',
+        to: '0xAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAa',
         amount: 200,
         reason: 'large transfer',
         requester: 'test_user',
@@ -105,7 +105,7 @@ describe('SecureWallet - Security Checks', () => {
       const pending = wallet.getPendingTransfers();
       expect(pending.length).toBeGreaterThan(initialCount);
       
-      // 查找金额为 200 的待处理转账
+      // Find the pending transfer with amount 200
       const found = pending.find(p => p.amount === 200);
       expect(found).toBeDefined();
       expect(found?.status).toBe('pending');

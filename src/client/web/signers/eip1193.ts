@@ -125,6 +125,15 @@ export function eip1193Signer(
     getEvmAddress,
 
     async signTypedData<TMessage>(envelope: TypedDataEnvelope<TMessage>): Promise<string> {
+      // Signing is chain-independent at the crypto layer, but MetaMask (and
+      // some other EIP-1193 providers) throw "Provider is not connected to
+      // the requested chain" on eth_signTypedData_v4 when the active chain
+      // differs from envelope.domain.chainId. Switch first so the user's
+      // wallet matches the x402 EIP-712 domain before the signature prompt.
+      if (typeof envelope.domain?.chainId === 'number') {
+        await ensureChainId(envelope.domain.chainId);
+      }
+
       const from = await getEvmAddress();
 
       // eth_signTypedData_v4 expects a JSON envelope that includes the

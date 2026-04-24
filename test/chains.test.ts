@@ -1,5 +1,5 @@
 /**
- * Chains 配置单元测试
+ * Chains configuration unit tests
  */
 
 import { describe, it, expect } from 'vitest';

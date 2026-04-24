@@ -75,6 +75,17 @@ export interface MoltsPayWebClientOptions {
 
   /** Optional fetch override — useful for MSW tests or proxying. Defaults to `globalThis.fetch`. */
   fetch?: typeof fetch;
+
+  /**
+   * Per-chain Solana RPC URL override. Required on mainnet in practice —
+   * the public `api.mainnet-beta.solana.com` endpoint returns 403 to browser
+   * requests. Point at Helius / QuickNode / Alchemy etc. Falls back to
+   * `SOLANA_CHAINS[chain].rpc` when omitted.
+   */
+  solanaRpc?: {
+    solana?: string;
+    solana_devnet?: string;
+  };
 }
 
 export interface WebPayOptions {
@@ -91,6 +102,7 @@ export class MoltsPayWebClient {
   private readonly defaultChain?: CoreChainName;
   private readonly ledger: SpendingLedger | null;
   private readonly fetchImpl: ResolvedFetch;
+  private readonly solanaRpc?: { solana?: string; solana_devnet?: string };
 
   constructor(options: MoltsPayWebClientOptions) {
     if (!options.signer) {
@@ -100,6 +112,12 @@ export class MoltsPayWebClient {
     this.defaultChain = options.defaultChain;
     this.ledger = options.spendingLimits ? new SpendingLedger(options.spendingLimits) : null;
     this.fetchImpl = (options.fetch ?? globalThis.fetch).bind(globalThis);
+    this.solanaRpc = options.solanaRpc;
+  }
+
+  private getSolanaConnection(chain: SolanaChainName): Connection {
+    const rpc = this.solanaRpc?.[chain] ?? SOLANA_CHAINS[chain].rpc;
+    return new Connection(rpc, 'confirmed');
   }
 
   /** Fetch a provider's service manifest. Mirrors `MoltsPayClient.getServices`. */
@@ -186,7 +204,7 @@ export class MoltsPayWebClient {
       throw new UnsupportedChainError('unspecified', 'No chain provided and no defaultChain configured');
     }
     if (target === 'solana' || target === 'solana_devnet') {
-      const conn = new Connection(SOLANA_CHAINS[target].rpc, 'confirmed');
+      const conn = this.getSolanaConnection(target);
       const owner = await this.signer.getSolanaAddress?.();
       if (!owner) {
         throw new NotInitializedError('No Solana address available from signer');
@@ -609,7 +627,8 @@ export class MoltsPayWebClient {
       recipientPubkey,
       BigInt(req.amount),
       chainName,
-      feePayerPubkey
+      feePayerPubkey,
+      this.getSolanaConnection(chainName)
     );
 
     // Serialize without requiring all signatures so `partialSign: true` works

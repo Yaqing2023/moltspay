@@ -111,6 +111,11 @@ const dualClient = new MoltsPayWebClient({
     eip1193Signer(window.ethereum),
     solanaSigner(phantomAdapter),
   ),
+  // Solana mainnet's public RPC 403s browsers; supply an authenticated URL.
+  // Devnet is unaffected — omit `solana_devnet` to keep the default.
+  solanaRpc: {
+    solana: 'https://mainnet.helius-rpc.com/?api-key=YOUR_KEY',
+  },
 });
 
 // Discover + pay

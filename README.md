@@ -219,6 +219,23 @@ try {
 
 **Tempo note.** Tempo Moderato pathUSD is a native precompile that implements EIP-2612 permit but **not** EIP-3009. The web client dispatches to the permit path automatically when the server advertises `scheme: "permit"`. The user signs typed data; the provider's settler submits the `permit()` + `transferFrom()` transactions on-chain. MetaMask never prompts for a chain switch because the browser wallet doesn't touch Tempo at all.
 
+**Solana mainnet RPC.** The public `api.mainnet-beta.solana.com` endpoint returns 403 to browser requests, so any Solana-mainnet traffic needs an authenticated RPC. Supply one via `solanaRpc`:
+
+```ts
+const client = new MoltsPayWebClient({
+  signer: composeSigners(
+    eip1193Signer(window.ethereum),
+    solanaSigner(phantomAdapter),
+  ),
+  solanaRpc: {
+    solana: 'https://mainnet.helius-rpc.com/?api-key=YOUR_KEY',
+    // solana_devnet falls back to `api.devnet.solana.com` automatically
+  },
+});
+```
+
+Accepts any Helius / QuickNode / Alchemy / Triton / self-hosted URL. Per-chain — override only `solana` if you only use mainnet. Devnet (`api.devnet.solana.com`) still serves browsers and does not need an override.
+
 **Error classes** — every error exposes a `code` field so you can branch without string-matching:
 
 ```ts
