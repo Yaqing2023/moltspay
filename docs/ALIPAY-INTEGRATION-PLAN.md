@@ -152,12 +152,12 @@
   - [ ] `alipay_check_wallet`
   - [ ] `alipay_pay_402(url, intent_summary)` — 8 步完整跑完
   - ~~`alipay_pay_cashier`~~ —— 按决策 4，移到 §5 1.7.1
-- [ ] `docs/ALIPAY-RAIL.md` —— 用户视角接入指南（按决策 5）
+- [x] `docs/ALIPAY-RAIL.md` —— 用户视角接入指南（按决策 5，2026-05-29 v1 草稿落地）
 
 ### 文档
 
-- [ ] `docs/ALIPAY-RAIL.md` 内容覆盖：商户入驻前置、`provider.alipay` 配置、`services[].alipay` 配置、`moltspay pay --rail alipay` 用法、错误码表（7 个 `ALIPAY_*` code）、常见坑（amount 元/分、service_id 前缀、签名 8 字段）
-- [ ] README 加 5 行 callout，链接到 `docs/ALIPAY-RAIL.md`
+- [x] `docs/ALIPAY-RAIL.md` 内容覆盖：商户入驻前置、`provider.alipay` 配置、`services[].alipay` 配置、`moltspay pay --rail alipay` 用法、错误码表（7 个 `ALIPAY_*` code）、常见坑（amount 元/分、service_id 前缀、签名 8 字段）+ 端到端示例 + x402 对比
+- [x] README 加 callout 行，链接到 `docs/ALIPAY-RAIL.md`（Features 列表，1 行紧凑形式）
 - [ ] CHANGELOG（GitHub Release notes，CHANGELOG.md 仍 gitignore）
   - [ ] Known Limitations：浏览器**写死不支持** alipay（不是"未测试"）
   - [ ] Known Limitations：仅中国大陆商户（需 ICP + 营业执照）
