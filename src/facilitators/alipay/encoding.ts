@@ -4,9 +4,7 @@
  * Alipay's `Payment-Needed` and `Payment-Proof` headers use Base64URL
  * (`-` replaces `+`, `_` replaces `/`, padding optional). Some proxies
  * strip the trailing `=` padding; `decodeBase64UrlWithPadFix` recovers it
- * before standard base64 decoding.
- *
- * Stub for 1.7.0-rc.1; implementation tracked in ALIPAY-INTEGRATION-PLAN.md §1.
+ * and accepts either alphabet.
  */
 
 /**
@@ -16,16 +14,21 @@
  * @returns Base64URL representation (no `=` padding)
  */
 export function base64url(input: string): string {
-  throw new Error('alipay/encoding.base64url: not implemented (1.7.0-rc.1 stub)');
+  return Buffer.from(input, 'utf-8').toString('base64url');
 }
 
 /**
- * Decode a Base64URL string (with or without padding) to a UTF-8 string.
- * Automatically restores `=` padding before standard decoding.
+ * Decode a Base64URL (or standard Base64) string to a UTF-8 string.
  *
- * @param input - Base64URL string, possibly missing trailing `=` padding
+ * Tolerates either URL-safe (`-` `_`) or standard (`+` `/`) alphabets,
+ * with or without trailing `=` padding. Used for `Payment-Needed` and
+ * `Payment-Proof` headers where proxies may strip padding.
+ *
+ * @param input - Base64URL or Base64 string
  * @returns Decoded UTF-8 string
  */
 export function decodeBase64UrlWithPadFix(input: string): string {
-  throw new Error('alipay/encoding.decodeBase64UrlWithPadFix: not implemented (1.7.0-rc.1 stub)');
+  const normalized = input.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+  return Buffer.from(padded, 'base64').toString('utf-8');
 }

@@ -50,7 +50,7 @@
 - [ ] `src/facilitators/alipay.ts` — `AlipayFacilitator` 类（~250 行）
 - [ ] `src/facilitators/alipay/openapi.ts` — `alipayOpenApiCall()` 通用调用器（~120 行）
 - [ ] `src/facilitators/alipay/rsa2.ts` — `rsa2Sign` / `rsa2Verify`，Node `crypto` 内置（~50 行）
-- [ ] `src/facilitators/alipay/encoding.ts` — `base64url` / `decodeBase64UrlWithPadFix`（~30 行）
+- [x] `src/facilitators/alipay/encoding.ts` — `base64url` / `decodeBase64UrlWithPadFix`（2026-05-29 实现 + 17 单测）
 
 ### 改动文件
 
@@ -76,7 +76,7 @@
 ### 单元测试（vitest）100% 覆盖 `src/facilitators/alipay/*`
 
 - [ ] RSA2 sign/verify（用支付宝沙箱测试密钥对）
-- [ ] Base64URL padding fix（覆盖 `==` / `=` / 无 padding 三种）
+- [x] Base64URL padding fix（覆盖 `==` / `=` / 无 padding 三种 + URL-safe/标准字母表 + UTF-8 + round-trip，2026-05-29）
 - [ ] 签名 8 字段字典序：`amount`/`currency`/`goods_name`/`out_trade_no`/`pay_before`/`resource_id`/`seller_id`/`service_id`
 - [ ] Challenge JSON 嵌套结构 `{protocol: {...}, method: {...}}`
 - [ ] `pay_before` ISO 8601 +30 分钟
