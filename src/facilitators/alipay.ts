@@ -24,6 +24,7 @@
  * Stub for 1.7.0-rc.1; bodies tracked in ALIPAY-INTEGRATION-PLAN.md §1.
  */
 
+import crypto from 'node:crypto';
 import {
   BaseFacilitator,
   X402PaymentPayload,
@@ -32,6 +33,8 @@ import {
   SettleResult,
   HealthCheckResult,
 } from './interface.js';
+import { rsa2Sign } from './alipay/rsa2.js';
+import { base64url } from './alipay/encoding.js';
 
 /** Network identifier exposed via `Facilitator.supportedNetworks`. */
 export const ALIPAY_NETWORK = 'alipay';
@@ -44,6 +47,27 @@ export const ALIPAY_GATEWAY_PROD = 'https://openapi.alipay.com/gateway.do';
 
 /** Sandbox gateway URL (for testing without real CNY). */
 export const ALIPAY_GATEWAY_SANDBOX = 'https://openapi.alipaydev.com/gateway.do';
+
+/** Validation regex for `price_cny` / `amount` (decimal string, unit 元, ≤ 2 decimal places). */
+export const ALIPAY_AMOUNT_REGEX = /^\d+(\.\d{1,2})?$/;
+
+/** Lifetime of a 402 challenge before `pay_before` expires (Alipay convention). */
+export const ALIPAY_PAY_BEFORE_MS = 30 * 60 * 1000;
+
+/**
+ * The 8 fields that get RSA2-signed in dictionary order for a 402 challenge.
+ * Exposed for visibility; internal to {@link AlipayFacilitator}.
+ */
+export const ALIPAY_SIGNING_FIELDS = [
+  'amount',
+  'currency',
+  'goods_name',
+  'out_trade_no',
+  'pay_before',
+  'resource_id',
+  'seller_id',
+  'service_id',
+] as const;
 
 /**
  * Facilitator-level configuration sourced from `provider.alipay` in
@@ -148,7 +172,73 @@ export class AlipayFacilitator extends BaseFacilitator {
   async createPaymentRequirements(
     opts: CreatePaymentRequirementsOpts,
   ): Promise<AlipayPaymentRequirements> {
-    throw new Error('AlipayFacilitator.createPaymentRequirements: not implemented (1.7.0-rc.1 stub)');
+    if (!ALIPAY_AMOUNT_REGEX.test(opts.priceCny)) {
+      throw new Error(
+        `AlipayFacilitator.createPaymentRequirements: priceCny "${opts.priceCny}" ` +
+          `does not match /^\\d+(\\.\\d{1,2})?$/ (unit is 元, not 分; e.g. "1.00" not "100")`,
+      );
+    }
+
+    const now = new Date();
+    const outTradeNo = opts.outTradeNo ?? generateOutTradeNo();
+    const payBefore = formatPayBefore(now);
+
+    // 8 fields signed (dictionary order enforced by `ALIPAY_SIGNING_FIELDS`)
+    const signedFields = {
+      amount: opts.priceCny,
+      currency: 'CNY',
+      goods_name: opts.goodsName,
+      out_trade_no: outTradeNo,
+      pay_before: payBefore,
+      resource_id: opts.resourceId,
+      seller_id: this.config.seller_id,
+      service_id: opts.serviceId,
+    } as const;
+
+    const signingString = ALIPAY_SIGNING_FIELDS
+      .map((k) => `${k}=${signedFields[k]}`)
+      .join('&');
+    const seller_signature = rsa2Sign(signingString, this.config.private_key_pem);
+
+    const challenge = {
+      protocol: {
+        out_trade_no: outTradeNo,
+        amount: signedFields.amount,
+        currency: signedFields.currency,
+        resource_id: signedFields.resource_id,
+        pay_before: payBefore,
+        seller_signature,
+        seller_sign_type: this.config.sign_type ?? 'RSA2',
+        seller_unique_id: this.config.seller_id,
+      },
+      method: {
+        seller_name: this.config.seller_name,
+        seller_id: this.config.seller_id,
+        seller_app_id: this.config.app_id,
+        goods_name: signedFields.goods_name,
+        seller_unique_id_key: 'seller_id',
+        service_id: signedFields.service_id,
+      },
+    };
+
+    const paymentNeededHeader = base64url(JSON.stringify(challenge));
+
+    const x402Accepts: X402PaymentRequirements = {
+      scheme: ALIPAY_SCHEME,
+      network: ALIPAY_NETWORK,
+      asset: 'CNY',
+      amount: opts.priceCny,
+      payTo: this.config.seller_id,
+      maxTimeoutSeconds: ALIPAY_PAY_BEFORE_MS / 1000,
+      extra: {
+        payment_needed_header: paymentNeededHeader,
+        out_trade_no: outTradeNo,
+        pay_before: payBefore,
+        service_id: signedFields.service_id,
+      },
+    };
+
+    return { x402Accepts, paymentNeededHeader };
   }
 
   /**
@@ -180,4 +270,30 @@ export class AlipayFacilitator extends BaseFacilitator {
   async healthCheck(): Promise<HealthCheckResult> {
     throw new Error('AlipayFacilitator.healthCheck: not implemented (1.7.0-rc.1 stub)');
   }
+}
+
+// ─── Internal helpers (exported for unit testing only) ────────────────────────
+
+/**
+ * Generate a 32-char `out_trade_no` with `VID` prefix + 29 random base64url
+ * chars. Cryptographically random; uniqueness is statistical.
+ *
+ * @internal
+ */
+export function generateOutTradeNo(): string {
+  // 22 random bytes → 30 base64url chars; slice 29 + "VID" prefix = 32 chars.
+  return 'VID' + crypto.randomBytes(22).toString('base64url').slice(0, 29);
+}
+
+/**
+ * Format `pay_before` as ISO 8601 UTC, exactly
+ * {@link ALIPAY_PAY_BEFORE_MS} after the provided instant.
+ * Strips fractional seconds for cleaner querystring signing.
+ *
+ * @internal
+ */
+export function formatPayBefore(now: Date): string {
+  const expiry = new Date(now.getTime() + ALIPAY_PAY_BEFORE_MS);
+  // toISOString returns "YYYY-MM-DDTHH:mm:ss.sssZ"; strip the ms.
+  return expiry.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }

@@ -77,10 +77,10 @@
 
 - [x] RSA2 sign/verify（2026-05-29 用 runtime 生成的 2048-bit 双密钥对验证 sign/verify 正确性 + cross-key 拒绝 + 错误鲁棒性，14 单测；真支付宝沙箱密钥对端到端留给 rc.1 沙箱集成阶段）
 - [x] Base64URL padding fix（覆盖 `==` / `=` / 无 padding 三种 + URL-safe/标准字母表 + UTF-8 + round-trip，2026-05-29）
-- [ ] 签名 8 字段字典序：`amount`/`currency`/`goods_name`/`out_trade_no`/`pay_before`/`resource_id`/`seller_id`/`service_id`
-- [ ] Challenge JSON 嵌套结构 `{protocol: {...}, method: {...}}`
-- [ ] `pay_before` ISO 8601 +30 分钟
-- [ ] `amount` 正则校验 `/^\d+(\.\d{1,2})?$/`（拒绝 `"100"` 这种含糊值）
+- [x] 签名 8 字段字典序：`amount`/`currency`/`goods_name`/`out_trade_no`/`pay_before`/`resource_id`/`seller_id`/`service_id`（2026-05-29，real `rsa2Verify` round-trip + tamper detection）
+- [x] Challenge JSON 嵌套结构 `{protocol: {...}, method: {...}}`（2026-05-29，protocol 8 keys + method 6 keys 精确断言 + UTF-8 fidelity）
+- [x] `pay_before` ISO 8601 +30 分钟（2026-05-29，UTC `Z` 形式，无 fractional seconds）
+- [x] `amount` 正则校验 `/^\d+(\.\d{1,2})?$/`（2026-05-29，15 个 `it.each` 用例覆盖接受/拒绝；`"100"` 由 regex 接受，"元/分含糊"由文档 + types 防范）
 
 ### 沙箱集成
 
