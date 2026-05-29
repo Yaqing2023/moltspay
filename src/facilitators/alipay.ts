@@ -34,7 +34,8 @@ import {
   HealthCheckResult,
 } from './interface.js';
 import { rsa2Sign } from './alipay/rsa2.js';
-import { base64url } from './alipay/encoding.js';
+import { base64url, decodeBase64UrlWithPadFix } from './alipay/encoding.js';
+import { alipayOpenApiCall, AlipayOpenApiConfig } from './alipay/openapi.js';
 
 /** Network identifier exposed via `Facilitator.supportedNetworks`. */
 export const ALIPAY_NETWORK = 'alipay';
@@ -242,14 +243,63 @@ export class AlipayFacilitator extends BaseFacilitator {
   }
 
   /**
-   * Verify a `Payment-Proof`: RSA2-verifies the signature locally, then
-   * calls `alipay.aipay.agent.payment.verify` against the Alipay Open API.
+   * Verify a `Payment-Proof` by calling
+   * `alipay.aipay.agent.payment.verify` against the Alipay Open API.
+   *
+   * The proof is conveyed via `paymentPayload.payload`, which may be:
+   * - a raw Base64URL string (the `Payment-Proof` header value), or
+   * - an object `{ paymentProof: string }` / `{ proofHeader: string }`.
+   *
+   * All failure modes (malformed payload, network errors, Alipay
+   * `code != 10000`) return `{ valid: false, error }`. No exception
+   * escapes, regardless of client-supplied input.
    */
   async verify(
     paymentPayload: X402PaymentPayload,
-    requirements: X402PaymentRequirements,
+    _requirements: X402PaymentRequirements,
   ): Promise<VerifyResult> {
-    throw new Error('AlipayFacilitator.verify: not implemented (1.7.0-rc.1 stub)');
+    try {
+      const proofHeader = extractProofHeader(paymentPayload.payload);
+      const decoded = decodeProof(proofHeader);
+
+      const response = await alipayOpenApiCall(
+        'alipay.aipay.agent.payment.verify',
+        {
+          payment_proof: decoded.protocol.payment_proof,
+          trade_no: decoded.protocol.trade_no,
+          client_session: decoded.method.client_session,
+        },
+        this.getOpenApiConfig(),
+      );
+
+      if (response.code !== '10000') {
+        return {
+          valid: false,
+          error: `alipay verify ${response.code}: ${response.sub_msg ?? response.msg ?? 'unknown'}`,
+          details: {
+            code: response.code,
+            sub_code: response.sub_code,
+            sub_msg: response.sub_msg,
+          },
+        };
+      }
+
+      return {
+        valid: true,
+        details: {
+          trade_no: (response.trade_no as string) ?? decoded.protocol.trade_no,
+          amount: response.amount,
+          out_trade_no: response.out_trade_no,
+          resource_id: response.resource_id,
+          active: response.active,
+        },
+      };
+    } catch (e: unknown) {
+      return {
+        valid: false,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
   }
 
   /**
@@ -269,6 +319,17 @@ export class AlipayFacilitator extends BaseFacilitator {
    */
   async healthCheck(): Promise<HealthCheckResult> {
     throw new Error('AlipayFacilitator.healthCheck: not implemented (1.7.0-rc.1 stub)');
+  }
+
+  /** Bundle the facilitator config into the shape openapi.ts wants. */
+  private getOpenApiConfig(): AlipayOpenApiConfig {
+    return {
+      gateway_url: this.config.gateway_url ?? ALIPAY_GATEWAY_PROD,
+      app_id: this.config.app_id,
+      private_key_pem: this.config.private_key_pem,
+      alipay_public_key_pem: this.config.alipay_public_key_pem,
+      sign_type: this.config.sign_type,
+    };
   }
 }
 
@@ -296,4 +357,66 @@ export function formatPayBefore(now: Date): string {
   const expiry = new Date(now.getTime() + ALIPAY_PAY_BEFORE_MS);
   // toISOString returns "YYYY-MM-DDTHH:mm:ss.sssZ"; strip the ms.
   return expiry.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+/**
+ * Extract the Base64URL Payment-Proof header from `paymentPayload.payload`.
+ * Accepts a bare string or an object with `paymentProof` / `proofHeader` key.
+ *
+ * @internal
+ * @throws If the payload shape doesn't match either contract
+ */
+export function extractProofHeader(payload: unknown): string {
+  if (typeof payload === 'string') {
+    if (payload.length === 0) {
+      throw new Error('alipay Payment-Proof is empty');
+    }
+    return payload;
+  }
+  if (payload !== null && typeof payload === 'object') {
+    const obj = payload as Record<string, unknown>;
+    const candidate = obj.paymentProof ?? obj.proofHeader;
+    if (typeof candidate === 'string' && candidate.length > 0) {
+      return candidate;
+    }
+  }
+  throw new Error(
+    'alipay payment payload must be a Base64URL string or ' +
+      '{paymentProof: string} / {proofHeader: string}',
+  );
+}
+
+/**
+ * Decode a Base64URL Payment-Proof header into its `{protocol, method}`
+ * JSON shape, validating the three fields used by verify
+ * (`protocol.payment_proof`, `protocol.trade_no`, `method.client_session`).
+ *
+ * @internal
+ * @throws If decoding fails or required fields are missing
+ */
+export function decodeProof(proofHeader: string): AlipayPaymentProof {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(decodeBase64UrlWithPadFix(proofHeader));
+  } catch (e: unknown) {
+    throw new Error(
+      `failed to decode Payment-Proof: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+  if (parsed === null || typeof parsed !== 'object') {
+    throw new Error('decoded Payment-Proof is not an object');
+  }
+  const obj = parsed as Record<string, unknown>;
+  const protocol = obj.protocol as Record<string, unknown> | undefined;
+  const method = obj.method as Record<string, unknown> | undefined;
+  if (!protocol || typeof protocol.payment_proof !== 'string') {
+    throw new Error('decoded Payment-Proof missing protocol.payment_proof');
+  }
+  if (typeof protocol.trade_no !== 'string') {
+    throw new Error('decoded Payment-Proof missing protocol.trade_no');
+  }
+  if (!method || typeof method.client_session !== 'string') {
+    throw new Error('decoded Payment-Proof missing method.client_session');
+  }
+  return parsed as AlipayPaymentProof;
 }
