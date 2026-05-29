@@ -210,6 +210,49 @@ export function getChainById(chainId: number): ChainConfig | undefined {
   return Object.values(CHAINS).find(c => c.chainId === chainId);
 }
 
+// ============ Alipay AI 收 Fiat Rail (1.7.0+) ============
+
+/**
+ * Chain-id string for the Alipay AI 收 fiat rail.
+ * Used in `provider.chains: ["alipay", ...]` to opt the provider into
+ * accepting CNY payments alongside USDC.
+ */
+export const ALIPAY_CHAIN_ID = 'alipay' as const;
+
+/**
+ * Rail metadata for the Alipay AI 收 fiat rail (1.7.0+).
+ *
+ * Intentionally kept **outside** the {@link CHAINS} Record because that
+ * Record is `Record<EvmChainName, ChainConfig>` and an EVM `ChainConfig`
+ * (rpc / tokens / chainId) is not meaningful for a fiat rail.
+ *
+ * The rail uses `type: "fiat-rail"`, distinct from `ChainFamily`'s
+ * existing `"evm"` and `"svm"`. Server dispatch detects alipay via
+ * {@link isAlipayChainId} rather than via the EVM/SVM type guards.
+ */
+export const ALIPAY_RAIL = {
+  /** Chain-id string used in user manifests + routing. */
+  id: ALIPAY_CHAIN_ID,
+  /** Rail family — distinct from `ChainFamily` ('evm' | 'svm'). */
+  type: 'fiat-rail' as const,
+  /** Quote currency. */
+  currency: 'CNY' as const,
+  /** Decimal places for the `amount` field (元 with up to 2 decimals). */
+  decimals: 2 as const,
+  /** x402 `scheme` string — matches `ALIPAY_SCHEME` in src/facilitators/alipay.ts. */
+  facilitator: 'alipay-aipay' as const,
+} as const;
+
+/**
+ * Runtime type guard: is this chain-id string the Alipay fiat rail?
+ *
+ * Used by the server layer to route a `Payment-Proof` request to
+ * {@link AlipayFacilitator} instead of an EVM/SVM verifier.
+ */
+export function isAlipayChainId(id: string): id is typeof ALIPAY_CHAIN_ID {
+  return id === ALIPAY_CHAIN_ID;
+}
+
 /**
  * ERC20 ABI (minimal, only required methods)
  */

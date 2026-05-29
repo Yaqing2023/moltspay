@@ -58,7 +58,7 @@
 - [ ] `src/facilitators/index.ts` — export
 - [ ] `src/server/index.ts` — 402 中间件**双发** `X-Payment-Required` + `Payment-Needed`
 - [ ] `src/server/index.ts` — `/proxy` 与 `/execute` 在收到 `Payment-Proof` 时分发到 `AlipayFacilitator.verify`
-- [ ] `src/chains/index.ts` — 注册 `"alipay"` chain id（type: `"fiat-rail"`）
+- [x] `src/chains/index.ts` — 注册 `"alipay"` chain id（`ALIPAY_RAIL` 元数据 + `isAlipayChainId` 守卫；不动 `ChainName`/`EvmChainName` union 避免触动 20+ caller，2026-05-29，18 单测含 cross-module 一致性检查）
 
 ### Schema 扩展
 
