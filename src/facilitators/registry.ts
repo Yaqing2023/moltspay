@@ -18,6 +18,7 @@ import { CDPFacilitator, CDPFacilitatorConfig } from './cdp.js';
 import { TempoFacilitator } from './tempo.js';
 import { BNBFacilitator } from './bnb.js';
 import { SolanaFacilitator, SolanaFacilitatorConfig } from './solana.js';
+import { AlipayFacilitator, AlipayFacilitatorConfig } from './alipay.js';
 import { Keypair } from '@solana/web3.js';
 import bs58 from 'bs58';
 
@@ -81,8 +82,9 @@ export class FacilitatorRegistry {
       
       return new SolanaFacilitator({ feePayerKeypair } as SolanaFacilitatorConfig);
     });
-    
-    // Default selection
+    this.registerFactory('alipay', (config) => new AlipayFacilitator(config as unknown as AlipayFacilitatorConfig));
+
+    // Default selection — alipay is opt-in (requires provider.alipay config), kept out of fallback list
     this.selection = selection || { primary: 'cdp', fallback: ['tempo', 'bnb', 'solana'], strategy: 'failover' };
   }
   
