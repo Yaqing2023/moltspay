@@ -47,7 +47,7 @@
 
 ### 新增文件
 
-- [ ] `src/facilitators/alipay.ts` — `AlipayFacilitator` 类（~250 行）
+- [x] `src/facilitators/alipay.ts` — `AlipayFacilitator` 类，4 个方法全部实现（createPaymentRequirements / verify / settle / healthCheck）2026-05-29，组合 56 单测
 - [x] `src/facilitators/alipay/openapi.ts` — `alipayOpenApiCall()` 通用调用器（2026-05-29 实现 + 16 单测，含 fetch mock）
 - [x] `src/facilitators/alipay/rsa2.ts` — `rsa2Sign` / `rsa2Verify`，Node `crypto` 内置（2026-05-29 实现 + 14 单测）
 - [x] `src/facilitators/alipay/encoding.ts` — `base64url` / `decodeBase64UrlWithPadFix`（2026-05-29 实现 + 17 单测）

@@ -304,21 +304,93 @@ export class AlipayFacilitator extends BaseFacilitator {
 
   /**
    * Settle by calling `alipay.aipay.agent.fulfillment.confirm` after the
-   * service resource has been returned to the buyer. Fire-and-forget by
-   * design: failure here does **not** roll back the resource delivery.
+   * service resource has been returned to the buyer.
+   *
+   * Per the design (see ALIPAY-INTEGRATION-DESIGN.md §5.1, risk row
+   * "履约确认失败"), this is **fire-and-forget**: the caller (registry /
+   * server) is expected to log fulfillment failures but NOT roll back
+   * the already-delivered resource.
+   *
+   * Re-decodes `paymentPayload.payload` to extract `trade_no` (verify
+   * does the same; the redundant Base64URL decode is negligible).
    */
   async settle(
     paymentPayload: X402PaymentPayload,
-    requirements: X402PaymentRequirements,
+    _requirements: X402PaymentRequirements,
   ): Promise<SettleResult> {
-    throw new Error('AlipayFacilitator.settle: not implemented (1.7.0-rc.1 stub)');
+    try {
+      const proofHeader = extractProofHeader(paymentPayload.payload);
+      const decoded = decodeProof(proofHeader);
+      const tradeNo = decoded.protocol.trade_no;
+
+      const response = await alipayOpenApiCall(
+        'alipay.aipay.agent.fulfillment.confirm',
+        { trade_no: tradeNo },
+        this.getOpenApiConfig(),
+      );
+
+      if (response.code !== '10000') {
+        return {
+          success: false,
+          transaction: tradeNo,
+          error: `alipay fulfillment ${response.code}: ${response.sub_msg ?? response.msg ?? 'unknown'}`,
+          status: 'fulfillment_failed',
+        };
+      }
+
+      return {
+        success: true,
+        transaction: tradeNo,
+        status: 'fulfilled',
+      };
+    } catch (e: unknown) {
+      return {
+        success: false,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
   }
 
   /**
-   * Ping the Open API gateway and validate the merchant private key parses.
+   * Validate that the configured RSA keys parse and that the Open API
+   * gateway is reachable. Does NOT make a real business API call (would
+   * burn quota and could appear as a legitimate verify attempt in logs).
    */
   async healthCheck(): Promise<HealthCheckResult> {
-    throw new Error('AlipayFacilitator.healthCheck: not implemented (1.7.0-rc.1 stub)');
+    const start = Date.now();
+
+    try {
+      crypto.createPrivateKey(this.config.private_key_pem);
+    } catch (e: unknown) {
+      return {
+        healthy: false,
+        error: `merchant private_key_pem parse failed: ${e instanceof Error ? e.message : String(e)}`,
+      };
+    }
+    try {
+      crypto.createPublicKey(this.config.alipay_public_key_pem);
+    } catch (e: unknown) {
+      return {
+        healthy: false,
+        error: `alipay_public_key_pem parse failed: ${e instanceof Error ? e.message : String(e)}`,
+      };
+    }
+
+    const gatewayUrl = this.config.gateway_url ?? ALIPAY_GATEWAY_PROD;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const response = await fetch(gatewayUrl, {
+      method: 'HEAD',
+      signal: controller.signal,
+    }).catch(() => null);
+    clearTimeout(timeout);
+
+    const latencyMs = Date.now() - start;
+
+    if (!response) {
+      return { healthy: false, error: `gateway unreachable: ${gatewayUrl}`, latencyMs };
+    }
+    return { healthy: true, latencyMs };
   }
 
   /** Bundle the facilitator config into the shape openapi.ts wants. */
