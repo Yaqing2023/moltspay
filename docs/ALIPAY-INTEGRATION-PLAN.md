@@ -62,11 +62,11 @@
 
 ### Schema 扩展
 
-- [ ] `src/types/services.ts` — `ServiceDefinition.alipay?: { service_id, price_cny, goods_name }`
-- [ ] `src/types/services.ts` — `Provider.alipay?: { seller_id, app_id, seller_name, service_id_default, private_key_path, alipay_public_key_path, gateway_url, sign_type }`
-- [ ] `schemas/moltspay.services.schema.json` — JSON Schema 同步
-- [ ] `src/types/x402.ts` — `X402PaymentRequirements.extra` 在 alipay scheme 下文档约定 `{ payment_needed_header: string }`
-- [ ] `scripts/validate-config.ts` 跟上新字段校验
+- [x] `src/server/types.ts` — `ServiceConfig.alipay?: ServiceAlipayConfig` + `ServiceAlipayConfig` 接口（2026-05-29；PLAN 原称 `src/types/services.ts`，实际项目里 service types 在 `src/server/types.ts`）
+- [x] `src/server/types.ts` — `ProviderConfig.alipay?: ProviderAlipayConfig` + `ProviderAlipayConfig` 接口（2026-05-29）
+- [x] `schemas/moltspay.services.schema.json` — JSON Schema 同步，含 `provider.alipay` / `services[].alipay` / chains enum 加 `"alipay"` / 完整 alipay 示例（2026-05-29）
+- [x] `src/facilitators/interface.ts` — `X402PaymentRequirements.extra` 加 per-scheme JSDoc 约定（PLAN 原称 `src/types/x402.ts`，实际在 `src/facilitators/interface.ts`；2026-05-29）
+- [ ] `scripts/validate-config.ts` 跟上新字段校验 —— 文件**尚不存在**于仓库，需要时单独建
 
 ### 启动校验
 

@@ -32,21 +32,67 @@
         },
         "chain": {
           "type": "string",
-          "enum": ["base", "polygon", "base_sepolia", "tempo_moderato", "bnb", "bnb_testnet", "solana", "solana_devnet"],
+          "enum": ["base", "polygon", "base_sepolia", "tempo_moderato", "bnb", "bnb_testnet", "solana", "solana_devnet", "alipay"],
           "default": "base",
-          "description": "Single chain mode (use 'chains' for multi-chain)"
+          "description": "Single chain mode (use 'chains' for multi-chain). 'alipay' is a fiat rail (1.7.0+), not a blockchain."
         },
         "chains": {
           "type": "array",
-          "description": "Supported chains. EVM chains use 'wallet', Solana chains use 'solana_wallet'.",
+          "description": "Supported chains/rails. EVM chains use 'wallet', Solana chains use 'solana_wallet', 'alipay' (1.7.0+) uses 'provider.alipay'.",
           "items": {
             "type": "string",
-            "enum": ["base", "polygon", "base_sepolia", "tempo_moderato", "bnb", "bnb_testnet", "solana", "solana_devnet"]
+            "enum": ["base", "polygon", "base_sepolia", "tempo_moderato", "bnb", "bnb_testnet", "solana", "solana_devnet", "alipay"]
           },
           "examples": [
             ["base", "polygon", "solana_devnet"],
-            ["base", "base_sepolia", "solana", "solana_devnet"]
+            ["base", "base_sepolia", "solana", "solana_devnet"],
+            ["base", "polygon", "alipay"]
           ]
+        },
+        "alipay": {
+          "type": "object",
+          "description": "Alipay AI 收 provider config (1.7.0+). Required when 'chains' contains 'alipay'.",
+          "required": ["seller_id", "app_id", "seller_name", "service_id_default", "private_key_path", "alipay_public_key_path"],
+          "properties": {
+            "seller_id": {
+              "type": "string",
+              "pattern": "^[0-9]{16}$",
+              "description": "Merchant Alipay ID (16 digits)"
+            },
+            "app_id": {
+              "type": "string",
+              "pattern": "^[0-9]{16}$",
+              "description": "Application ID from Alipay Open Platform"
+            },
+            "seller_name": {
+              "type": "string",
+              "description": "Merchant legal name (shown in 'method.seller_name' of the 402 challenge)"
+            },
+            "service_id_default": {
+              "type": "string",
+              "description": "Default service_id when a service entry doesn't override it (e.g. 'API_0EA6DC4FC99A4DF7')"
+            },
+            "private_key_path": {
+              "type": "string",
+              "description": "Path to the RSA2 merchant private key PEM file (relative to moltspay.services.json)"
+            },
+            "alipay_public_key_path": {
+              "type": "string",
+              "description": "Path to the Alipay platform public key PEM file (relative to moltspay.services.json)"
+            },
+            "gateway_url": {
+              "type": "string",
+              "format": "uri",
+              "default": "https://openapi.alipay.com/gateway.do",
+              "description": "Open API gateway URL (use 'https://openapi.alipaydev.com/gateway.do' for sandbox)"
+            },
+            "sign_type": {
+              "type": "string",
+              "enum": ["RSA2"],
+              "default": "RSA2",
+              "description": "Signature algorithm. Only RSA2 is supported in 1.7.0."
+            }
+          }
         }
       }
     },
@@ -74,7 +120,27 @@
           "price": { "type": "number", "minimum": 0, "description": "Price in currency units" },
           "currency": { "type": "string", "enum": ["USDC", "USDT"], "default": "USDC" },
           "input": { "type": "object", "description": "Input parameters schema" },
-          "output": { "type": "object", "description": "Output schema" }
+          "output": { "type": "object", "description": "Output schema" },
+          "alipay": {
+            "type": "object",
+            "description": "Alipay AI 收 per-service config (1.7.0+). Set when this service accepts CNY payments.",
+            "required": ["price_cny", "goods_name"],
+            "properties": {
+              "service_id": {
+                "type": "string",
+                "description": "Per-service service_id (defaults to provider.alipay.service_id_default)"
+              },
+              "price_cny": {
+                "type": "string",
+                "pattern": "^\\d+(\\.\\d{1,2})?$",
+                "description": "CNY price as decimal string in 元 (e.g. '7.00' = 7 CNY, NOT cents)"
+              },
+              "goods_name": {
+                "type": "string",
+                "description": "Goods name shown to the user in the Alipay app"
+              }
+            }
+          }
         }
       }
     }
@@ -89,6 +155,34 @@
       },
       "services": [
         { "id": "text-to-video", "function": "textToVideo", "price": 0.99, "currency": "USDC" }
+      ]
+    },
+    {
+      "provider": {
+        "name": "灵机一物",
+        "wallet": "0xb8d6f2441e8f8dfB6288A74Cf73804cDd0484E0C",
+        "chains": ["base", "polygon", "alipay"],
+        "alipay": {
+          "seller_id": "2088641494699428",
+          "app_id": "2021006150642142",
+          "seller_name": "上海超响应数字科技有限公司",
+          "service_id_default": "API_0EA6DC4FC99A4DF7",
+          "private_key_path": "./cert/ALIPAY_PRIVATE_KEY.txt",
+          "alipay_public_key_path": "./cert/ALIPAY_PUBLIC_KEY.txt"
+        }
+      },
+      "services": [
+        {
+          "id": "text-to-video",
+          "function": "textToVideo",
+          "price": 0.99,
+          "currency": "USDC",
+          "alipay": {
+            "service_id": "API_0EA6DC4FC99A4DF7",
+            "price_cny": "7.00",
+            "goods_name": "产品演示视频 - 系列一"
+          }
+        }
       ]
     }
   ]

@@ -28,6 +28,13 @@ export interface X402PaymentPayload {
 
 /**
  * x402 Payment Requirements (server specifies what it accepts)
+ *
+ * **Per-scheme `extra` conventions:**
+ * - `alipay-aipay` (1.7.0+): `extra` carries the parallel `Payment-Needed`
+ *   contents so x402-aware clients don't need to read the separate HTTP
+ *   header. Server side, `AlipayFacilitator.createPaymentRequirements`
+ *   populates: `payment_needed_header` (Base64URL of nested
+ *   `{protocol, method}` JSON), `out_trade_no`, `pay_before`, `service_id`.
  */
 export interface X402PaymentRequirements {
   scheme: string;

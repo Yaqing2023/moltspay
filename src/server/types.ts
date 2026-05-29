@@ -12,7 +12,7 @@ export interface ServiceConfig {
   description?: string;
   price: number;
   currency: string;
-  /** 
+  /**
    * Tokens accepted for payment (optional).
    * If not specified, defaults to [currency].
    * Example: ["USDC", "USDT"]
@@ -24,6 +24,38 @@ export interface ServiceConfig {
   command?: string;
   /** Function name to import from skill's index.js (new skill-based approach) */
   function?: string;
+  /**
+   * Alipay AI 收 per-service config (1.7.0+).
+   * Set when this service accepts CNY payments via the alipay rail.
+   * The `price`/`currency` fields above still describe USDC pricing
+   * for the x402 rails; `alipay.price_cny` is a separate CNY price.
+   */
+  alipay?: ServiceAlipayConfig;
+}
+
+/**
+ * Per-service Alipay AI 收 configuration (1.7.0+).
+ *
+ * Sample:
+ * ```json
+ * "alipay": {
+ *   "service_id": "API_0EA6DC4FC99A4DF7",
+ *   "price_cny": "7.00",
+ *   "goods_name": "产品演示视频 - 系列一"
+ * }
+ * ```
+ */
+export interface ServiceAlipayConfig {
+  /** Per-service service_id (defaults to provider.alipay.service_id_default). */
+  service_id?: string;
+  /**
+   * CNY price as decimal string in **元** (e.g. `"7.00"` = 7 CNY).
+   * NOT cents: `"100"` means 100 元, not 100 分.
+   * Must match `/^\d+(\.\d{1,2})?$/`.
+   */
+  price_cny: string;
+  /** Goods name shown to the user in the Alipay app. */
+  goods_name: string;
 }
 
 export interface InputField {
@@ -53,6 +85,50 @@ export interface ProviderConfig {
   solana_wallet?: string;  // Solana chains receiving wallet
   chain?: string;  // Single chain (backward compat)
   chains?: ChainConfig[];  // Multi-chain support
+  /**
+   * Alipay AI 收 provider-level config (1.7.0+).
+   * Required when `chains` includes `"alipay"`.
+   * Server validates `private_key_path` / `alipay_public_key_path` are
+   * readable + parse as RSA PEM at startup; rejects start otherwise.
+   */
+  alipay?: ProviderAlipayConfig;
+}
+
+/**
+ * Provider-level Alipay AI 收 configuration (1.7.0+).
+ *
+ * The user-facing form uses FILE PATHS for both PEM keys; the server
+ * resolves them to PEM strings before constructing AlipayFacilitator.
+ *
+ * Sample:
+ * ```json
+ * "alipay": {
+ *   "seller_id": "2088641494699428",
+ *   "app_id": "2021006150642142",
+ *   "seller_name": "上海超响应数字科技有限公司",
+ *   "service_id_default": "API_0EA6DC4FC99A4DF7",
+ *   "private_key_path": "./cert/ALIPAY_PRIVATE_KEY.txt",
+ *   "alipay_public_key_path": "./cert/ALIPAY_PUBLIC_KEY.txt"
+ * }
+ * ```
+ */
+export interface ProviderAlipayConfig {
+  /** Merchant Alipay ID (16 digits, e.g. `"2088641494699428"`). */
+  seller_id: string;
+  /** Application ID from Alipay Open Platform. */
+  app_id: string;
+  /** Merchant legal name; appears in `method.seller_name` of the 402 challenge. */
+  seller_name: string;
+  /** Default `service_id` when a `services[].alipay` entry doesn't override it. */
+  service_id_default: string;
+  /** Path to the RSA2 merchant private key PEM file (relative to moltspay.services.json). */
+  private_key_path: string;
+  /** Path to the Alipay platform public key PEM file (relative to moltspay.services.json). */
+  alipay_public_key_path: string;
+  /** Open API gateway URL. Defaults to `"https://openapi.alipay.com/gateway.do"`. */
+  gateway_url?: string;
+  /** Signature algorithm. Only `"RSA2"` is supported in 1.7.0. */
+  sign_type?: 'RSA2';
 }
 
 // Full services.json structure
