@@ -20,9 +20,16 @@ import * as path from 'path';
 import {
   FacilitatorRegistry,
   FacilitatorSelection,
+  FacilitatorConfig,
   X402PaymentPayload,
   X402PaymentRequirements,
+  SettleResult,
+  AlipayFacilitator,
+  AlipayFacilitatorConfig,
+  ALIPAY_NETWORK,
+  ALIPAY_SCHEME,
 } from '../facilitators/index.js';
+import { isAlipayChainId } from '../chains/index.js';
 import {
   ServicesManifest,
   ServiceConfig,
@@ -44,6 +51,11 @@ const PAYMENT_RESPONSE_HEADER = 'x-payment-response';
 const MPP_AUTH_HEADER = 'authorization';
 const MPP_WWW_AUTH_HEADER = 'www-authenticate';
 const MPP_RECEIPT_HEADER = 'payment-receipt';
+
+// Alipay AI 收 fiat rail constants (1.7.0)
+// Legacy `Payment-Needed` 402 challenge header, mirror of `X-Payment-Required`,
+// kept so `alipay-bot` (@alipay/agent-payment) skills work unchanged.
+const ALIPAY_PAYMENT_NEEDED_HEADER = 'payment-needed';
 
 // Token contract addresses by network
 const TOKEN_ADDRESSES: Record<string, Record<string, string>> = {
@@ -202,6 +214,8 @@ export class MoltsPayServer {
   private registry: FacilitatorRegistry;
   private networkId: string;
   private useMainnet: boolean;
+  /** Alipay AI 收 facilitator instance, set when `provider.alipay` is configured (1.7.0). */
+  private alipayFacilitator: AlipayFacilitator | null = null;
 
   constructor(servicesPath: string, options: MoltsPayServerOptionsExtended = {}) {
     // Load env files FIRST (before reading USE_MAINNET)
@@ -236,7 +250,48 @@ export class MoltsPayServer {
         cdp: { useMainnet: this.useMainnet },
       },
     };
+
+    // ── Alipay AI 收 fiat rail (1.7.0): opt-in via provider.alipay ──
+    // When configured, resolve the PEM key files (the manifest stores PATHS,
+    // the facilitator wants PEM STRINGS) and register the facilitator in the
+    // selection so registry.verify/settle route `network: "alipay"` to it.
+    // Key-load failure is fatal: a misconfigured alipay rail must not start
+    // silently and then 500 on the first payment.
+    const providerAlipay = this.manifest.provider.alipay;
+    if (providerAlipay) {
+      try {
+        const baseDir = path.dirname(servicesPath);
+        const resolvePem = (p: string) =>
+          readFileSync(path.isAbsolute(p) ? p : path.resolve(baseDir, p), 'utf-8');
+        const alipayFacilitatorConfig: AlipayFacilitatorConfig = {
+          seller_id: providerAlipay.seller_id,
+          app_id: providerAlipay.app_id,
+          seller_name: providerAlipay.seller_name,
+          service_id_default: providerAlipay.service_id_default,
+          private_key_pem: resolvePem(providerAlipay.private_key_path),
+          alipay_public_key_pem: resolvePem(providerAlipay.alipay_public_key_path),
+          gateway_url: providerAlipay.gateway_url,
+          sign_type: providerAlipay.sign_type,
+        };
+        facilitatorConfig.config = {
+          ...facilitatorConfig.config,
+          alipay: alipayFacilitatorConfig as unknown as FacilitatorConfig,
+        };
+        facilitatorConfig.fallback = facilitatorConfig.fallback || [];
+        if (facilitatorConfig.primary !== 'alipay' && !facilitatorConfig.fallback.includes('alipay')) {
+          facilitatorConfig.fallback.push('alipay');
+        }
+      } catch (err: any) {
+        throw new Error(`[MoltsPay] Alipay rail configured but key load failed: ${err.message}`);
+      }
+    }
+
     this.registry = new FacilitatorRegistry(facilitatorConfig);
+
+    if (providerAlipay) {
+      this.alipayFacilitator = this.registry.get('alipay') as AlipayFacilitator;
+      console.log(`[MoltsPay] Alipay AI 收 rail enabled (seller ${providerAlipay.seller_id})`);
+    }
 
     // Get primary facilitator for logging
     const primaryFacilitator = this.registry.get(facilitatorConfig.primary);
@@ -409,10 +464,10 @@ export class MoltsPayServer {
   private writeCorsHeaders(res: ServerResponse, origin: string): void {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Payment, Authorization');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Payment, Authorization, Payment-Proof');
     res.setHeader(
       'Access-Control-Expose-Headers',
-      'X-Payment-Required, X-Payment-Response, WWW-Authenticate, Payment-Receipt'
+      'X-Payment-Required, X-Payment-Response, WWW-Authenticate, Payment-Receipt, Payment-Needed'
     );
   }
 
@@ -618,6 +673,15 @@ export class MoltsPayServer {
       return this.sendJson(res, 400, { error: 'Invalid X-Payment header' });
     }
 
+    // Alipay fiat rail (1.7.0): route by scheme/network BEFORE the EVM path.
+    // validatePayment() only accepts 'exact'/'permit' schemes + EVM/SVM
+    // networks, so an alipay payment must branch off here or it'd be rejected.
+    const payScheme = payment.accepted?.scheme || payment.scheme;
+    const payNetwork = payment.accepted?.network || payment.network;
+    if (payScheme === ALIPAY_SCHEME || (payNetwork ? isAlipayChainId(payNetwork) : false)) {
+      return this.handleAlipayExecute(skill, params || {}, payment, res);
+    }
+
     // Validate basic payment fields
     const validation = this.validatePayment(payment, skill.config);
     if (!validation.valid) {
@@ -734,10 +798,126 @@ export class MoltsPayServer {
     this.sendJson(res, 200, {
       success: true,
       result,
-      payment: settlement?.success 
+      payment: settlement?.success
         ? { transaction: settlement.transaction, status: 'settled', facilitator: settlement.facilitator }
         : { status: 'pending' },
     }, responseHeaders);
+  }
+
+  /**
+   * Execute a service paid via the Alipay AI 收 fiat rail (1.7.0).
+   *
+   * Differs from the EVM/SVM path: no token detection, no EIP-3009/permit
+   * validation. Verify hits the Alipay Open API (`payment.verify`). Settlement
+   * (`fulfillment.confirm`) is FIRE-AND-FORGET per ALIPAY-INTEGRATION-DESIGN
+   * §5.1: a confirm failure is logged but does NOT fail the already-delivered
+   * response (the buyer's payment proof was already verified).
+   */
+  private async handleAlipayExecute(
+    skill: RegisteredSkill,
+    params: Record<string, any>,
+    payment: X402PaymentPayload,
+    res: ServerResponse
+  ): Promise<void> {
+    if (!this.alipayFacilitator) {
+      return this.sendJson(res, 402, { error: 'Alipay rail not configured on this server' });
+    }
+
+    // Verify/settle ignore `requirements` (the proof carries everything), but
+    // requirements.network drives registry routing to the alipay facilitator.
+    const requirements: X402PaymentRequirements = {
+      scheme: ALIPAY_SCHEME,
+      network: ALIPAY_NETWORK,
+      asset: 'CNY',
+      amount: skill.config.alipay?.price_cny || '0',
+      payTo: this.manifest.provider.alipay?.seller_id || '',
+      maxTimeoutSeconds: 1800,
+    };
+
+    console.log(`[MoltsPay] Verifying Alipay payment...`);
+    const verifyResult = await this.registry.verify(payment, requirements);
+    if (!verifyResult.valid) {
+      return this.sendJson(res, 402, {
+        error: `Payment verification failed: ${verifyResult.error}`,
+        facilitator: verifyResult.facilitator,
+      });
+    }
+    console.log(`[MoltsPay] Alipay payment verified by ${verifyResult.facilitator}`);
+
+    // Execute skill (same timeout contract as the EVM path).
+    const timeoutSeconds = parseInt(process.env.SKILL_TIMEOUT_SECONDS || '1200');
+    console.log(`[MoltsPay] Executing skill: ${skill.id} (timeout: ${timeoutSeconds}s)`);
+    let result: any;
+    try {
+      result = await Promise.race([
+        skill.handler(params),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`Skill timeout after ${timeoutSeconds}s`)), timeoutSeconds * 1000)
+        )
+      ]);
+    } catch (err: any) {
+      console.error('[MoltsPay] Skill execution failed:', err.message);
+      return this.sendJson(res, 500, {
+        error: 'Service execution failed',
+        message: err.message,
+      });
+    }
+
+    // Fulfillment confirm — fire-and-forget: log failures, never roll back.
+    let settlement: (SettleResult & { facilitator: string });
+    try {
+      settlement = await this.registry.settle(payment, requirements);
+      if (settlement.success) {
+        console.log(`[MoltsPay] Alipay fulfillment confirmed: ${settlement.transaction}`);
+      } else {
+        console.error(`[MoltsPay] Alipay fulfillment confirm failed (non-fatal): ${settlement.error}`);
+      }
+    } catch (err: any) {
+      console.error(`[MoltsPay] Alipay fulfillment confirm threw (non-fatal): ${err.message}`);
+      settlement = { success: false, error: err.message, facilitator: 'alipay' };
+    }
+
+    const responseHeaders: Record<string, string> = {};
+    if (settlement.success) {
+      responseHeaders[PAYMENT_RESPONSE_HEADER] = Buffer.from(JSON.stringify({
+        success: true,
+        transaction: settlement.transaction,
+        network: ALIPAY_NETWORK,
+        facilitator: settlement.facilitator,
+      })).toString('base64');
+    }
+
+    this.sendJson(res, 200, {
+      success: true,
+      result,
+      payment: settlement.success
+        ? { transaction: settlement.transaction, status: 'fulfilled', facilitator: settlement.facilitator }
+        : { status: 'delivered_unconfirmed', error: settlement.error },
+    }, responseHeaders);
+  }
+
+  /**
+   * Build the Alipay 402 challenge for a service, or null when the alipay rail
+   * isn't configured for this server or this service. Returns the x402
+   * `accepts[]` entry plus the Base64URL `Payment-Needed` header value so the
+   * 402 responders can dual-emit both the x402 and legacy alipay-bot formats.
+   */
+  private async buildAlipayChallenge(
+    config: ServiceConfig
+  ): Promise<{ accepts: X402PaymentRequirements; paymentNeededHeader: string } | null> {
+    if (!this.alipayFacilitator || !config.alipay) return null;
+    try {
+      const req = await this.alipayFacilitator.createPaymentRequirements({
+        serviceId: config.alipay.service_id || this.manifest.provider.alipay!.service_id_default,
+        priceCny: config.alipay.price_cny,
+        goodsName: config.alipay.goods_name,
+        resourceId: `/execute?service=${config.id}`,
+      });
+      return { accepts: req.x402Accepts, paymentNeededHeader: req.paymentNeededHeader };
+    } catch (err: any) {
+      console.error(`[MoltsPay] Alipay challenge build failed for ${config.id}: ${err.message}`);
+      return null;
+    }
   }
 
   /**
@@ -915,10 +1095,10 @@ export class MoltsPayServer {
   /**
    * Return 402 with both x402 and MPP payment requirements
    */
-  private sendMPPPaymentRequired(config: ServiceConfig, res: ServerResponse): void {
+  private async sendMPPPaymentRequired(config: ServiceConfig, res: ServerResponse): Promise<void> {
     const acceptedTokens = getAcceptedCurrencies(config);
     const providerChains = this.getProviderChains();
-    
+
     // === x402 format (existing) ===
     const accepts: X402PaymentRequirements[] = [];
     for (const chainConfig of providerChains) {
@@ -927,6 +1107,12 @@ export class MoltsPayServer {
           accepts.push(this.buildPaymentRequirements(config, chainConfig.network, chainConfig.wallet, token));
         }
       }
+    }
+
+    // Alipay fiat rail (1.7.0): append the alipay x402 entry when configured.
+    const alipayChallenge = await this.buildAlipayChallenge(config);
+    if (alipayChallenge) {
+      accepts.push(alipayChallenge.accepts);
     }
 
     const x402PaymentRequired = {
@@ -971,9 +1157,13 @@ export class MoltsPayServer {
       'Content-Type': 'application/problem+json',
       [PAYMENT_REQUIRED_HEADER]: x402Encoded,
     };
-    
+
     if (mppWwwAuth) {
       headers[MPP_WWW_AUTH_HEADER] = mppWwwAuth;
+    }
+    // Dual-emit the legacy `Payment-Needed` header for alipay-bot clients.
+    if (alipayChallenge) {
+      headers[ALIPAY_PAYMENT_NEEDED_HEADER] = alipayChallenge.paymentNeededHeader;
     }
 
     res.writeHead(402, headers);
@@ -1004,10 +1194,10 @@ export class MoltsPayServer {
    * Return 402 with x402 payment requirements (v2 format)
    * Includes requirements for all chains and all accepted currencies
    */
-  private sendPaymentRequired(config: ServiceConfig, res: ServerResponse): void {
+  private async sendPaymentRequired(config: ServiceConfig, res: ServerResponse): Promise<void> {
     const acceptedTokens = getAcceptedCurrencies(config);
     const providerChains = this.getProviderChains();
-    
+
     // Build requirements for each chain x token combination
     const accepts: X402PaymentRequirements[] = [];
     for (const chainConfig of providerChains) {
@@ -1017,6 +1207,12 @@ export class MoltsPayServer {
           accepts.push(this.buildPaymentRequirements(config, chainConfig.network, chainConfig.wallet, token));
         }
       }
+    }
+
+    // Alipay fiat rail (1.7.0): append the alipay x402 entry when configured.
+    const alipayChallenge = await this.buildAlipayChallenge(config);
+    if (alipayChallenge) {
+      accepts.push(alipayChallenge.accepts);
     }
 
     // Get list of accepted chains for response

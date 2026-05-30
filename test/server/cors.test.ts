@@ -39,7 +39,7 @@ function buildStub(cors: unknown) {
 
 describe('MoltsPayServer CORS', () => {
   const EXPOSE_HEADERS =
-    'X-Payment-Required, X-Payment-Response, WWW-Authenticate, Payment-Receipt';
+    'X-Payment-Required, X-Payment-Response, WWW-Authenticate, Payment-Receipt, Payment-Needed';
 
   it('default (cors undefined) → wildcard Access-Control-Allow-Origin: *', () => {
     const stub = buildStub(undefined);
