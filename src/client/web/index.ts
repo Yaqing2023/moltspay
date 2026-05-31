@@ -49,6 +49,7 @@ export type { Eip1193Provider, Eip1193ChainMetadata, Eip1193SignerOptions } from
 export { solanaSigner } from './signers/solana-adapter.js';
 export type { SolanaSignerAdapter } from './signers/solana-adapter.js';
 export { composeSigners } from './signers/compose.js';
+export { AlipayWebClient } from './alipay.js';
 export { SpendingLedger } from './storage.js';
 export type { SpendingLimitsConfig } from './storage.js';
 export type { PaymentSigner } from '../signer.js';

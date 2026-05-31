@@ -37,6 +37,8 @@ import {
 } from '../core/index.js';
 import type { PaymentSigner } from '../signer.js';
 import { NodeSigner } from './signer.js';
+import { AlipayClient } from '../alipay/index.js';
+import { selectRail, ALIPAY_RAIL } from '../alipay/router.js';
 
 export * from '../types.js';
 
@@ -49,6 +51,20 @@ export interface PayOptions {
   chain?: 'base' | 'polygon' | 'base_sepolia' | 'tempo_moderato' | 'bnb' | 'bnb_testnet' | 'solana' | 'solana_devnet';
   /** Send raw data at top level instead of wrapped in { params } */
   rawData?: boolean;
+  /**
+   * Explicit payment rail (1.7.0): `'alipay'` or a chain name. When set,
+   * routing skips the default crypto path. `'alipay'` dispatches to the
+   * alipay-bot-backed {@link AlipayClient} and needs no EVM wallet.
+   */
+  rail?: string;
+  /** Alipay: surfaced once the payment URL + tradeNo are known. */
+  onPaymentPending?: (info: { paymentUrl: string; shortenUrl?: string; tradeNo: string }) => void;
+  /** Alipay: forward CLI output to the user verbatim (line by line). */
+  onLine?: (line: string) => void;
+  /** Alipay: overall budget; defaults to the challenge's pay_before window. */
+  timeoutMs?: number;
+  /** Cancellation (alipay poll loop). */
+  signal?: AbortSignal;
 }
 
 // x402 constants, X402PaymentRequirements, and EIP3009Authorization
@@ -70,10 +86,15 @@ export class MoltsPayClient {
   private signer: PaymentSigner | null = null;
   private todaySpending: number = 0;
   private lastSpendingReset: number = 0;
+  private railPreference?: string[];
+  private alipaySessionId?: string;
 
   constructor(options: MoltsPayClientOptions = {}) {
     this.configDir = options.configDir || join(homedir(), '.moltspay');
     this.config = this.loadConfig();
+    // Rail preference: explicit option wins over persisted config.
+    this.railPreference = options.railPreference ?? this.config.railPreference;
+    this.alipaySessionId = options.alipaySessionId;
     this.walletData = this.loadWallet();
     this.loadSpending(); // Load persisted spending data
 
@@ -173,6 +194,13 @@ export class MoltsPayClient {
     params: Record<string, any>,
     options: PayOptions = {}
   ): Promise<Record<string, any>> {
+    // Alipay fiat rail (1.7.0): when the caller explicitly asks for alipay,
+    // dispatch BEFORE the EVM wallet check — the alipay rail is backed by
+    // alipay-bot and needs no EVM wallet.
+    if (options.rail === ALIPAY_RAIL) {
+      return this.payViaAlipay(serverUrl, service, params, options);
+    }
+
     if (!this.wallet || !this.walletData) {
       throw new Error('Client not initialized. Run: npx moltspay init');
     }
@@ -442,9 +470,89 @@ export class MoltsPayClient {
     this.recordSpending(amount);
 
     console.log(`[MoltsPay] Success! Payment: ${result.payment?.status || 'claimed'}`);
-    
+
     // Support both MoltsPay Server format ({ result: ... }) and direct response format
     return result.result || result;
+  }
+
+  /**
+   * Pay for a service over the Alipay fiat rail (1.7.0).
+   *
+   * Unlike the crypto path this needs no EVM wallet — it shells out to
+   * alipay-bot via {@link AlipayClient}. Flow: hit the resource with no
+   * payment to get the 402 challenge, confirm the server actually offers the
+   * alipay rail (selectRail), then run the 8-step state machine and return the
+   * resource body.
+   */
+  private async payViaAlipay(
+    serverUrl: string,
+    service: string,
+    params: Record<string, any>,
+    options: PayOptions,
+  ): Promise<Record<string, any>> {
+    // Discover the resource endpoint (same as the crypto path).
+    let executeUrl = `${serverUrl}/execute`;
+    try {
+      const services = await this.getServices(serverUrl);
+      const svc = services.services?.find((s: any) => s.id === service);
+      if (svc?.endpoint) executeUrl = `${serverUrl}${svc.endpoint}`;
+    } catch {
+      // Fall back to /execute.
+    }
+
+    const requestBody: any = options.rawData ? { service, ...params } : { service, params };
+    const bodyJson = JSON.stringify(requestBody);
+
+    // Trigger the 402 challenge.
+    const res = await fetch(executeUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: bodyJson,
+    });
+    if (res.status !== 402) {
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && (data as any).result) return (data as any).result;
+      throw new Error((data as any).error || `Expected 402, got ${res.status}`);
+    }
+
+    const header = res.headers.get(PAYMENT_REQUIRED_HEADER);
+    if (!header) throw new Error('Missing x-payment-required header on 402');
+    const parsed = JSON.parse(Buffer.from(header, 'base64').toString('utf-8'));
+    const accepts: X402PaymentRequirements[] = Array.isArray(parsed)
+      ? parsed
+      : parsed.accepts ?? [parsed];
+
+    // Confirm the server offers alipay (throws UnsupportedRailError otherwise).
+    const { requirement } = selectRail({
+      serverAccepts: accepts,
+      explicitRail: ALIPAY_RAIL,
+      preference: this.railPreference,
+      availability: { evmReady: this.isInitialized },
+    });
+
+    const onLine = options.onLine ?? ((line: string) => process.stdout.write(line + '\n'));
+    const alipay = new AlipayClient({
+      sessionId: this.alipaySessionId,
+      configDir: this.configDir,
+    });
+    const result = await alipay.pay402({
+      resourceUrl: executeUrl,
+      requirement,
+      method: 'POST',
+      data: bodyJson,
+      onLine,
+      onPaymentPending: options.onPaymentPending,
+      timeoutMs: options.timeoutMs,
+      signal: options.signal,
+    });
+
+    // Best-effort: parse a JSON body, else return it raw under `body`.
+    try {
+      const json = JSON.parse(result.body);
+      return json.result ?? json;
+    } catch {
+      return { body: result.body, payment: result.payment, media: result.media };
+    }
   }
 
   /**

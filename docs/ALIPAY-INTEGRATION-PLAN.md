@@ -100,41 +100,41 @@
 
 ### 新增文件
 
-- [ ] `src/client/alipay/index.ts` — `AlipayClient` + `pay402()` 8 步状态机（~250 行）
-- [ ] `src/client/alipay/cli.ts` — `spawn` 包装、stdout/stderr 流式回调、env 白名单（~120 行）
-- [ ] `src/client/alipay/poll.ts` — `pollUntil(tradeNo, signal)`，3s 间隔，`pay_before` 截止，`AbortSignal` 中断（~60 行）
-- [ ] `src/client/alipay/install.ts` — `ensureCli()` 版本校验 ≥ 0.3.15（~40 行）
-- [ ] `src/client/alipay/router.ts` — `selectRail(serverAccepts, userPref, availability)`（~80 行）
-- [ ] `src/client/alipay/errors.ts` — 7 个 error class，每个带稳定 `code` 字段（~50 行）
+- [x] `src/client/alipay/index.ts` — `AlipayClient` + `pay402()` 8 步状态机（2026-05-31，runner/getVersion/now 全可注入 DI，11 单测含全 8 步顺序断言）
+- [x] `src/client/alipay/cli.ts` — `spawn` 包装、stdout/stderr 流式回调、env 白名单、`bin` 可注入（2026-05-31，5 单测用真实 node spawn 验证行分割 + abort + env 白名单）
+- [x] `src/client/alipay/poll.ts` — `pollUntil(tradeNo, signal)`，3s 间隔，`pay_before` 截止，`AbortSignal` 中断（2026-05-31，7 单测，runner/sleep/now 注入）
+- [x] `src/client/alipay/install.ts` — `ensureCli()` 版本校验 ≥ 0.3.15（2026-05-31，内联 semverLt 避免新依赖，8 单测）
+- [x] `src/client/alipay/router.ts` — `selectRail(serverAccepts, userPref, availability)`（2026-05-31，纯函数，12 单测覆盖 4 级决策树）
+- [x] `src/client/alipay/errors.ts` — 7 个 error class，每个带稳定 `code` 字段（2026-05-31，扩展 `core/errors.ts` 的 `MoltsPayError`）
 
 ### 改动文件
 
-- [ ] `src/client/index.ts` — `MoltsPayClient.pay()` 接 `selectRail()`，alipay 命中分发到 `AlipayClient`
-- [ ] `src/client/web/index.ts` — `AlipayWebClient` 桩直接 throw `UnsupportedChainError`
-- [ ] `src/cli/index.ts` — `moltspay pay --rail alipay <url>` 子命令
-- [ ] `src/cli/index.ts` — `moltspay alipay check / apply / bind` 直透 CLI（首次开通钱包）
+- [x] `src/client/index.ts`（实为 `node/index.ts`）— `pay()` 在 `options.rail === 'alipay'` 时**先于 EVM 钱包校验**分发到 `payViaAlipay()` → `selectRail()` 确认 server 提供 alipay → `AlipayClient.pay402()`（2026-05-31。注：非显式 rail 时的跨 rail 偏好自动路由（railPreference 在 server 同时给 crypto+alipay 时）留作 rc.2 后续，`selectRail` 已实现+单测）
+- [x] `src/client/web/index.ts` — `AlipayWebClient` 桩（独立 `web/alipay.ts`，**不**引 `../alipay/*` 以免 Node 模块进浏览器 bundle），throw `UnsupportedChainError`；verify:web 通过（2026-05-31）
+- [x] `src/cli/index.ts` — `moltspay pay --rail alipay` 子命令（alipay 时跳过 EVM 钱包校验 + 流式透传 + onPaymentPending 打印支付链接，2026-05-31）
+- [x] `src/cli/index.ts` — `moltspay alipay check / apply / bind` 直透 CLI（`stdio:'inherit'` + env 白名单，ENOENT 友好引导，2026-05-31）
 
 ### Skill guide 硬约束（SDK 层实现，不依赖 CLI）
 
-- [ ] **CLI 输出逐字符透传**：`spawn` + 行级 stream API，不用 `exec`
-- [ ] **环境变量白名单**：仅 `AIPAY_OUTPUT_CHANNEL` / `AIPAY_SESSION_ID` / `AIPAY_FRAMEWORK` / `AIPAY_MODEL` / `AIPAY_OS` + 最小生存集（`PATH`/`HOME`）
-- [ ] **8 步严禁跳过**：状态机强约束步骤顺序，每步对应一次 spawn
-- [ ] **sessionId**：`opts.sessionId ?? AIPAY_SESSION_ID ?? crypto.randomUUID()`（不"编造" 假 UUID）
-- [ ] **tradeNo 32 位纯数字**：SDK 层 `assertTradeNo` 正则校验，不依赖 CLI
-- [ ] **MEDIA: 行**：行级检测、提取图片路径、剥离后上抛
-- [ ] **禁止 npm 自动安装**：缺失时报 `AlipayCliNotFoundError`，引导用户手动装
+- [x] **CLI 输出逐字符透传**：`spawn` + 行级 stream API，不用 `exec`（2026-05-31，`makeLineSplitter` 缓冲到换行才上抛）
+- [x] **环境变量白名单**：仅 `AIPAY_OUTPUT_CHANNEL` / `AIPAY_SESSION_ID` / `AIPAY_FRAMEWORK` / `AIPAY_MODEL` / `AIPAY_OS` + 最小生存集（`PATH`/`HOME`）（2026-05-31，`ALLOWED_ENV` + 单测精确断言集合）
+- [x] **8 步严禁跳过**：状态机强约束步骤顺序，每步对应一次 spawn（2026-05-31，单测断言 `payment-intent → check-wallet → 402-buyer-pay → query → ack` 调用序列）
+- [x] **sessionId**：`opts.sessionId ?? AIPAY_SESSION_ID ?? crypto.randomUUID()`（不"编造" 假 UUID）（2026-05-31，`resolveSessionId`）
+- [x] **tradeNo 32 位纯数字**：SDK 层 `assertTradeNo` 正则校验，不依赖 CLI（2026-05-31，`/^\d{32}$/`）
+- [x] **MEDIA: 行**：行级检测、提取图片路径、剥离后上抛（2026-05-31，`extractMedia` + onLine 包装剥离）
+- [x] **禁止 npm 自动安装**：缺失时报 `AlipayCliNotFoundError`，引导用户手动装（2026-05-31）
 
 ### Error codes（稳定 API）
 
-- [ ] `ALIPAY_CLI_NOT_FOUND`
-- [ ] `ALIPAY_CLI_VERSION`
-- [ ] `ALIPAY_NEEDS_WALLET_SETUP`
-- [ ] `ALIPAY_PAYMENT_REJECTED`
-- [ ] `ALIPAY_PAYMENT_TIMEOUT`
-- [ ] `ALIPAY_PROTOCOL`
-- [ ] `UNSUPPORTED_RAIL`
+- [x] `ALIPAY_CLI_NOT_FOUND`（2026-05-31，7 个全部实现于 `client/alipay/errors.ts`）
+- [x] `ALIPAY_CLI_VERSION`
+- [x] `ALIPAY_NEEDS_WALLET_SETUP`
+- [x] `ALIPAY_PAYMENT_REJECTED`
+- [x] `ALIPAY_PAYMENT_TIMEOUT`
+- [x] `ALIPAY_PROTOCOL`
+- [x] `UNSUPPORTED_RAIL`
 
-### 真实端到端（强制）
+### 真实端到端（强制）—— ⚠️ 待 alipay-bot + 沙箱钱包就位
 
 - [ ] 1 单 1 元 CNY，从 `moltspay pay --rail alipay <sr007 video>` 到 `alipay.aipay.agent.fulfillment.confirm` 全程录屏
 - [ ] **录屏归档进 `~/moltspay-qa-notes/`**，与 1.6.0 QA 记录同位

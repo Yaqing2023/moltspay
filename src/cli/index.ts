@@ -26,6 +26,7 @@ import { spawn } from 'child_process';
 import { ethers } from 'ethers';
 import { MoltsPayClient } from '../client/index.js';
 import { MoltsPayServer } from '../server/index.js';
+import { filterEnv as filterAlipayEnv } from '../client/alipay/cli.js';
 import { printQRCode } from '../onramp/index.js';
 import { CHAINS } from '../chains/index.js';
 import { SOLANA_CHAINS, getSolanaExplorerUrl, getSolanaTxExplorerUrl, isSolanaChain } from '../chains/solana.js';
@@ -1661,12 +1662,15 @@ program
   .option('--data <json>', 'Raw JSON data to send (for custom input formats)')
   .option('--token <token>', 'Token to pay with (USDC or USDT)', 'USDC')
   .option('--chain <chain>', 'Chain to pay on (base, polygon, base_sepolia, tempo_moderato, solana, or solana_devnet).')
+  .option('--rail <rail>', 'Payment rail: a chain name, or "alipay" for the Alipay fiat rail (CNY via alipay-bot)')
   .option('--config-dir <dir>', 'Config directory with wallet.json', DEFAULT_CONFIG_DIR)
   .option('--json', 'Output raw JSON only')
   .action(async (server, service, paramsJson, options) => {
     const client = new MoltsPayClient({ configDir: options.configDir });
+    const useAlipay = options.rail?.toLowerCase() === 'alipay';
 
-    if (!client.isInitialized) {
+    // The Alipay rail is backed by alipay-bot and needs no EVM wallet.
+    if (!useAlipay && !client.isInitialized) {
       console.error('❌ Wallet not initialized. Run: npx moltspay init');
       process.exit(1);
     }
@@ -1728,8 +1732,8 @@ program
     const imageDisplay = params.image_url || (params.image_base64 ? `[local file: ${options.image}]` : null);
     const token = (options.token || 'USDC').toUpperCase();
 
-    // USDT requires gas - check native balance
-    if (token === 'USDT') {
+    // USDT requires gas - check native balance (EVM rails only)
+    if (!useAlipay && token === 'USDT') {
       const balance = await client.getBalance();
       if (balance.native < 0.0001) {
         console.log('\n⚠️  USDT requires a small amount of ETH for gas (~$0.01)');
@@ -1752,21 +1756,35 @@ program
         console.log(`   Prompt: ${params.prompt}`);
       }
       if (imageDisplay) console.log(`   Image: ${imageDisplay}`);
-      console.log(`   Chain: ${chain || '(auto)'}`);  // Will be determined by server
-      console.log(`   Token: ${token}`);
-      console.log(`   Wallet: ${client.address}`);
+      if (useAlipay) {
+        console.log(`   Rail: alipay (CNY via alipay-bot)`);
+      } else {
+        console.log(`   Chain: ${chain || '(auto)'}`);  // Will be determined by server
+        console.log(`   Token: ${token}`);
+        console.log(`   Wallet: ${client.address}`);
+      }
       console.log('');
     }
 
     try {
-      // All chains use the same pay() flow - protocol detection happens inside
-      // Server's /proxy endpoint handles both x402 and MPP based on chain
-      const result = await client.pay(server, service, params, { 
+      // All chains use the same pay() flow - protocol detection happens inside.
+      // --rail alipay dispatches to the alipay-bot-backed AlipayClient, which
+      // streams CLI output verbatim and surfaces the payment URL to the user.
+      const result = await client.pay(server, service, params, useAlipay ? {
+        rail: 'alipay',
+        rawData: useRawData,
+        onPaymentPending: ({ paymentUrl, shortenUrl }) => {
+          if (!options.json) {
+            process.stdout.write(`\n📲 请用支付宝扫码或访问：${shortenUrl ?? paymentUrl}\n\n`);
+          }
+        },
+        onLine: (line) => { if (!options.json) process.stdout.write(line + '\n'); },
+      } : {
         token: token as 'USDC' | 'USDT',
         chain,
         rawData: useRawData
       });
-      
+
       if (options.json) {
         console.log(JSON.stringify(result));
       } else {
@@ -1782,6 +1800,40 @@ program
       }
       process.exit(1);
     }
+  });
+
+/**
+ * npx moltspay alipay <action> [args...]
+ *
+ * Thin pass-through to alipay-bot for first-time Alipay wallet setup (design
+ * §5.2.9). Forwards stdout/stderr verbatim with the AIPAY_* env whitelist so
+ * interactive `apply`/`bind` prompts work. These are user-driven account
+ * actions, intentionally NOT part of the automated pay402() state machine.
+ */
+program
+  .command('alipay <action> [args...]')
+  .description('Alipay wallet setup via alipay-bot: check | apply | bind')
+  .allowUnknownOption()
+  .action(async (action: string, args: string[]) => {
+    const map: Record<string, string> = { check: 'check-wallet', apply: 'apply', bind: 'bind' };
+    const sub = map[action] ?? action;
+    const child = spawn('alipay-bot', [sub, ...(args ?? [])], {
+      stdio: 'inherit',
+      env: filterAlipayEnv(process.env),
+    });
+    child.on('error', (e: any) => {
+      if (e?.code === 'ENOENT') {
+        console.error(
+          '❌ alipay-bot not installed. Run: ' +
+            'npm install @alipay/agent-payment@1.0.9 && ' +
+            'npx @alipay/agent-payment@1.0.9 install-cli',
+        );
+      } else {
+        console.error(`❌ ${e.message}`);
+      }
+      process.exit(1);
+    });
+    child.on('exit', (code) => process.exit(code ?? 1));
   });
 
 /**

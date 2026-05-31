@@ -9,6 +9,13 @@ export interface ClientConfig {
     maxPerTx: number;
     maxPerDay: number;
   };
+  /**
+   * Ordered rail preference (1.7.0). When the server's 402 offers more than
+   * one rail (e.g. USDC on Base AND CNY via Alipay) and the caller didn't
+   * pass an explicit `rail`, the first entry here that the server also
+   * accepts wins. e.g. `["base", "alipay"]`.
+   */
+  railPreference?: string[];
 }
 
 // Wallet data (stored in ~/.moltspay/wallet.json)
@@ -73,4 +80,8 @@ export interface VerifyResponse {
 // Client options
 export interface MoltsPayClientOptions {
   configDir?: string;  // Default: ~/.moltspay
+  /** Ordered rail preference; see {@link ClientConfig.railPreference}. */
+  railPreference?: string[];
+  /** Stable Alipay session id (else AIPAY_SESSION_ID, else a fresh UUID). */
+  alipaySessionId?: string;
 }
