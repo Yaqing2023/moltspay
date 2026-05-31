@@ -32,3 +32,23 @@ export function decodeBase64UrlWithPadFix(input: string): string {
   const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
   return Buffer.from(padded, 'base64').toString('utf-8');
 }
+
+/**
+ * Normalize an RSA key into PEM form.
+ *
+ * Alipay Open Platform hands out keys as **bare Base64** (a single line of
+ * Base64-encoded DER, no `-----BEGIN-----` armor), but Node's `crypto`
+ * key loaders and {@link rsa2Sign} require PEM. This wraps bare Base64 in
+ * the requested PEM armor (64-char lines per RFC 7468); input that already
+ * carries a `-----BEGIN` header is returned unchanged (trimmed).
+ *
+ * @param key  Bare Base64 (DER) or an already-armored PEM string.
+ * @param kind `'PRIVATE'` → PKCS#8 `PRIVATE KEY`; `'PUBLIC'` → SPKI `PUBLIC KEY`.
+ */
+export function toPem(key: string, kind: 'PRIVATE' | 'PUBLIC'): string {
+  const trimmed = key.trim();
+  if (trimmed.includes('-----BEGIN')) return trimmed;
+  const label = kind === 'PRIVATE' ? 'PRIVATE KEY' : 'PUBLIC KEY';
+  const body = trimmed.replace(/\s+/g, '').match(/.{1,64}/g)?.join('\n') ?? '';
+  return `-----BEGIN ${label}-----\n${body}\n-----END ${label}-----\n`;
+}

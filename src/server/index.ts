@@ -29,6 +29,7 @@ import {
   ALIPAY_NETWORK,
   ALIPAY_SCHEME,
 } from '../facilitators/index.js';
+import { toPem } from '../facilitators/alipay/encoding.js';
 import { isAlipayChainId } from '../chains/index.js';
 import {
   ServicesManifest,
@@ -261,15 +262,17 @@ export class MoltsPayServer {
     if (providerAlipay) {
       try {
         const baseDir = path.dirname(servicesPath);
-        const resolvePem = (p: string) =>
-          readFileSync(path.isAbsolute(p) ? p : path.resolve(baseDir, p), 'utf-8');
+        // Alipay hands out keys as bare Base64 (no PEM armor); toPem normalizes
+        // both that and already-armored PEM into the PEM the facilitator needs.
+        const resolvePem = (p: string, kind: 'PRIVATE' | 'PUBLIC') =>
+          toPem(readFileSync(path.isAbsolute(p) ? p : path.resolve(baseDir, p), 'utf-8'), kind);
         const alipayFacilitatorConfig: AlipayFacilitatorConfig = {
           seller_id: providerAlipay.seller_id,
           app_id: providerAlipay.app_id,
           seller_name: providerAlipay.seller_name,
           service_id_default: providerAlipay.service_id_default,
-          private_key_pem: resolvePem(providerAlipay.private_key_path),
-          alipay_public_key_pem: resolvePem(providerAlipay.alipay_public_key_path),
+          private_key_pem: resolvePem(providerAlipay.private_key_path, 'PRIVATE'),
+          alipay_public_key_pem: resolvePem(providerAlipay.alipay_public_key_path, 'PUBLIC'),
           gateway_url: providerAlipay.gateway_url,
           sign_type: providerAlipay.sign_type,
         };

@@ -6,10 +6,12 @@
  * and round-trip fidelity.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
+import crypto from 'node:crypto';
 import {
   base64url,
   decodeBase64UrlWithPadFix,
+  toPem,
 } from '../../../src/facilitators/alipay/encoding.js';
 
 describe('alipay/encoding', () => {
@@ -88,6 +90,54 @@ describe('alipay/encoding', () => {
       ['empty', ''],
     ])('round-trips %s', (_label, s) => {
       expect(decodeBase64UrlWithPadFix(base64url(s))).toBe(s);
+    });
+  });
+
+  describe('toPem', () => {
+    // Real Alipay keys arrive as bare Base64 (single line, no PEM armor).
+    // Generated in beforeAll (not at collection time) so the slow 2048-bit
+    // keygen doesn't run during vitest's parallel file collection.
+    let privateKey: string;
+    let publicKey: string;
+    beforeAll(() => {
+      const kp = crypto.generateKeyPairSync('rsa', {
+        modulusLength: 2048,
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+      });
+      privateKey = kp.privateKey;
+      publicKey = kp.publicKey;
+    });
+    const stripArmor = (pem: string) =>
+      pem.replace(/-----[^-]+-----/g, '').replace(/\s+/g, '');
+
+    it('wraps bare Base64 private key into a parseable PKCS#8 PEM', () => {
+      const wrapped = toPem(stripArmor(privateKey), 'PRIVATE');
+      expect(wrapped).toContain('-----BEGIN PRIVATE KEY-----');
+      expect(() => crypto.createPrivateKey(wrapped)).not.toThrow();
+    });
+
+    it('wraps bare Base64 public key into a parseable SPKI PEM', () => {
+      const wrapped = toPem(stripArmor(publicKey), 'PUBLIC');
+      expect(wrapped).toContain('-----BEGIN PUBLIC KEY-----');
+      expect(() => crypto.createPublicKey(wrapped)).not.toThrow();
+    });
+
+    it('returns already-armored PEM unchanged (trimmed)', () => {
+      expect(toPem(privateKey, 'PRIVATE')).toBe(privateKey.trim());
+    });
+
+    it('wraps body at 64 chars per line (RFC 7468)', () => {
+      const wrapped = toPem(stripArmor(publicKey), 'PUBLIC');
+      const bodyLines = wrapped.split('\n').filter((l) => l && !l.startsWith('-----'));
+      expect(bodyLines.every((l) => l.length <= 64)).toBe(true);
+    });
+
+    it('a key wrapped from bare Base64 can sign + verify (round-trip)', () => {
+      const privPem = toPem(stripArmor(privateKey), 'PRIVATE');
+      const pubPem = toPem(stripArmor(publicKey), 'PUBLIC');
+      const sig = crypto.sign('RSA-SHA256', Buffer.from('hello'), privPem);
+      expect(crypto.verify('RSA-SHA256', Buffer.from('hello'), pubPem, sig)).toBe(true);
     });
   });
 });

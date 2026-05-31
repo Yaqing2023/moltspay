@@ -19,3 +19,9 @@ docs/articles/
 # by `node scripts/probe-tempo-permit.mjs`. Canonical evidence is hard-coded
 # in docs/WEB-CLIENT-DESIGN.md + src/client/core/eip2612.ts TEMPO_EIP2612_DOMAINS.
 scripts/.probe-tempo-output/
+
+# Alipay AI 收 rail keys (1.7.0) — RSA2 PEM keys must never be committed
+cert/
+*.pem
+ALIPAY_PRIVATE_KEY*
+ALIPAY_PUBLIC_KEY*
