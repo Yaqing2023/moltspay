@@ -62,6 +62,8 @@
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
     "verify:web": "node scripts/verify-web-bundle.mjs",
+    "verify:alipay:offline": "tsx scripts/alipay-offline-e2e.mts",
+    "verify:alipay:http": "tsx scripts/alipay-http-402.mts",
     "prepublishOnly": "npm run typecheck && npm run build && npm run verify:web"
   },
   "dependencies": {
@@ -91,6 +93,7 @@
     "@types/node": "^20.11.0",
     "eslint": "^8.56.0",
     "tsup": "^8.0.0",
+    "tsx": "^4.22.3",
     "typescript": "^5.3.0",
     "vitest": "^1.2.0"
   },

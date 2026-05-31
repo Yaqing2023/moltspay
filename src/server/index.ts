@@ -1240,10 +1240,19 @@ export class MoltsPayServer {
 
     const encoded = Buffer.from(JSON.stringify(paymentRequired)).toString('base64');
 
-    res.writeHead(402, {
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       [PAYMENT_REQUIRED_HEADER]: encoded,
-    });
+    };
+    // Dual-emit the legacy `Payment-Needed` header for alipay-bot clients
+    // (@alipay/agent-payment), which only read this header and ignore the
+    // x402 `accepts[]`. Mirrors sendMPPPaymentRequired so /execute is
+    // byte-for-byte compatible with un-upgraded skills.
+    if (alipayChallenge) {
+      headers[ALIPAY_PAYMENT_NEEDED_HEADER] = alipayChallenge.paymentNeededHeader;
+    }
+
+    res.writeHead(402, headers);
     res.end(JSON.stringify({
       error: 'Payment required',
       message: `Service requires $${config.price} ${config.currency}`,
