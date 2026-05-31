@@ -57,6 +57,10 @@ const MPP_RECEIPT_HEADER = 'payment-receipt';
 // Legacy `Payment-Needed` 402 challenge header, mirror of `X-Payment-Required`,
 // kept so `alipay-bot` (@alipay/agent-payment) skills work unchanged.
 const ALIPAY_PAYMENT_NEEDED_HEADER = 'payment-needed';
+// Buyer's proof header: alipay-bot re-requests the resource carrying the
+// Base64URL `{protocol:{payment_proof,trade_no},method:{client_session}}`
+// blob here after the buyer pays. The server verifies it via the facilitator.
+const ALIPAY_PAYMENT_PROOF_HEADER = 'payment-proof';
 
 // Token contract addresses by network
 const TOKEN_ADDRESSES: Record<string, Record<string, string>> = {
@@ -506,7 +510,8 @@ export class MoltsPayServer {
       if (url.pathname === '/execute' && req.method === 'POST') {
         const body = await this.readBody(req);
         const paymentHeader = req.headers[PAYMENT_HEADER] as string | undefined;
-        return await this.handleExecute(body, paymentHeader, res);
+        const proofHeader = req.headers[ALIPAY_PAYMENT_PROOF_HEADER] as string | undefined;
+        return await this.handleExecute(body, paymentHeader, res, proofHeader);
       }
 
       if (url.pathname === '/proxy' && req.method === 'POST') {
@@ -531,7 +536,8 @@ export class MoltsPayServer {
         const body = req.method === 'POST' ? await this.readBody(req) : {};
         const authHeader = req.headers[MPP_AUTH_HEADER] as string | undefined;
         const x402Header = req.headers[PAYMENT_HEADER] as string | undefined;
-        return await this.handleMPPRequest(skill, body, authHeader, x402Header, res);
+        const proofHeader = req.headers[ALIPAY_PAYMENT_PROOF_HEADER] as string | undefined;
+        return await this.handleMPPRequest(skill, body, authHeader, x402Header, res, proofHeader);
       }
 
       // Not found
@@ -642,7 +648,8 @@ export class MoltsPayServer {
   private async handleExecute(
     body: any,
     paymentHeader: string | undefined,
-    res: ServerResponse
+    res: ServerResponse,
+    proofHeader?: string
   ): Promise<void> {
     const { service, params } = body;
 
@@ -660,6 +667,20 @@ export class MoltsPayServer {
       if (field.required && (!params || params[key] === undefined)) {
         return this.sendJson(res, 400, { error: `Missing required param: ${key}` });
       }
+    }
+
+    // Alipay fiat rail (1.7.0): a `Payment-Proof` header means the buyer paid
+    // via alipay-bot and is re-requesting the resource with proof. Route to
+    // the facilitator verify→fulfill path (the proof's Base64URL blob carries
+    // payment_proof / trade_no / client_session).
+    if (proofHeader) {
+      const alipayPayment: X402PaymentPayload = {
+        x402Version: X402_VERSION,
+        scheme: ALIPAY_SCHEME,
+        network: ALIPAY_NETWORK,
+        payload: proofHeader,
+      };
+      return this.handleAlipayExecute(skill, params || {}, alipayPayment, res);
     }
 
     // If no payment header, return 402 with payment requirements
@@ -932,10 +953,16 @@ export class MoltsPayServer {
     body: any,
     authHeader: string | undefined,
     x402Header: string | undefined,
-    res: ServerResponse
+    res: ServerResponse,
+    proofHeader?: string
   ): Promise<void> {
     const config = skill.config;
     const params = body || {};
+
+    // Alipay buyer re-request with a Payment-Proof header → verify + fulfill.
+    if (proofHeader) {
+      return await this.handleExecute({ service: config.id, params }, undefined, res, proofHeader);
+    }
 
     // Check for x402 payment header first (backward compatibility)
     if (x402Header) {

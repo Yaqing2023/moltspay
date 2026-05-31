@@ -8,9 +8,12 @@ import type { CliRunner } from '../../../src/client/alipay/cli.js';
 const ok = (lines: string[]): ReturnType<CliRunner> => Promise.resolve({ exitCode: 0, lines });
 
 describe('parseStatus', () => {
-  it('detects terminal success markers', () => {
+  it('detects terminal success markers (anchored, not bare words)', () => {
     expect(parseStatus(['STATUS: TRADE_SUCCESS'])).toBe('paid');
-    expect(parseStatus(['payment PAID'])).toBe('paid');
+    expect(parseStatus(['TRADE_FINISHED'])).toBe('paid');
+  });
+  it('does NOT read plain "UNPAID" as paid (bare PAID would falsely match)', () => {
+    expect(parseStatus(['TRADE_STATUS_UNPAID'])).toBe('pending');
   });
   it('detects rejection markers', () => {
     expect(parseStatus(['TRADE_CLOSED'])).toBe('rejected');
@@ -22,10 +25,23 @@ describe('parseStatus', () => {
   });
 
   // Real alipay-bot JSON envelope (verified against alipay-bot-cli 0.3.15).
-  it('reads the JSON {code} envelope: 200=paid, non-200=pending, fail-msg=rejected', () => {
+  it('reads the {code} envelope: 200=paid, non-200=pending, fail-msg=rejected', () => {
     expect(parseStatus(['{"code":200,"data":{"url":"v.mp4"}}'])).toBe('paid');
     expect(parseStatus(['{"code":500,"message":"未开通"}'])).toBe('pending');
     expect(parseStatus(['{"code":400,"message":"交易已关闭"}'])).toBe('rejected');
+  });
+
+  it('reads the {success,errorCode} envelope from 402-query-payment-status', () => {
+    expect(parseStatus(['{"success":true,"result":{"url":"v.mp4"}}'])).toBe('paid');
+    expect(parseStatus(['{"success":false,"errorCode":"TRADE_CLOSED"}'])).toBe('rejected');
+  });
+
+  // Regression (live 1-CNY E2E): an UNPAID trade must NOT be read as paid just
+  // because the literal "success" key appears with value false.
+  it('treats success:false TRADE_STATUS_UNPAID as pending, NOT paid', () => {
+    expect(parseStatus([
+      '{"success":false,"errorCode":"TRADE_STATUS_UNPAID","errorMsg":"交易未支付"}',
+    ])).toBe('pending');
   });
 });
 

@@ -19,29 +19,47 @@ export type PaymentStatus = 'paid' | 'rejected' | 'pending' | 'unknown';
 /**
  * Classify a status poll's output lines.
  *
- * alipay-bot emits JSON `{code, message, reason}` (observed on 0.3.15): code
- * 200 = resource delivered (paid); a non-200 code with a "waiting"-style
- * message is still pending; an explicit close/fail/reject message is terminal.
- * Falls back to textual markers for non-JSON output. Defaults to 'pending' for
- * a non-200/unknown poll so a not-yet-terminal status keeps waiting.
+ * alipay-bot 402-query-payment-status emits a JSON envelope. Two observed
+ * shapes (verified live against 0.3.15):
+ *   - `{success: boolean, errorCode, errorMsg}` — success:false +
+ *     errorCode TRADE_STATUS_UNPAID is STILL PENDING (the buyer hasn't paid
+ *     yet); success:true means the resource was delivered.
+ *   - `{code, message, reason}` — code 200 = delivered.
+ *
+ * NOTE: we must NOT text-match bare words like "SUCCESS"/"PAID" — the literal
+ * JSON key `"success"` appears even when `success:false` (TRADE_STATUS_UNPAID),
+ * which a naive regex misread as paid and returned an unpaid trade as success
+ * (caught by the live 1-CNY E2E). So classify off the parsed fields only, and
+ * fall back to anchored status tokens for non-JSON output.
  */
 export function parseStatus(lines: string[]): PaymentStatus {
   const raw = lines.join('\n').trim();
   try {
     const json = JSON.parse(raw);
-    if (json && typeof json.code !== 'undefined') {
-      if (Number(json.code) === 200) return 'paid';
-      const msg = `${json.message ?? ''}${json.reason ?? ''}`;
-      if (/关闭|失败|拒绝|取消|超时|已撤销/.test(msg)) return 'rejected';
-      return 'pending'; // non-200, not explicitly terminal → keep polling
+    if (json && typeof json === 'object') {
+      // Shape A: {success, errorCode, errorMsg}
+      if (typeof json.success === 'boolean') {
+        if (json.success) return 'paid';
+        const err = String(json.errorCode ?? '').toUpperCase();
+        if (/UNPAID|WAIT|PENDING|PROCESS|NOTPAY/.test(err)) return 'pending';
+        if (/CLOSED|CANCEL|FAIL|REJECT|REFUSE|TIMEOUT|EXPIRE/.test(err)) return 'rejected';
+        return 'pending'; // non-terminal error → keep waiting
+      }
+      // Shape B: {code, message, reason}
+      if (typeof json.code !== 'undefined') {
+        if (Number(json.code) === 200) return 'paid';
+        const msg = `${json.message ?? ''}${json.reason ?? ''}`;
+        if (/关闭|失败|拒绝|取消|超时|已撤销/.test(msg)) return 'rejected';
+        return 'pending';
+      }
     }
   } catch {
-    // Not JSON — fall through to textual markers.
+    // Not JSON — fall through to anchored textual markers.
   }
   const text = raw.toUpperCase();
-  if (/\b(TRADE_SUCCESS|TRADE_FINISHED|SUCCESS|PAID|FULFILL)\b/.test(text)) return 'paid';
-  if (/\b(TRADE_CLOSED|REJECTED|CANCEL|REFUSE|FAIL)\b/.test(text)) return 'rejected';
-  if (/\b(WAIT_BUYER_PAY|PENDING|WAITING)\b/.test(text)) return 'pending';
+  if (/TRADE_SUCCESS|TRADE_FINISHED/.test(text)) return 'paid';
+  if (/TRADE_CLOSED|REJECTED|REFUSE|CANCEL/.test(text)) return 'rejected';
+  if (/WAIT_BUYER_PAY|UNPAID|PENDING|WAITING/.test(text)) return 'pending';
   return 'unknown';
 }
 

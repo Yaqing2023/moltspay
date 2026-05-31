@@ -54,10 +54,10 @@
 
 ### 改动文件
 
-- [ ] `src/facilitators/registry.ts` — 注册 `"alipay-aipay"` scheme → `AlipayFacilitator`
-- [ ] `src/facilitators/index.ts` — export
-- [ ] `src/server/index.ts` — 402 中间件**双发** `X-Payment-Required` + `Payment-Needed`
-- [ ] `src/server/index.ts` — `/proxy` 与 `/execute` 在收到 `Payment-Proof` 时分发到 `AlipayFacilitator.verify`
+- [x] `src/facilitators/registry.ts` — 注册 `"alipay"` network → `AlipayFacilitator`（已实现，registry.ts:85）
+- [x] `src/facilitators/index.ts` — export（已实现）
+- [x] `src/server/index.ts` — 402 中间件**双发** `X-Payment-Required` + `Payment-Needed`（2026-05-31 修复 `/execute` 漏发，HTTP 回归测试 6 项）
+- [x] `src/server/index.ts` — `/execute` 与 MPP service 端点在收到 `Payment-Proof` header 时分发到 `AlipayFacilitator.verify`（**2026-05-31 真单暴露：原本只在 CORS 白名单提了 Payment-Proof，从不读取 → 已付款买家陷入 402 循环**；现读 header → verify → 履约 → 200，server 测试 2 项 + 真单验证）
 - [x] `src/chains/index.ts` — 注册 `"alipay"` chain id（`ALIPAY_RAIL` 元数据 + `isAlipayChainId` 守卫；不动 `ChainName`/`EvmChainName` union 避免触动 20+ caller，2026-05-29，18 单测含 cross-module 一致性检查）
 
 ### Schema 扩展
@@ -134,10 +134,13 @@
 - [x] `ALIPAY_PROTOCOL`
 - [x] `UNSUPPORTED_RAIL`
 
-### 真实端到端（强制）—— ⚠️ 待 alipay-bot + 沙箱钱包就位
+### 真实端到端（强制）—— ✅ 2026-05-31 通过
 
-- [ ] 1 单 1 元 CNY，从 `moltspay pay --rail alipay <sr007 video>` 到 `alipay.aipay.agent.fulfillment.confirm` 全程录屏
-- [ ] **录屏归档进 `~/moltspay-qa-notes/`**，与 1.6.0 QA 记录同位
+- [x] 1 单 1 元 CNY 真实支付：`moltspay pay --rail alipay http://127.0.0.1/execute video-demo`，真实「AI付」钱包扫码付款 → server 读 `Payment-Proof` → `alipay.aipay.agent.payment.verify`（**生产网关** openapi.alipay.com）verified → skill 执行 → `alipay.aipay.agent.fulfillment.confirm` → 资源 200 交付（tradeNo `20260531008281180847110000015839`）
+- [x] 真机暴露并修复 4 个 bug：(1) `check-wallet` 未开通时 exit 0 返回 `{code:500}`（不能靠退出码）；(2) `payment-intent` 的 `-i/--intent-summary` 必需；(3) 直透子命令真名 `apply-wallet`/`bind-wallet`；(4) `parseStatus` 误把 `{"success":false}` 的 `success` 键当成 paid（UNPAID 假成功）
+- [x] **环境关键发现**：买家用**生产** AI付 钱包,seller 必须配**生产网关** `openapi.alipay.com`(沙箱 alipaydev.com 已 502 且环境不互通)
+- alipay-bot 安装：`npx -y @alipay/agent-payment@1.0.9 install-cli`（装 alipay-bot-cli 0.3.15 到 `~/.local/bin`）
+- ⏭️ 录屏归档进 `~/moltspay-qa-notes/`（QA 留痕，待补）
 
 ---
 

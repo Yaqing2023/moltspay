@@ -25,3 +25,6 @@ cert/
 *.pem
 ALIPAY_PRIVATE_KEY*
 ALIPAY_PUBLIC_KEY*
+
+# Local QA scratch (payment QR images from live E2E — contain payment info)
+tmp/
