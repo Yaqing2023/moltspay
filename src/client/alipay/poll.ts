@@ -17,12 +17,28 @@ export const POLL_INTERVAL_MS = 3_000;
 export type PaymentStatus = 'paid' | 'rejected' | 'pending' | 'unknown';
 
 /**
- * Classify a status poll's output lines. Tolerant of formatting: matches the
- * documented terminal markers case-insensitively, defaulting to 'pending' so
- * a noisy-but-not-terminal poll keeps waiting rather than failing.
+ * Classify a status poll's output lines.
+ *
+ * alipay-bot emits JSON `{code, message, reason}` (observed on 0.3.15): code
+ * 200 = resource delivered (paid); a non-200 code with a "waiting"-style
+ * message is still pending; an explicit close/fail/reject message is terminal.
+ * Falls back to textual markers for non-JSON output. Defaults to 'pending' for
+ * a non-200/unknown poll so a not-yet-terminal status keeps waiting.
  */
 export function parseStatus(lines: string[]): PaymentStatus {
-  const text = lines.join('\n').toUpperCase();
+  const raw = lines.join('\n').trim();
+  try {
+    const json = JSON.parse(raw);
+    if (json && typeof json.code !== 'undefined') {
+      if (Number(json.code) === 200) return 'paid';
+      const msg = `${json.message ?? ''}${json.reason ?? ''}`;
+      if (/关闭|失败|拒绝|取消|超时|已撤销/.test(msg)) return 'rejected';
+      return 'pending'; // non-200, not explicitly terminal → keep polling
+    }
+  } catch {
+    // Not JSON — fall through to textual markers.
+  }
+  const text = raw.toUpperCase();
   if (/\b(TRADE_SUCCESS|TRADE_FINISHED|SUCCESS|PAID|FULFILL)\b/.test(text)) return 'paid';
   if (/\b(TRADE_CLOSED|REJECTED|CANCEL|REFUSE|FAIL)\b/.test(text)) return 'rejected';
   if (/\b(WAIT_BUYER_PAY|PENDING|WAITING)\b/.test(text)) return 'pending';

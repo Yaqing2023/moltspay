@@ -20,6 +20,13 @@ describe('parseStatus', () => {
     expect(parseStatus(['WAIT_BUYER_PAY'])).toBe('pending');
     expect(parseStatus(['random noise'])).toBe('unknown');
   });
+
+  // Real alipay-bot JSON envelope (verified against alipay-bot-cli 0.3.15).
+  it('reads the JSON {code} envelope: 200=paid, non-200=pending, fail-msg=rejected', () => {
+    expect(parseStatus(['{"code":200,"data":{"url":"v.mp4"}}'])).toBe('paid');
+    expect(parseStatus(['{"code":500,"message":"未开通"}'])).toBe('pending');
+    expect(parseStatus(['{"code":400,"message":"交易已关闭"}'])).toBe('rejected');
+  });
 });
 
 describe('pollUntil', () => {

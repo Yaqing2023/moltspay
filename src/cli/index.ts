@@ -1815,7 +1815,10 @@ program
   .description('Alipay wallet setup via alipay-bot: check | apply | bind')
   .allowUnknownOption()
   .action(async (action: string, args: string[]) => {
-    const map: Record<string, string> = { check: 'check-wallet', apply: 'apply', bind: 'bind' };
+    // Real alipay-bot subcommand names (verified against alipay-bot-cli 0.3.15).
+    const map: Record<string, string> = {
+      check: 'check-wallet', apply: 'apply-wallet', bind: 'bind-wallet',
+    };
     const sub = map[action] ?? action;
     const child = spawn('alipay-bot', [sub, ...(args ?? [])], {
       stdio: 'inherit',

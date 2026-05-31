@@ -49,6 +49,11 @@ export interface AlipayPayOptions {
   /** Non-GET resource verb / body, forwarded to 402-buyer-pay. */
   method?: string;
   data?: string;
+  /**
+   * One-line payment intent summary (alipay-bot `payment-intent -i`, REQUIRED
+   * by the CLI). Defaults to a summary derived from the requirement amount.
+   */
+  intentSummary?: string;
 }
 
 export interface AlipayPaymentResult {
@@ -63,6 +68,12 @@ export interface AlipayClientOptions {
   /** Stable session id; falls back to AIPAY_SESSION_ID, then a fresh UUID. */
   sessionId?: string;
   configDir?: string;
+  /**
+   * Host framework for alipay-bot session-path resolution (claudecode,
+   * openclaw, nanobot, …). Defaults to AIPAY_FRAMEWORK, then 'openclaw'.
+   * Note: 'moltspay' is NOT a framework alipay-bot recognizes.
+   */
+  framework?: string;
   /** DI seams for tests. */
   runner?: CliRunner;
   getVersion?: VersionGetter;
@@ -120,10 +131,44 @@ export function extractMedia(line: string): string | null {
 }
 
 /**
- * Extract the resource body from the paid status-poll output. Prefers an
- * explicit `BODY:` marker; otherwise returns the joined non-marker lines.
+ * Decide whether check-wallet reports an opened, ready wallet.
+ *
+ * Observed real output (alipay-bot 0.3.15): a JSON object `{code, message,
+ * reason}` — `code: 500, message: "未开通"` when the wallet is NOT opened, and
+ * crucially the **process still exits 0**, so the exit code is useless here.
+ * We therefore key off `code` (200 = ready) and fall back to textual markers.
+ */
+export function isWalletReady(lines: string[]): boolean {
+  const text = lines.join('\n').trim();
+  try {
+    const json = JSON.parse(text);
+    if (json && typeof json.code !== 'undefined') return Number(json.code) === 200;
+  } catch {
+    // Not JSON — fall through to textual markers.
+  }
+  return !/未开通|未开启|NOT[_\s-]*(OPEN|BOUND|SET)|NEEDS?[_\s-]*SETUP|NO[_\s-]*WALLET/i.test(text);
+}
+
+/**
+ * Extract the resource body from the paid status-poll output.
+ *
+ * alipay-bot emits JSON; on success the resource lives under data/result/body.
+ * Falls back to a `BODY:` marker, then to the joined non-marker lines.
+ * (The exact paid-state field is inferred from the CLI's JSON convention and
+ * may need a tweak once a real completed trade is observed.)
  */
 export function extractBody(lines: string[]): string {
+  const text = lines.join('\n').trim();
+  try {
+    const json = JSON.parse(text);
+    if (json && typeof json === 'object') {
+      const body = json.data ?? json.result ?? json.body ?? json.resource;
+      if (body !== undefined) return typeof body === 'string' ? body : JSON.stringify(body);
+      return text;
+    }
+  } catch {
+    // Not JSON — fall through.
+  }
   const idx = lines.findIndex((l) => /^\s*BODY:/.test(l));
   if (idx !== -1) {
     const first = lines[idx].replace(/^\s*BODY:\s*/, '');
@@ -135,6 +180,7 @@ export function extractBody(lines: string[]): string {
 export class AlipayClient {
   private readonly sessionId: string;
   private readonly configDir: string;
+  private readonly framework: string;
   private readonly runner: CliRunner;
   private readonly getVersion?: VersionGetter;
   private readonly now: () => number;
@@ -142,6 +188,7 @@ export class AlipayClient {
   constructor(opts: AlipayClientOptions = {}) {
     this.sessionId = resolveSessionId(opts.sessionId, process.env.AIPAY_SESSION_ID);
     this.configDir = opts.configDir ?? join(homedir(), '.moltspay');
+    this.framework = opts.framework ?? process.env.AIPAY_FRAMEWORK ?? 'openclaw';
     this.runner = opts.runner ?? runCli;
     this.getVersion = opts.getVersion;
     this.now = opts.now ?? Date.now;
@@ -149,10 +196,8 @@ export class AlipayClient {
 
   /** Throws NeedsWalletSetupError unless alipay-bot reports an opened wallet. */
   async checkWallet(signal?: AbortSignal): Promise<void> {
-    const { exitCode, lines } = await this.runner(['check-wallet'], { signal });
-    const text = lines.join('\n').toUpperCase();
-    const notReady = exitCode !== 0 || /NOT[_\s-]*(OPEN|BOUND|SET)|NEEDS?[_\s-]*SETUP|NO[_\s-]*WALLET/.test(text);
-    if (notReady) {
+    const { lines } = await this.runner(['check-wallet'], { signal });
+    if (!isWalletReady(lines)) {
       throw new NeedsWalletSetupError(
         'Alipay wallet not opened. Run: moltspay alipay apply (then: moltspay alipay bind)',
       );
@@ -176,12 +221,19 @@ export class AlipayClient {
       else opts.onLine?.(line);
     };
 
+    // intent-summary is REQUIRED by alipay-bot's payment-intent; derive a
+    // minimal one from the requirement when the caller didn't supply it.
+    const intentSummary =
+      opts.intentSummary?.trim() ||
+      `支付 ${requirement.amount ?? ''} ${requirement.asset ?? 'CNY'}`.trim();
+
     // Step 0: version gate.
     await ensureCli(this.getVersion);
 
-    // Step 1b: session handshake.
+    // Step 1b: session handshake (--intent-summary is mandatory).
     await this.runner(
-      ['payment-intent', '--session-id', this.sessionId, '--framework', 'moltspay'],
+      ['payment-intent', '--session-id', this.sessionId, '--intent-summary', intentSummary,
+        '--framework', this.framework],
       { onLine, signal },
     );
 
@@ -195,8 +247,11 @@ export class AlipayClient {
     const challengeFile = join(dir, `402_${reqId}.txt`);
     await writeFile(challengeFile, paymentNeededHeader, 'utf-8');
 
-    // Step 4: initiate the buyer payment → paymentUrl + tradeNo.
-    const payArgs = ['402-buyer-pay', '-f', challengeFile, '-r', resourceUrl];
+    // Step 4: initiate the buyer payment → paymentUrl + tradeNo. Pass session +
+    // intent + framework so buyer-pay is self-sufficient even if the cached
+    // intent didn't stick.
+    const payArgs = ['402-buyer-pay', '-f', challengeFile, '-r', resourceUrl,
+      '-s', this.sessionId, '-i', intentSummary, '-w', this.framework];
     if (opts.method) payArgs.push('-m', opts.method);
     if (opts.data) payArgs.push('-d', opts.data);
     const payRun = await this.runner(payArgs, { onLine, signal });

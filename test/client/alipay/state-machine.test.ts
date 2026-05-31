@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import path from 'path';
 import {
   AlipayClient, resolveSessionId, assertTradeNo,
-  parseTradeNo, parsePaymentUrl, extractMedia, extractBody,
+  parseTradeNo, parsePaymentUrl, extractMedia, extractBody, isWalletReady,
 } from '../../../src/client/alipay/index.js';
 import {
   AlipayProtocolError, NeedsWalletSetupError,
@@ -84,6 +84,19 @@ describe('pure helpers', () => {
     expect(extractBody(['STATUS: ok', 'BODY: {"a":1}'])).toBe('{"a":1}');
     expect(extractBody(['plain content'])).toBe('plain content');
   });
+
+  // Real alipay-bot 0.3.15 output formats (verified against the live binary).
+  it('isWalletReady reads the JSON {code} shape — 500/未开通 is NOT ready', () => {
+    expect(isWalletReady(['{"code":500,"message":"未开通","reason":"..."}'])).toBe(false);
+    expect(isWalletReady(['{"code":200,"message":"ok"}'])).toBe(true);
+    // exit code is unreliable (always 0); decision must come from `code`.
+    expect(isWalletReady(['{', '  "code": 500,', '  "message": "未开通"', '}'])).toBe(false);
+  });
+
+  it('extractBody pulls the resource out of the CLI JSON envelope', () => {
+    expect(extractBody(['{"code":200,"data":{"url":"v.mp4"}}'])).toBe('{"url":"v.mp4"}');
+    expect(extractBody(['{"code":200,"result":"hi"}'])).toBe('hi');
+  });
 });
 
 describe('AlipayClient.pay402 — 8-step state machine', () => {
@@ -112,10 +125,13 @@ describe('AlipayClient.pay402 — 8-step state machine', () => {
       '402-query-payment-status', '402-buyer-fulfillment-ack',
     ]);
 
-    // Step 1b sent the session id + framework.
+    // Step 1b sent the session id + the REQUIRED intent-summary + framework.
     const intentArgs = (runner as any).mock.calls[0][0];
+    expect(intentArgs).toContain('--session-id');
+    expect(intentArgs).toContain('--intent-summary');
     expect(intentArgs).toContain('--framework');
-    expect(intentArgs).toContain('moltspay');
+    // alipay-bot does not recognize a 'moltspay' framework.
+    expect(intentArgs).not.toContain('moltspay');
 
     // Step 4 surfaced the payment URL + 32-digit tradeNo.
     expect(pending).toHaveLength(1);
@@ -142,8 +158,14 @@ describe('AlipayClient.pay402 — 8-step state machine', () => {
     expect(readFileSync(file, 'utf-8')).toBe('BASE64URLHEADER');
   });
 
-  it('throws NeedsWalletSetupError when check-wallet reports unopened', async () => {
-    const runner = fakeRunner({ 'check-wallet': () => Promise.resolve({ exitCode: 1, lines: ['NO WALLET'] }) });
+  it('throws NeedsWalletSetupError on the real "未开通" JSON (exit 0)', async () => {
+    // Real alipay-bot output when no wallet: JSON code 500, process exits 0.
+    const runner = fakeRunner({
+      'check-wallet': () => Promise.resolve({
+        exitCode: 0,
+        lines: ['{"code":500,"message":"未开通","reason":"当前尚未开启支付宝支付能力"}'],
+      }),
+    });
     const client = new AlipayClient({
       configDir, runner, getVersion: async () => 'v0.3.15', now: () => 0,
     });
