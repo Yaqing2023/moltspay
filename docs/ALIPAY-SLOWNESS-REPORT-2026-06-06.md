@@ -62,6 +62,24 @@ cli.exit                      44600ms  ok=true
 > ⚠️ **诚实声明（重要）**：这 43s **尚未拆分成分**。它至少混了三块：(1) 冷启动+设备指纹 ~6s（已测）；(2) apguard/blueshield 风控原生库本地计算（**未测**，可能是零网络的 CPU 阻塞）；(3) 真正的支付宝网关下单往返（**未测**）。
 > 之前"402-buyer-pay 是支付宝网关阻塞、Node 侧无解"的说法**是估算而非实测**。如果(2)占比大，它和冷启动一样**可预热/缓存**，"无解"就不成立。**只有(3)才是真正外部不可控的。**
 
+### 4.4 突破：CLI 剖析器拆开了这 40s（2026-06-06 实测）
+
+新增 `scripts/cli-profile-hook.cjs`（观测-only `--require` 预加载钩子），把每次 spawn 拆成 A) childSync 指纹链、B) network 网关在途、C) nativeStall 原生风控计算。**关键修复**：CLI 会 spawn 大量 `node cli.js __internal-*` 后台 worker，它们继承同一 `MOLTSPAY_CLI_PROFILE_OUT` 会覆盖真命令的文件 → 改为按 pid 写独立文件 + 记录 argv 识别真命令；并新增 undici `diagnostics_channel` 钩子（CLI 走 `fetch()`，绕过 `http.request`）。
+
+**check-wallet 干净实测（手动跑，无扣款，11.8s）：**
+
+| 桶 | 时长 | 占比 | 性质 |
+|---|---|---|---|
+| A. childSync 指纹（`general_external_id.js`）| 3320ms | 28% | **本地，可预热** |
+| C. nativeStall 原生风控（`apguard`/`blueshield`）| 6075ms | 51% | **本地，可预热** |
+| **B. 网关网络（`aigw.alipay.com/api/gateway/invoke`）** | **1874ms** | **16%** | **真外部，不可控** |
+
+时间线：fetch **直到 t=8.6s 才开始**（前面全是指纹+原生+spawn 几十个 node worker），网关往返仅 ~1.9s。
+
+> **推翻原结论**：至少对 check-wallet，~80% 是本地可预热，只有 ~16% 是真网关。"网关阻塞、Node 侧无解"不成立——真正的杠杆是 **Rec #2 预热/常驻 CLI**（消除指纹+原生冷算），不是网关。
+>
+> ⚠️ `402-buyer-pay` 的 40s 形态**强烈推测同此**（同一 CLI、同一 fetch 路径），但它创建真实交易、网关腿可能更重 —— **待下一笔真实 `/buy` 用修复后的 harness 捕获定数**（harness 已修复并在 check-wallet 上验证）。注：生产 check-wallet ~21s vs 手动 11.8s，差异在指纹/原生的机器负载波动，但"网络只占小头"的形态不变。
+
 ## 5. 已完成的优化（已上线、已 commit）
 
 | 措施 | Rec | 状态 | 效果（实测） |

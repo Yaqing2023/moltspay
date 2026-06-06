@@ -36,7 +36,16 @@ try {
 }
 
 const fs = require('fs');
-const OUT = process.env.MOLTSPAY_CLI_PROFILE_OUT;
+// Per-pid output path. The CLI spawns background workers as `node cli.js
+// __internal-*`; they pass the argv[1]~cli.js guard AND inherit this same
+// MOLTSPAY_CLI_PROFILE_OUT, so a single shared path gets CLOBBERED by a
+// late-exiting worker. Suffixing with pid gives every process its own file;
+// the reader picks the one whose `argv` is the real command (402-buyer-pay).
+const OUT_BASE = process.env.MOLTSPAY_CLI_PROFILE_OUT;
+const OUT = OUT_BASE ? OUT_BASE.replace(/\.json$/, '') + '.pid' + process.pid + '.json' : null;
+// The subcommand this process is actually running (e.g. "402-buyer-pay …" vs
+// "__internal-log-worker") — lets the reader tell the real command from workers.
+const ARGV = process.argv.slice(2).join(' ').slice(0, 200);
 const T0 = process.hrtime.bigint();
 const now = () => Number(process.hrtime.bigint() - T0) / 1e6; // ms since hook load
 
@@ -97,6 +106,37 @@ function wrapHttp(mod, scheme) {
 }
 try { wrapHttp(require('http'), 'http'); } catch (_) {}
 try { wrapHttp(require('https'), 'https'); } catch (_) {}
+
+// fetch()/undici bypasses http.request entirely — instrument it via the
+// diagnostics_channel undici publishes. create→headers = request sent until
+// response headers arrive (≈ gateway TTFB); headers→trailers = body download.
+try {
+  const dc = require('diagnostics_channel');
+  const reqStart = new WeakMap();
+  const pathOf = (r) => { try { return (r && (r.origin || '') + (r.path || '')).slice(0, 120); } catch (_) { return '?'; } };
+  dc.subscribe('undici:request:create', ({ request }) => {
+    try { reqStart.set(request, now()); log('fetch.create', { url: pathOf(request) }); } catch (_) {}
+  });
+  dc.subscribe('undici:request:headers', ({ request, response }) => {
+    try {
+      const s = reqStart.get(request);
+      log('fetch.headers', {
+        url: pathOf(request),
+        status: response && response.statusCode,
+        ttfb: s == null ? null : +(now() - s).toFixed(1),
+      });
+    } catch (_) {}
+  });
+  dc.subscribe('undici:request:trailers', ({ request }) => {
+    try {
+      const s = reqStart.get(request);
+      log('fetch.done', { url: pathOf(request), total: s == null ? null : +(now() - s).toFixed(1) });
+    } catch (_) {}
+  });
+  dc.subscribe('undici:request:error', ({ request, error }) => {
+    try { log('fetch.error', { url: pathOf(request), err: String(error && error.message) }); } catch (_) {}
+  });
+} catch (_) {}
 
 // Raw TCP connects not going through http(s) (defensive — catches custom agents).
 try {
@@ -173,16 +213,22 @@ function summarize() {
   // stalls overlap childSync (execFileSync blocks the loop too); native compute
   // ≈ stalls beyond what child_process explains.
   const nativeStall = Math.max(0, +(stallTotal - childSync).toFixed(1));
-  // network in-flight: sum of per-request total windows (overlap possible; this
-  // is an upper bound on serial gateway wait — the timeline disambiguates).
-  const netTotal = sum((e) => e.type === 'net.end', 'total');
-  const reqs = events.filter((e) => e.type === 'net.response').length;
+  // network in-flight: fetch()/undici (the CLI's actual path) + any http.request.
+  // Sum of per-request total windows (overlap possible; timeline disambiguates).
+  const fetchTotal = sum((e) => e.type === 'fetch.done', 'total');
+  const httpTotal = sum((e) => e.type === 'net.end', 'total');
+  const netTotal = fetchTotal + httpTotal;
+  const reqs = events.filter((e) => e.type === 'fetch.create' || e.type === 'net.response').length;
+  const isWorker = /__internal/.test(ARGV);
   return {
+    argv: ARGV,
+    isInternalWorker: isWorker,
     wallMs: wall,
     bucket_A_childSync_ms: +childSync.toFixed(1),
     bucket_B_network_inflight_ms: +netTotal.toFixed(1),
     bucket_C_nativeStall_ms: nativeStall,
     network_requests: reqs,
+    fetch_ttfb_ms: +sum((e) => e.type === 'fetch.headers', 'ttfb').toFixed(1),
     loopStall_total_ms: +stallTotal.toFixed(1),
     accounted_ms: +(childSync + netTotal + nativeStall).toFixed(1),
     unaccounted_ms: +(wall - childSync - netTotal - nativeStall).toFixed(1),
