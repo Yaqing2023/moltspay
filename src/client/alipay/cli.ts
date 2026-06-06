@@ -72,6 +72,37 @@ function makeLineSplitter(onLine: (line: string) => void): (chunk: Buffer) => vo
 export type CliRunner = (args: string[], opts?: RunCliOptions) => Promise<RunCliResult>;
 
 /**
+ * Opt-in CPU/network/native profiling of a single spawn (observe-only).
+ *
+ * Dormant unless BOTH are set in the bot's env:
+ *   MOLTSPAY_ALIPAY_CLI_PROFILE       comma list of steps to profile (or "all")
+ *   MOLTSPAY_ALIPAY_CLI_PROFILE_HOOK  abs path to scripts/cli-profile-hook.cjs
+ * When active for `step`, injects NODE_OPTIONS=--require=<hook> + a per-spawn
+ * MOLTSPAY_CLI_PROFILE_OUT jsonl path so the hook can decompose the spawn's
+ * wall time into childSync / network / nativeStall buckets. stdout is left
+ * untouched — the hook only ever writes to its own file. See the hook header
+ * and docs/ALIPAY-SLOWNESS-REPORT for the why.
+ */
+function profileEnv(step: string, flow?: string): NodeJS.ProcessEnv {
+  const want = process.env.MOLTSPAY_ALIPAY_CLI_PROFILE;
+  const hook = process.env.MOLTSPAY_ALIPAY_CLI_PROFILE_HOOK;
+  if (!want || !hook) return {};
+  const steps = want.split(',').map((s) => s.trim());
+  if (!steps.includes('all') && !steps.includes(step)) return {};
+  const dir = process.env.MOLTSPAY_ALIPAY_CLI_PROFILE_DIR || '/tmp';
+  const safe = `${flow ?? 'noflow'}-${step}-${Date.now()}`.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const out = `${dir}/cli-profile-${safe}.json`;
+  // filterEnv already strips the bot's own NODE_OPTIONS from the child, so the
+  // CLI normally gets none — give it ONLY the profiling require, nothing else,
+  // to avoid perturbing the very spawn we're measuring.
+  alipayLog.info('cli.profile', { flow, step, out });
+  return {
+    NODE_OPTIONS: `--require=${hook}`,
+    MOLTSPAY_CLI_PROFILE_OUT: out,
+  };
+}
+
+/**
  * Spawn alipay-bot with the given args, forwarding every output line verbatim
  * and collecting them for the caller to parse. Resolves with the exit code.
  */
@@ -96,7 +127,7 @@ export const runCli: CliRunner = (args, opts = {}) => {
 
   return new Promise<RunCliResult>((resolve, reject) => {
     const child = spawn(bin, args, {
-      env: { ...filterEnv(process.env), ...(opts.env ?? {}) },
+      env: { ...filterEnv(process.env), ...profileEnv(step, opts.flow), ...(opts.env ?? {}) },
     });
 
     if (opts.signal) {
