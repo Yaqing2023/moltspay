@@ -116,6 +116,17 @@ npm run verify:alipay:http
 
 **Fixed:** Improved payment status parsing for Alipay transactions, correctly handling `UNPAID` state.
 
+### Alipay Latency: Cross-Flow `check-wallet` Cache
+
+**Improved:** Wallet authorization status is cached across flows (the status doesn't change between payments once authorized), removing a ~23s `check-wallet` spawn from the pre-QR window of every payment after the first.
+
+### Alipay Latency: Overlapping Status Polls
+
+**Improved:** `pollUntil` now launches overlapping `402-query-payment-status` spawns on a fixed cadence instead of waiting for each ~25–36s blocking spawn to finish before starting the next. Up to `POLL_MAX_INFLIGHT` (default `2`) concurrent polls; the first to observe `paid` wins and aborts the rest. This cuts post-payment detection lag from ~(2×spawn + gap) ≈ 50–60s down to ~(cadence + 1×spawn).
+
+- **Tunables:** `maxInflight` / `launchIntervalMs` (PollOptions), or env `MOLTSPAY_ALIPAY_POLL_MAX_INFLIGHT` / `MOLTSPAY_ALIPAY_POLL_LAUNCH_MS`. Set `maxInflight=1` to restore strict sequential polling.
+- **Safety:** concurrent polls are read-only verifies; the cashier `/execute` handler is a no-op and real fulfillment fires once via the seller's `onPaid` — no double-charge or double-delivery.
+
 ---
 
 ## 📚 Documentation

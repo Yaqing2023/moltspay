@@ -19,7 +19,7 @@
 
 5. **`check-wallet` 的 ~23s 是纯开销**——钱包授权状态在两笔之间不变，已确认开通就不必每笔重跑。**跨流缓存即省 ~23s，是当前最高 ROI 的改动。**
 
-6. **轮询节奏被 CLI 自身拖垮：** `query-payment-status` 每次 spawn 自身就阻塞 25–36s。名义间隔 3s 形同虚设，**用户付完款后最长 ~36s 才被检测到**，拉长了 settle 体感。
+6. **轮询节奏被 CLI 自身拖垮：** `query-payment-status` 每次 spawn 自身就阻塞 25–36s。名义间隔 3s 形同虚设，**用户付完款后最长 ~36s 才被检测到**，拉长了 settle 体感。→ **已由 Rec #3 重叠轮询缓解（见 §5.1）。**
 
 ---
 
@@ -104,12 +104,23 @@ ensure-cli       2.6s  █                          3.5%
 
 | # | 改动 | 预期收益 | 风险/成本 |
 |---|---|---|---|
-| **1** | **`check-wallet` 跨流缓存/跳过**（进程级或带 TTL 持久化；已知开通即跳过） | **每笔省 ~23s（pre-QR 的 31%）** | 低；纯开销、可控、改动小 |
+| **1** | ✅ **已实现** `check-wallet` 跨流缓存/跳过（commit 248973a） | **每笔省 ~23s（pre-QR 的 31%）** | 低；纯开销、可控、改动小 |
 | 2 | **常驻/预热 CLI 进程**，消除每次 spawn 的 ~2.5–6s 冷启动（本笔 8 次） | pre-QR 省 ~10–15s，整体更多 | 中；CLI 无 daemon 子命令，需自建常驻 host 或预热 claw-info 缓存 |
-| 3 | **缩短/非阻塞轮询**，降低单次 query 的 25–36s 阻塞 | 付款检测延迟从 ~36s 降下来，改善 settle 体感 | 中；取决于 CLI 是否有更轻的查询路径 |
+| 3 | ✅ **已实现** 重叠/非阻塞轮询（见 §5.1） | 付款检测延迟从 ~(2×spawn+gap)≈50–60s 降到 ~(cadence+1×spawn) | 中；并发查询，安全性见 §5.1 |
 | 4 | `402-buyer-pay` 的 ~35s 网关固有阻塞 | — | 高/不可控；除非 alipay-bot 提供更快建单路径 |
 
-**下一步：先实现 #1。** 这是确定能砍 ~23s、风险最低的一刀。
+**下一步：#2（常驻/预热 CLI）。** #1、#3 已落地，剩下消除冷启动需自建常驻 host。
+
+### 5.1 Rec #3 实现：重叠轮询（`src/client/alipay/poll.ts`）
+
+由于单次 `402-query-payment-status` spawn 自身阻塞 25–36s（首字节≈总时长，非服务端长轮询），Node 侧无法压缩单次调用，但可**按固定节奏发起重叠轮询**，不等上一次返回：
+
+- **机制：** 最多 `POLL_MAX_INFLIGHT`（默认 2）个并发 in-flight 查询，按 `POLL_INTERVAL_MS`（默认 3s）的发起节奏补满空槽；第一个观察到 `paid` 的获胜并立即 `internal.abort()` 取消其余兄弟 spawn。
+- **效果：** 付款后检测延迟从「两次 spawn + 间隔」(~50–60s) 降到「发起节奏 + 一次 spawn」。
+- **可调：** `maxInflight` / `launchIntervalMs`（PollOptions），或环境变量 `MOLTSPAY_ALIPAY_POLL_MAX_INFLIGHT` / `MOLTSPAY_ALIPAY_POLL_LAUNCH_MS`；设 `maxInflight=1` 退回严格顺序（旧行为）。
+- **安全性：** 并发查询每次会以 read-only verify 复核履约（POST `/execute`），安全因为 (a) moltspay 收银台 `/execute` handler 是 no-op `{ok:true}`，(b) 真正履约（如 Discord 角色）解耦到卖家单次 `onPaid`，仅在本函数 resolve 时触发一次——绝不 per-poll。重复/并发查询既不双重扣款也不重复发货。
+- **超时语义：** 仅当无任何 in-flight 时才判超时（已发起的 poll 可能恰在 deadline 后返回 paid，与旧循环「仅在 spawn 前检查 deadline」一致）。
+- **测试：** `test/client/alipay/poll.test.ts` 14 通过，含 gate-runner 验证真实并发上限、首个 paid 获胜、`maxInflight=1` 严格顺序。
 
 ---
 
