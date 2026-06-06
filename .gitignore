@@ -25,6 +25,9 @@ cert/
 *.pem
 ALIPAY_PRIVATE_KEY*
 ALIPAY_PUBLIC_KEY*
+# Local service fixtures — contain seller credentials (seller_id/app_id) and
+# private-key paths; used for live E2E, never committed.
+*.services.json
 
 # Local QA scratch (payment QR images from live E2E — contain payment info)
 tmp/
