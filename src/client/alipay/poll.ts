@@ -19,13 +19,18 @@
  * lag to roughly (launch cadence + one spawn) instead of (two spawns + gap).
  *
  * SAFETY: this issues concurrent `402-query-payment-status` calls, each of which
- * re-requests the resource (POST `/execute`) to confirm fulfillment. That is
- * safe here because (a) the moltspay cashier's `/execute` skill handler is a
- * no-op `{ok:true}` and (b) actual fulfillment (e.g. the Discord role) is
- * decoupled into the seller's single `onPaid`, fired ONCE when this function
- * resolves — never per-poll. The query itself is a read-only verify, so repeated
- * / concurrent calls neither double-charge (the buyer already paid) nor
- * double-deliver. Set concurrency to 1 to restore strict sequential polling.
+ * re-requests the resource (POST `/execute`) — and `/execute` DOES drive Alipay
+ * fulfillment confirmation, it is not a no-op. Concurrency is nonetheless safe
+ * because (a) Alipay fulfillment is IDEMPOTENT: the buyer already paid, so no
+ * concurrent call double-charges, and the first `/execute` to reach the gateway
+ * fulfills (`status:"fulfilled"`) while any concurrent sibling is rejected with
+ * `40004 交易状态不允许履约` ("trade state does not allow fulfillment") — observed
+ * live 2026-06-06, flow …048039. A 40004 sibling parses to `unknown` (NOT
+ * `rejected`), so a loser never terminates the poll falsely. (b) Actual delivery
+ * (e.g. the Discord role) is decoupled into the seller's single `onPaid`, fired
+ * ONCE when this function resolves — never per-poll. So repeated/concurrent calls
+ * neither double-charge nor double-deliver. Set concurrency to 1 to restore
+ * strict sequential polling.
  */
 
 import type { CliRunner } from './cli.js';
