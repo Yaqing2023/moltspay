@@ -5,7 +5,7 @@ import path from 'path';
 import {
   AlipayClient, resolveSessionId, assertTradeNo,
   parseTradeNo, parsePaymentUrl, extractMedia, extractBody, isWalletReady,
-  resetWalletCache,
+  resetWalletCache, resetIntentCache,
 } from '../../../src/client/alipay/index.js';
 import {
   AlipayProtocolError, NeedsWalletSetupError,
@@ -258,5 +258,66 @@ describe('checkWallet — process-level positive cache', () => {
     await client.checkWallet();
     await client.checkWallet();
     expect(countWalletSpawns(runner)).toBe(2);
+  });
+});
+
+describe('payment-intent — process-level handshake skip-cache', () => {
+  const TTL = 10 * 60 * 1000; // matches DEFAULT_INTENT_TTL_MS
+  let configDir: string;
+  let t: number;
+  const now = () => t;
+  const countIntentSpawns = (runner: CliRunner) =>
+    (runner as any).mock.calls.filter((c: any[]) => c[0][0] === 'payment-intent').length;
+  const pay = (client: AlipayClient) =>
+    client.pay402({ resourceUrl: 'http://x/execute', requirement });
+
+  beforeAll(() => { configDir = mkdtempSync(path.join(tmpdir(), 'alipay-ic-')); });
+  // cacheIntent + cacheWallet both on so only the intent count is under test.
+  const mk = () => {
+    const runner = fakeRunner();
+    const client = new AlipayClient({
+      configDir, runner, getVersion: async () => 'v0.3.15', now,
+      cacheIntent: true, cacheWallet: true,
+    });
+    return { runner, client };
+  };
+
+  it('skips the payment-intent spawn on the 2nd payment within the TTL', async () => {
+    resetIntentCache(); resetWalletCache(); t = 0;
+    const a = mk();
+    await pay(a.client);
+    const b = mk();           // new client, same (configDir, framework)
+    await pay(b.client);
+    expect(countIntentSpawns(a.runner)).toBe(1);
+    expect(countIntentSpawns(b.runner)).toBe(0); // 2nd payment skipped the handshake
+  });
+
+  it('re-spawns the handshake once the TTL has elapsed', async () => {
+    resetIntentCache(); resetWalletCache(); t = 0;
+    const a = mk();
+    await pay(a.client);      // caches until t = TTL
+    t = TTL + 1;              // expire
+    const b = mk();
+    await pay(b.client);
+    expect(countIntentSpawns(b.runner)).toBe(1);
+  });
+
+  it('resetIntentCache() forces the next payment to handshake', async () => {
+    resetIntentCache(); resetWalletCache(); t = 0;
+    await pay(mk().client);
+    resetIntentCache();
+    const b = mk();
+    await pay(b.client);
+    expect(countIntentSpawns(b.runner)).toBe(1);
+  });
+
+  it('injected runners are NOT cached by default (cacheIntent defaults off)', async () => {
+    resetIntentCache(); resetWalletCache(); t = 0;
+    const runner = fakeRunner();
+    // No cacheIntent → defaults to !runner → false for an injected runner.
+    const client = new AlipayClient({ configDir, runner, getVersion: async () => 'v0.3.15', now });
+    await pay(client);
+    await pay(client);
+    expect(countIntentSpawns(runner)).toBe(2);
   });
 });

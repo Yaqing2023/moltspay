@@ -54,6 +54,9 @@ export type { AlipayLogLevel, AlipayLogEvent, AlipayLogSink } from './client/ali
 // Alipay check-wallet cache control (call after the user binds/unbinds a wallet)
 export { resetWalletCache } from './client/alipay/index.js';
 
+// Alipay payment-intent handshake skip-cache control (call on session reset)
+export { resetIntentCache } from './client/alipay/index.js';
+
 // Chain configuration
 export { CHAINS, getChain, listChains, getChainById, ERC20_ABI } from './chains/index.js';
 

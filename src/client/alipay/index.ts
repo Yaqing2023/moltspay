@@ -85,6 +85,11 @@ export interface AlipayClientOptions {
    * runners always spawn. Set explicitly to exercise the cache in tests.
    */
   cacheWallet?: boolean;
+  /**
+   * Whether the payment-intent handshake may be skipped via the process-level
+   * cache. Same default as {@link cacheWallet} (only for the default runner).
+   */
+  cacheIntent?: boolean;
 }
 
 const TRADE_NO_RE = /^\d{32}$/;
@@ -216,6 +221,37 @@ export function resetWalletCache(): void {
   walletReadyUntil.clear();
 }
 
+/**
+ * Default TTL (ms) for the payment-intent handshake skip-cache. `payment-intent`
+ * is a session handshake whose OUTPUT pay402 discards — it runs purely for its
+ * CLI/server side-effect. The profiler showed each spawn costs ~5-9s, almost
+ * all of it the alipay-bot per-process cold start (device-fingerprint + native
+ * risk-control init), NOT gateway. Because `402-buyer-pay` is passed `-s/-i/-w`
+ * and is "self-sufficient even if the cached intent didn't stick" (see step 4),
+ * a handshake already done for this account need not be repeated per payment.
+ * We therefore skip the spawn once one has succeeded within the TTL. The session
+ * id is per-payment random, so — exactly like the wallet cache — we key by
+ * (configDir, framework), the account-stable identity. Override via
+ * `MOLTSPAY_ALIPAY_INTENT_TTL_MS`; set `0` to disable and always handshake.
+ */
+const DEFAULT_INTENT_TTL_MS = 10 * 60 * 1000; // 10 min
+
+function resolveIntentTtlMs(): number {
+  const raw = process.env.MOLTSPAY_ALIPAY_INTENT_TTL_MS;
+  if (raw === undefined || raw.trim() === '') return DEFAULT_INTENT_TTL_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_INTENT_TTL_MS;
+}
+
+// Process-level "handshake done" cache, keyed (configDir, framework) like the
+// wallet cache, and likewise only honored for the DEFAULT runner.
+const intentDoneUntil = new Map<string, number>();
+
+/** Clear the payment-intent skip-cache (tests, or after (un)bind / session reset). */
+export function resetIntentCache(): void {
+  intentDoneUntil.clear();
+}
+
 export class AlipayClient {
   private readonly sessionId: string;
   private readonly configDir: string;
@@ -225,6 +261,8 @@ export class AlipayClient {
   private readonly now: () => number;
   /** Only the default runner may use the process-level wallet cache. */
   private readonly walletCacheable: boolean;
+  /** Only the default runner may use the process-level payment-intent cache. */
+  private readonly intentCacheable: boolean;
 
   constructor(opts: AlipayClientOptions = {}) {
     this.sessionId = resolveSessionId(opts.sessionId, process.env.AIPAY_SESSION_ID);
@@ -234,6 +272,7 @@ export class AlipayClient {
     this.getVersion = opts.getVersion;
     this.now = opts.now ?? Date.now;
     this.walletCacheable = opts.cacheWallet ?? !opts.runner;
+    this.intentCacheable = opts.cacheIntent ?? !opts.runner;
   }
 
   /**
@@ -303,12 +342,27 @@ export class AlipayClient {
     // Step 0: version gate.
     await timeStep('ensure-cli', flow, () => ensureCli(this.getVersion));
 
-    // Step 1b: session handshake (--intent-summary is mandatory).
-    await this.runner(
-      ['payment-intent', '--session-id', this.sessionId, '--intent-summary', intentSummary,
-        '--framework', this.framework],
-      { onLine, signal, step: 'payment-intent', flow },
-    );
+    // Step 1b: session handshake (--intent-summary is mandatory). Skipped when a
+    // prior handshake for this (configDir, framework) is still within TTL — the
+    // ~5-9s spawn is almost all CLI cold start, and 402-buyer-pay re-supplies
+    // -s/-i/-w so it stands alone. See {@link DEFAULT_INTENT_TTL_MS}.
+    const intentTtlMs = resolveIntentTtlMs();
+    const intentKey = `${this.configDir}::${this.framework}`;
+    const useIntentCache = this.intentCacheable && intentTtlMs > 0;
+    const intentUntil = useIntentCache ? intentDoneUntil.get(intentKey) : undefined;
+    if (intentUntil !== undefined && this.now() < intentUntil) {
+      alipayLog.info('intent.cache', { flow, step: 'payment-intent', hit: true, ttlMsLeft: intentUntil - this.now() });
+    } else {
+      await this.runner(
+        ['payment-intent', '--session-id', this.sessionId, '--intent-summary', intentSummary,
+          '--framework', this.framework],
+        { onLine, signal, step: 'payment-intent', flow },
+      );
+      if (useIntentCache) {
+        intentDoneUntil.set(intentKey, this.now() + intentTtlMs);
+        alipayLog.info('intent.cache', { flow, step: 'payment-intent', hit: false, cachedForMs: intentTtlMs });
+      }
+    }
 
     // Step 2: wallet must be opened.
     await this.checkWallet(signal, flow);
