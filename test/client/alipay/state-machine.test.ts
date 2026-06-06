@@ -5,6 +5,7 @@ import path from 'path';
 import {
   AlipayClient, resolveSessionId, assertTradeNo,
   parseTradeNo, parsePaymentUrl, extractMedia, extractBody, isWalletReady,
+  resetWalletCache,
 } from '../../../src/client/alipay/index.js';
 import {
   AlipayProtocolError, NeedsWalletSetupError,
@@ -190,5 +191,72 @@ describe('AlipayClient.pay402 — 8-step state machine', () => {
       resourceUrl: 'http://x/execute',
       requirement: { ...requirement, extra: {} },
     })).rejects.toBeInstanceOf(AlipayProtocolError);
+  });
+});
+
+describe('checkWallet — process-level positive cache', () => {
+  const TTL = 10 * 60 * 1000; // matches DEFAULT_WALLET_TTL_MS
+  let configDir: string;
+  let t: number;
+  const now = () => t;
+  const countWalletSpawns = (runner: CliRunner) =>
+    (runner as any).mock.calls.filter((c: any[]) => c[0][0] === 'check-wallet').length;
+
+  beforeAll(() => { configDir = mkdtempSync(path.join(tmpdir(), 'alipay-wc-')); });
+  // Fresh cache per test; t reset each time.
+  const mk = (extra?: Partial<Record<string, () => Promise<RunCliResult>>>) => {
+    const runner = fakeRunner(extra);
+    const client = new AlipayClient({
+      configDir, runner, getVersion: async () => 'v0.3.15', now, cacheWallet: true,
+    });
+    return { runner, client };
+  };
+
+  it('skips the check-wallet spawn on the 2nd call within the TTL', async () => {
+    resetWalletCache(); t = 0;
+    const { runner, client } = mk();
+    await client.checkWallet();
+    await client.checkWallet();
+    expect(countWalletSpawns(runner)).toBe(1); // 2nd was a cache hit
+  });
+
+  it('re-spawns once the TTL has elapsed', async () => {
+    resetWalletCache(); t = 0;
+    const { runner, client } = mk();
+    await client.checkWallet();        // caches until t = TTL
+    t = TTL + 1;                       // expire
+    await client.checkWallet();        // must spawn again
+    expect(countWalletSpawns(runner)).toBe(2);
+  });
+
+  it('never caches a NOT-ready verdict (each call re-spawns)', async () => {
+    resetWalletCache(); t = 0;
+    const notReady = () => Promise.resolve({
+      exitCode: 0, lines: ['{"code":500,"message":"未开通"}'],
+    });
+    const { runner, client } = mk({ 'check-wallet': notReady });
+    await expect(client.checkWallet()).rejects.toBeInstanceOf(NeedsWalletSetupError);
+    await expect(client.checkWallet()).rejects.toBeInstanceOf(NeedsWalletSetupError);
+    expect(countWalletSpawns(runner)).toBe(2);
+  });
+
+  it('resetWalletCache() forces the next call to spawn', async () => {
+    resetWalletCache(); t = 0;
+    const a = mk();
+    await a.client.checkWallet();
+    resetWalletCache();
+    const b = mk();
+    await b.client.checkWallet();
+    expect(countWalletSpawns(b.runner)).toBe(1);
+  });
+
+  it('injected runners are NOT cached by default (cacheWallet defaults off)', async () => {
+    resetWalletCache(); t = 0;
+    const runner = fakeRunner();
+    // No cacheWallet → defaults to !runner → false for an injected runner.
+    const client = new AlipayClient({ configDir, runner, getVersion: async () => 'v0.3.15', now });
+    await client.checkWallet();
+    await client.checkWallet();
+    expect(countWalletSpawns(runner)).toBe(2);
   });
 });

@@ -346,4 +346,52 @@ moltspay pay --rail alipay http://merchant.local:3000/services/text-to-video \
 
 ---
 
+## 9. 已知 Bug
+
+### 9.1 结算轮询用 GET 取资源，与支付步骤（POST）不一致 → 支付成功后 `pay()` 永不 resolve
+
+**状态：** ✅ 已在源码修复（2026-06-05，moltspay@1.7.0 / alipay-bot 0.3.15）。
+**修复：** `src/client/alipay/poll.ts` — `PollOptions` 增加 `method`/`data`，`pollUntil` 在 `402-query-payment-status` 上补 `-m/-d`；`src/client/alipay/index.ts` — `pay402` 调 `pollUntil` 时透传 `opts.method`/`opts.data`。这样结算取资源与 `402-buyer-pay` 一致（POST `/execute`）。
+另：`src/client/alipay/poll.ts` 的 `parseStatus` 增加锚定标记 `"status":"fulfilled"`——因 alipay-bot 0.3.15 实际输出的是**人类 markdown 报告**（非注释所述的纯 JSON envelope），原 `parseStatus` 即便取资源成功也判 `unknown`；新标记取自服务端结算后的资源体，只在已结算时出现，安全。下为原始记录：
+
+**现象：**
+买家用 `MoltsPayClient.pay(serverUrl, service, params, { rail:'alipay' })` 付款。支付宝侧**已扣款成功**（alipay-bot 输出 `✓ 查询支付状态成功`），但 `pay()` **一直不 resolve**，`onPaymentPending` 之后再无进展，调用方（如 Discord bot）卡在二维码界面、不触发后续履约。
+
+**根因（client 内部前后方法不一致）：**
+`AlipayClient.pay402`（`dist/client/index.js`）两步用了不同的 HTTP 方法：
+
+- **402-buyer-pay**（创建/支付）带 `-m POST -d <body>`：
+  ```js
+  const payArgs = ["402-buyer-pay", "-f", challengeFile, "-r", resourceUrl, ...];
+  if (opts.method) payArgs.push("-m", opts.method);   // POST
+  if (opts.data)   payArgs.push("-d", opts.data);
+  ```
+- **402-query-payment-status**（结算轮询）经 `pollUntil` 调用，**未透传 method/data**：
+  ```js
+  // pay402: 调 pollUntil 时未传 method/data
+  const poll = await pollUntil(tradeNo, resourceUrl, { deadline, signal, onLine, runner, now });
+  // pollUntil: query-payment-status 无 -m → alipay-bot 默认 GET
+  await runner(["402-query-payment-status", "-t", tradeNo, "-r", resourceUrl], {...});
+  ```
+
+而 `MoltsPayServer` 的资源端点 `/execute` **只接受 POST**（`server/index.ts`：`url.pathname === '/execute' && req.method === 'POST'`；GET 仅在 `/<serviceId>` 的 MPP 路径上支持）。于是结算轮询 **GET `/execute` → 404 `Not found`**，alipay-bot 进入错误分支输出中文 prose，client 的 `parseStatus` 只认 `TRADE_SUCCESS`/`{success:true}`/`{code:200}` → 判 `unknown` → 死循环直到 `pay_before` 超时。
+
+**判定：** client 自身「支付用 POST、查状态取资源用 GET」不一致；GET 又与 server 的 POST-only `/execute` 不一致。属 **SDK client bug**（`pollUntil` 未透传 buyer-pay 用的 method/data）。
+
+**影响范围：** 所有「resourceUrl 指向 POST-only `/execute`」的自托管/收银台型部署（service 未声明 GET 可达的 `endpoint` 时尤甚）。典型场景：bot 把支付宝当纯收银台（履约在 bot 侧）。
+
+**建议修复（client）：** `pay402` 把 `opts.method`/`opts.data` 透传进 `pollUntil`，`pollUntil` 在 `402-query-payment-status` 上补 `-m <method> -d <data>`，使取资源请求与 buyer-pay 一致（POST `/execute`），让 alipay-bot 走成功分支、`parseStatus` 正常判定。
+
+**规避（不改 SDK）：** 给 `services[].endpoint` 配一个 GET 可达的资源路径（如 `/<serviceId>`），使 client 的 resourceUrl 不落在 POST-only 的 `/execute` 上（需实测确认 `parseStatus` 在该路径输出下能判 paid）。
+
+### 9.2 `parsePaymentUrl` 吞掉 markdown 结尾 `)` → 收银台链接/二维码 404
+
+**状态：** ✅ 已在源码修复（2026-06-05）。`src/client/alipay/index.ts` 的 `parsePaymentUrl` 提取后 `.replace(/[)\]`>]+$/, '')` 去掉尾部 markdown 字符。
+
+alipay-bot 把链接打印为 markdown `[点击此处](https://u.alipay.cn/xxx)`。`parsePaymentUrl` 的正则 `https?:\/\/\S+` 贪婪匹配会把结尾的 `)` 一并吞入 → 返回的 `paymentUrl` 变成 `https://u.alipay.cn/xxx)`（带尾括号）→ 打开/扫码 404。
+
+**修复（client）：** 提取后 `.replace(/[)\]`>]+$/, '')` 去掉尾部 markdown 字符。**规避（调用方）：** 对 `onPaymentPending` 返回的 `paymentUrl`/`shortenUrl` 自行清洗尾部 `)]`> 等再用。
+
+---
+
 *文档版本：v1（rc.1 实现中）| 创建：2026-05-29 | 目标版本：`moltspay@1.7.0`*

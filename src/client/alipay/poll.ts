@@ -11,6 +11,7 @@
 import type { CliRunner } from './cli.js';
 import { runCli } from './cli.js';
 import { AlipayPaymentRejectedError, AlipayPaymentTimeoutError } from './errors.js';
+import { alipayLog } from './log.js';
 
 export const POLL_INTERVAL_MS = 3_000;
 
@@ -57,7 +58,13 @@ export function parseStatus(lines: string[]): PaymentStatus {
     // Not JSON — fall through to anchored textual markers.
   }
   const text = raw.toUpperCase();
-  if (/TRADE_SUCCESS|TRADE_FINISHED/.test(text)) return 'paid';
+  // alipay-bot 0.3.15's `402-query-payment-status` renders a human markdown
+  // report (not the bare JSON envelope), so JSON.parse above misses. When the
+  // payment is settled the report embeds the re-fetched resource, whose body
+  // carries our server's `"payment": { "status": "fulfilled" }`. That marker is
+  // anchored + quoted and only appears after the facilitator verified the
+  // payment, so it's a safe "paid" signal (unlike a bare "SUCCESS").
+  if (/TRADE_SUCCESS|TRADE_FINISHED|"STATUS":\s*"FULFILLED"/.test(text)) return 'paid';
   if (/TRADE_CLOSED|REJECTED|REFUSE|CANCEL/.test(text)) return 'rejected';
   if (/WAIT_BUYER_PAY|UNPAID|PENDING|WAITING/.test(text)) return 'pending';
   return 'unknown';
@@ -76,6 +83,14 @@ export interface PollOptions {
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Injectable clock (default: Date.now). */
   now?: () => number;
+  /**
+   * HTTP method + body for the resource re-fetch, mirrored from the buyer-pay
+   * step. Required so `402-query-payment-status` re-requests the resource the
+   * SAME way it was paid (POST + body). Without these it defaults to GET, which
+   * 404s against a POST-only `/execute` and leaves the trade undetectable as paid.
+   */
+  method?: string;
+  data?: string;
 }
 
 function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -112,6 +127,7 @@ export async function pollUntil(
   const runner = opts.runner ?? runCli;
   const sleep = opts.sleep ?? defaultSleep;
   const now = opts.now ?? Date.now;
+  let tick = 0;
 
   for (;;) {
     if (now() >= opts.deadline) {
@@ -120,11 +136,17 @@ export async function pollUntil(
       );
     }
 
+    tick += 1;
     const { lines } = await runner(
-      ['402-query-payment-status', '-t', tradeNo, '-r', resourceUrl],
-      { onLine: opts.onLine, signal: opts.signal },
+      [
+        '402-query-payment-status', '-t', tradeNo, '-r', resourceUrl,
+        ...(opts.method ? ['-m', opts.method] : []),
+        ...(opts.data ? ['-d', opts.data] : []),
+      ],
+      { onLine: opts.onLine, signal: opts.signal, step: 'query-payment-status', flow: tradeNo },
     );
     const status = parseStatus(lines);
+    alipayLog.debug('poll.tick', { flow: tradeNo, tick, status });
     if (status === 'paid') return { status: 'paid', lines };
     if (status === 'rejected') {
       throw new AlipayPaymentRejectedError(`Payment ${tradeNo} was rejected`);

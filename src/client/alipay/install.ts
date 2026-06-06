@@ -40,12 +40,8 @@ const defaultGetVersion: VersionGetter = async () => {
   return stdout;
 };
 
-/**
- * Ensure alipay-bot is installed and new enough. Throws:
- *   - AlipayCliNotFoundError if the binary is missing (ENOENT)
- *   - AlipayCliVersionError  if older than {@link MIN_CLI_VERSION}
- */
-export async function ensureCli(getVersion: VersionGetter = defaultGetVersion): Promise<string> {
+/** Run the gate once, no caching (the original logic). */
+async function ensureCliUncached(getVersion: VersionGetter): Promise<string> {
   let stdout: string;
   try {
     stdout = await getVersion();
@@ -68,4 +64,47 @@ export async function ensureCli(getVersion: VersionGetter = defaultGetVersion): 
     );
   }
   return version;
+}
+
+// Process-level memo for the real-CLI path. The installed alipay-bot version is
+// immutable for a process's lifetime, yet `pay402` re-runs the gate on EVERY
+// payment — and spawning `alipay-bot --version` measured ~3.8s each (a pure-
+// overhead cold start). Cache the first SUCCESS so subsequent payments skip the
+// spawn entirely. We never cache failures (a transient/ENOENT stays retryable),
+// and only cache the DEFAULT getter so injected (test/DI) getters run uncached.
+let cachedVersion: string | null = null;
+let inflight: Promise<string> | null = null;
+
+/** Clear the cached version gate (tests / after a CLI upgrade). */
+export function resetCliVersionCache(): void {
+  cachedVersion = null;
+  inflight = null;
+}
+
+/**
+ * Ensure alipay-bot is installed and new enough. Throws:
+ *   - AlipayCliNotFoundError if the binary is missing (ENOENT)
+ *   - AlipayCliVersionError  if older than {@link MIN_CLI_VERSION}
+ *
+ * Memoized per process for the default getter: only the first call spawns
+ * `alipay-bot --version`; later calls return the cached version immediately.
+ * Concurrent first calls share a single in-flight spawn.
+ */
+export async function ensureCli(getVersion: VersionGetter = defaultGetVersion): Promise<string> {
+  // Injected getters (tests/DI) bypass the cache so each call observes the fake.
+  if (getVersion !== defaultGetVersion) {
+    return ensureCliUncached(getVersion);
+  }
+  if (cachedVersion) return cachedVersion;
+  if (!inflight) {
+    inflight = ensureCliUncached(getVersion)
+      .then((v) => {
+        cachedVersion = v;
+        return v;
+      })
+      .finally(() => {
+        inflight = null;
+      });
+  }
+  return inflight;
 }

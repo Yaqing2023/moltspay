@@ -26,6 +26,7 @@ import { runCli } from './cli.js';
 import { ensureCli, type VersionGetter } from './install.js';
 import { pollUntil } from './poll.js';
 import { AlipayProtocolError, NeedsWalletSetupError } from './errors.js';
+import { alipayLog, timeStep } from './log.js';
 
 export interface AlipayPendingInfo {
   paymentUrl: string;
@@ -78,6 +79,12 @@ export interface AlipayClientOptions {
   runner?: CliRunner;
   getVersion?: VersionGetter;
   now?: () => number;
+  /**
+   * Whether check-wallet results may use the process-level cache. Defaults to
+   * "only when the default (real-CLI) runner is used", so injected test/DI
+   * runners always spawn. Set explicitly to exercise the cache in tests.
+   */
+  cacheWallet?: boolean;
 }
 
 const TRADE_NO_RE = /^\d{32}$/;
@@ -115,7 +122,10 @@ export function parsePaymentUrl(lines: string[]): { paymentUrl?: string; shorten
   for (const line of lines) {
     const m = line.match(/(alipays?:\/\/\S+|https?:\/\/\S+)/i);
     if (!m) continue;
-    const url = m[1];
+    // alipay-bot prints the link inside markdown `[文字](url)`; the greedy `\S+`
+    // swallows the trailing `)` (and any `]`/`` ` ``/`>`), yielding a URL that
+    // 404s. Strip those trailing chars.
+    const url = m[1].replace(/[)\]`>]+$/, '');
     if (/short|qr\.alipay|surl|\/s\//i.test(line) && !shortenUrl) shortenUrl = url;
     else if (!paymentUrl) paymentUrl = url;
   }
@@ -177,6 +187,35 @@ export function extractBody(lines: string[]): string {
   return lines.filter((l) => !/^\s*(MEDIA|STATUS|INFO):/.test(l)).join('\n').trim();
 }
 
+/**
+ * Default TTL (ms) for the positive check-wallet cache. The wallet
+ * authorization is ACCOUNT-level and stable once opened, yet `pay402` re-runs
+ * `check-wallet` on EVERY payment — measured ~22s each (the per-line timeline
+ * shows a single silent ~22s gateway round-trip, then an instant `{code:200}`
+ * dump). Overridable via `MOLTSPAY_ALIPAY_WALLET_TTL_MS`; set it to `0` to
+ * disable the cache and always spawn `check-wallet`.
+ */
+const DEFAULT_WALLET_TTL_MS = 10 * 60 * 1000; // 10 min
+
+function resolveWalletTtlMs(): number {
+  const raw = process.env.MOLTSPAY_ALIPAY_WALLET_TTL_MS;
+  if (raw === undefined || raw.trim() === '') return DEFAULT_WALLET_TTL_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_WALLET_TTL_MS;
+}
+
+// Process-level positive cache, keyed by (configDir, framework) so distinct
+// accounts never share state. We cache ONLY the "ready" verdict (a freshly
+// bound wallet must be observed live, so NOT-ready is never cached) and ONLY
+// for the DEFAULT runner — injected (test/DI) runners always spawn, exactly
+// like the ensure-cli cache in ./install.ts.
+const walletReadyUntil = new Map<string, number>();
+
+/** Clear the check-wallet cache (tests, or after the user (un)binds a wallet). */
+export function resetWalletCache(): void {
+  walletReadyUntil.clear();
+}
+
 export class AlipayClient {
   private readonly sessionId: string;
   private readonly configDir: string;
@@ -184,6 +223,8 @@ export class AlipayClient {
   private readonly runner: CliRunner;
   private readonly getVersion?: VersionGetter;
   private readonly now: () => number;
+  /** Only the default runner may use the process-level wallet cache. */
+  private readonly walletCacheable: boolean;
 
   constructor(opts: AlipayClientOptions = {}) {
     this.sessionId = resolveSessionId(opts.sessionId, process.env.AIPAY_SESSION_ID);
@@ -192,15 +233,42 @@ export class AlipayClient {
     this.runner = opts.runner ?? runCli;
     this.getVersion = opts.getVersion;
     this.now = opts.now ?? Date.now;
+    this.walletCacheable = opts.cacheWallet ?? !opts.runner;
   }
 
-  /** Throws NeedsWalletSetupError unless alipay-bot reports an opened wallet. */
-  async checkWallet(signal?: AbortSignal): Promise<void> {
-    const { lines } = await this.runner(['check-wallet'], { signal });
+  /**
+   * Throws NeedsWalletSetupError unless alipay-bot reports an opened wallet.
+   *
+   * Skips the ~22s `check-wallet` spawn entirely when a prior call cached a
+   * "ready" verdict within the TTL (see {@link DEFAULT_WALLET_TTL_MS}).
+   */
+  async checkWallet(signal?: AbortSignal, flow?: string): Promise<void> {
+    const ttlMs = resolveWalletTtlMs();
+    const cacheKey = `${this.configDir}::${this.framework}`;
+    const useCache = this.walletCacheable && ttlMs > 0;
+
+    if (useCache) {
+      const until = walletReadyUntil.get(cacheKey);
+      if (until !== undefined && this.now() < until) {
+        alipayLog.info('wallet.cache', { flow, step: 'check-wallet', hit: true, ttlMsLeft: until - this.now() });
+        return;
+      }
+    }
+
+    const { lines } = await this.runner(['check-wallet'], { signal, step: 'check-wallet', flow });
     if (!isWalletReady(lines)) {
+      // Defensive: drop any cache entry for this key. (We only reach here on a
+      // cache MISS, so the entry is already absent or expired — but this keeps
+      // the map from ever holding a key whose last observed verdict was NOT
+      // ready. A fresh positive is recovered explicitly via resetWalletCache.)
+      if (this.walletCacheable) walletReadyUntil.delete(cacheKey);
       throw new NeedsWalletSetupError(
         'Alipay wallet not opened. Run: moltspay alipay apply (then: moltspay alipay bind)',
       );
+    }
+    if (useCache) {
+      walletReadyUntil.set(cacheKey, this.now() + ttlMs);
+      alipayLog.info('wallet.cache', { flow, step: 'check-wallet', hit: false, cachedForMs: ttlMs });
     }
   }
 
@@ -212,6 +280,11 @@ export class AlipayClient {
     if (!paymentNeededHeader) {
       throw new AlipayProtocolError('alipay requirement missing extra.payment_needed_header');
     }
+
+    // Correlation id + clock for the per-flow timing breakdown (see ./log.ts).
+    const flow = this.sessionId;
+    const flowStart = this.now();
+    alipayLog.info('flow.start', { flow, resource: resourceUrl });
 
     // MEDIA: lines are stripped from the verbatim stream and collected.
     const media: string[] = [];
@@ -228,17 +301,17 @@ export class AlipayClient {
       `支付 ${requirement.amount ?? ''} ${requirement.asset ?? 'CNY'}`.trim();
 
     // Step 0: version gate.
-    await ensureCli(this.getVersion);
+    await timeStep('ensure-cli', flow, () => ensureCli(this.getVersion));
 
     // Step 1b: session handshake (--intent-summary is mandatory).
     await this.runner(
       ['payment-intent', '--session-id', this.sessionId, '--intent-summary', intentSummary,
         '--framework', this.framework],
-      { onLine, signal },
+      { onLine, signal, step: 'payment-intent', flow },
     );
 
     // Step 2: wallet must be opened.
-    await this.checkWallet(signal);
+    await this.checkWallet(signal, flow);
 
     // Step 3: dump Payment-Needed to a tmp file for 402-buyer-pay -f.
     const reqId = String(extra.out_trade_no ?? randomUUID());
@@ -254,7 +327,7 @@ export class AlipayClient {
       '-s', this.sessionId, '-i', intentSummary, '-w', this.framework];
     if (opts.method) payArgs.push('-m', opts.method);
     if (opts.data) payArgs.push('-d', opts.data);
-    const payRun = await this.runner(payArgs, { onLine, signal });
+    const payRun = await this.runner(payArgs, { onLine, signal, step: '402-buyer-pay', flow });
 
     const tradeNo = parseTradeNo(payRun.lines);
     if (!tradeNo) {
@@ -264,10 +337,15 @@ export class AlipayClient {
 
     const { paymentUrl, shortenUrl } = parsePaymentUrl(payRun.lines);
     if (paymentUrl) {
+      // End of the user-visible "pre-QR" window: everything from flow.start to
+      // here (402 → payment-intent → check-wallet → buyer-pay) ran before the
+      // QR/link could be shown. This `ms` is the number to optimize.
+      alipayLog.info('flow.pending', { flow, tradeNo, ms: this.now() - flowStart });
       opts.onPaymentPending?.({ paymentUrl, shortenUrl, tradeNo });
     }
 
     // Step 5: poll until terminal. Deadline = explicit timeout or pay_before window.
+    const pendingAt = this.now();
     const windowMs = (requirement.maxTimeoutSeconds ?? 30 * 60) * 1000;
     const deadline = this.now() + (opts.timeoutMs ?? windowMs);
     const poll = await pollUntil(tradeNo, resourceUrl, {
@@ -276,15 +354,23 @@ export class AlipayClient {
       onLine,
       runner: this.runner,
       now: this.now,
+      // Re-fetch the resource the same way it was paid (POST + body), else the
+      // status poll defaults to GET and 404s on a POST-only `/execute`.
+      method: opts.method,
+      data: opts.data,
     });
+
+    // Settlement reached: time spent waiting for the buyer to scan + pay + the
+    // facilitator to confirm (distinct from the pre-QR window above).
+    alipayLog.info('flow.settled', { flow, tradeNo, ms: this.now() - pendingAt });
 
     // Step 7: surface the resource body.
     const body = extractBody(poll.lines);
 
     // Step 8: fire-and-forget fulfillment ack (best-effort; never blocks the result).
-    void this.runner(['402-buyer-fulfillment-ack', '-t', tradeNo], { onLine, signal }).catch(
-      () => undefined,
-    );
+    void this.runner(['402-buyer-fulfillment-ack', '-t', tradeNo], {
+      onLine, signal, step: '402-buyer-fulfillment-ack', flow,
+    }).catch(() => undefined);
 
     return { body, payment: { tradeNo, outTradeNo: reqId }, media };
   }

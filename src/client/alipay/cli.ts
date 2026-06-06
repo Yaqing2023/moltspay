@@ -13,6 +13,7 @@
  */
 
 import { spawn } from 'child_process';
+import { alipayLog } from './log.js';
 
 /** The only env vars allowed through to alipay-bot (skill guide §7). */
 export const ALLOWED_ENV = new Set([
@@ -42,6 +43,10 @@ export interface RunCliOptions {
   bin?: string;
   /** Extra env to merge on top of the whitelisted process env. */
   env?: NodeJS.ProcessEnv;
+  /** Log label for this spawn (defaults to the first CLI arg / subcommand). */
+  step?: string;
+  /** Correlation id grouping this spawn with the rest of its payment flow. */
+  flow?: string;
 }
 
 export interface RunCliResult {
@@ -72,11 +77,22 @@ export type CliRunner = (args: string[], opts?: RunCliOptions) => Promise<RunCli
  */
 export const runCli: CliRunner = (args, opts = {}) => {
   const bin = opts.bin ?? 'alipay-bot';
+  const step = opts.step ?? args[0] ?? '(no-arg)';
+  const startedAt = Date.now();
   const lines: string[] = [];
   const collect = (line: string) => {
     lines.push(line);
+    // Per-line timeline: offset (ms since spawn) + a short preview. At debug
+    // level this cracks open an otherwise opaque spawn (e.g. 402-buyer-pay's
+    // ~40s) into its progress timeline, revealing whether the time is one long
+    // wait or many round-trips — without touching the real-charge call itself.
+    alipayLog.debug('cli.line', {
+      flow: opts.flow, step, ms: Date.now() - startedAt, preview: line.slice(0, 120),
+    });
     opts.onLine?.(line);
   };
+
+  alipayLog.debug('step.start', { flow: opts.flow, step });
 
   return new Promise<RunCliResult>((resolve, reject) => {
     const child = spawn(bin, args, {
@@ -88,12 +104,38 @@ export const runCli: CliRunner = (args, opts = {}) => {
       opts.signal.addEventListener('abort', () => child.kill('SIGTERM'), { once: true });
     }
 
+    // Raw chunk timeline (debug): catches output that never produces a newline
+    // — spinners using '\r', or a CLI that buffers then flushes — which the
+    // line splitter alone would miss. The first chunk's offset ≈ time-to-first
+    // -byte (cold start + first round-trip); gaps between chunks = real waits.
+    let sawByte = false;
+    const onChunk = (stream: 'out' | 'err') => (chunk: Buffer) => {
+      const ms = Date.now() - startedAt;
+      if (!sawByte) {
+        sawByte = true;
+        alipayLog.debug('cli.firstbyte', { flow: opts.flow, step, ms });
+      }
+      alipayLog.debug('cli.chunk', { flow: opts.flow, step, ms, stream, bytes: chunk.length });
+    };
+
     const onStdout = makeLineSplitter(collect);
     const onStderr = makeLineSplitter(collect);
+    child.stdout?.on('data', onChunk('out'));
+    child.stderr?.on('data', onChunk('err'));
     child.stdout?.on('data', onStdout);
     child.stderr?.on('data', onStderr);
 
-    child.on('error', reject);
-    child.on('close', (code) => resolve({ exitCode: code ?? 1, lines }));
+    child.on('error', (err) => {
+      alipayLog.info('cli.exit', {
+        flow: opts.flow, step, ms: Date.now() - startedAt, ok: false, err: err.message,
+      });
+      reject(err);
+    });
+    child.on('close', (code) => {
+      alipayLog.info('cli.exit', {
+        flow: opts.flow, step, ms: Date.now() - startedAt, ok: (code ?? 1) === 0, code: code ?? 1,
+      });
+      resolve({ exitCode: code ?? 1, lines });
+    });
   });
 };

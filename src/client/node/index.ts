@@ -38,6 +38,7 @@ import {
 import type { PaymentSigner } from '../signer.js';
 import { NodeSigner } from './signer.js';
 import { AlipayClient } from '../alipay/index.js';
+import { timeStep } from '../alipay/log.js';
 import { selectRail, ALIPAY_RAIL } from '../alipay/router.js';
 
 export * from '../types.js';
@@ -490,10 +491,15 @@ export class MoltsPayClient {
     params: Record<string, any>,
     options: PayOptions,
   ): Promise<Record<string, any>> {
+    // Flow correlation id for the pre-spawn (local) timing nodes.
+    const flow = this.alipaySessionId;
+
     // Discover the resource endpoint (same as the crypto path).
     let executeUrl = `${serverUrl}/execute`;
     try {
-      const services = await this.getServices(serverUrl);
+      const services = await timeStep('discover-services', flow, () =>
+        this.getServices(serverUrl),
+      );
       const svc = services.services?.find((s: any) => s.id === service);
       if (svc?.endpoint) executeUrl = `${serverUrl}${svc.endpoint}`;
     } catch {
@@ -504,11 +510,13 @@ export class MoltsPayClient {
     const bodyJson = JSON.stringify(requestBody);
 
     // Trigger the 402 challenge.
-    const res = await fetch(executeUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: bodyJson,
-    });
+    const res = await timeStep('challenge-402', flow, () =>
+      fetch(executeUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: bodyJson,
+      }),
+    );
     if (res.status !== 402) {
       const data = await res.json().catch(() => ({}));
       if (res.ok && (data as any).result) return (data as any).result;

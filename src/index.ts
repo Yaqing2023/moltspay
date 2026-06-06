@@ -42,6 +42,18 @@ export type {
   MoltsPayClientOptions,
 } from './client/types.js';
 
+// Alipay rail log management (opt-in observability for the pay402 state machine)
+export {
+  setAlipayLogLevel,
+  getAlipayLogLevel,
+  setAlipayLogSink,
+  alipayLog,
+} from './client/alipay/log.js';
+export type { AlipayLogLevel, AlipayLogEvent, AlipayLogSink } from './client/alipay/log.js';
+
+// Alipay check-wallet cache control (call after the user binds/unbinds a wallet)
+export { resetWalletCache } from './client/alipay/index.js';
+
 // Chain configuration
 export { CHAINS, getChain, listChains, getChainById, ERC20_ABI } from './chains/index.js';
 

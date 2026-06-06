@@ -67,6 +67,7 @@
     "prepublishOnly": "npm run typecheck && npm run build && npm run verify:web"
   },
   "dependencies": {
+    "@alipay/agent-payment": "^1.0.14",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.98.4",
