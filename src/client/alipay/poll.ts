@@ -104,20 +104,51 @@ export function parseStatus(lines: string[]): PaymentStatus {
         if (/关闭|失败|拒绝|取消|超时|已撤销/.test(msg)) return 'rejected';
         return 'pending';
       }
+      // Shape C (alipay-bot 0.3.15, live): {body: "<markdown report>"}. The
+      // `402-query-payment-status` renders a human report (NOT the bare A/B
+      // envelope), embedding the re-fetched resource. Classify off the report
+      // text. Verified live 2026-06-10 against a real completed 1-CNY trade
+      // (tradeNo …065406): the prior heuristic JSON.parse'd this to `{body}`,
+      // matched neither A nor B, fell through to the raw-text markers (which the
+      // Chinese report lacks) and returned `unknown` — so the poll never
+      // terminated despite a SUCCESSFUL payment + resource fetch.
+      if (typeof json.body === 'string') {
+        return classifyReportText(json.body);
+      }
     }
   } catch {
-    // Not JSON — fall through to anchored textual markers.
+    // Not JSON — fall through to anchored textual markers on the raw output.
   }
-  const text = raw.toUpperCase();
-  // alipay-bot 0.3.15's `402-query-payment-status` renders a human markdown
-  // report (not the bare JSON envelope), so JSON.parse above misses. When the
-  // payment is settled the report embeds the re-fetched resource, whose body
-  // carries our server's `"payment": { "status": "fulfilled" }`. That marker is
-  // anchored + quoted and only appears after the facilitator verified the
-  // payment, so it's a safe "paid" signal (unlike a bare "SUCCESS").
-  if (/TRADE_SUCCESS|TRADE_FINISHED|"STATUS":\s*"FULFILLED"/.test(text)) return 'paid';
-  if (/TRADE_CLOSED|REJECTED|REFUSE|CANCEL/.test(text)) return 'rejected';
-  if (/WAIT_BUYER_PAY|UNPAID|PENDING|WAITING/.test(text)) return 'pending';
+  return classifyReportText(raw);
+}
+
+/**
+ * Classify a status-report's text into a PaymentStatus.
+ *
+ * Used for both non-JSON CLI output and the Shape-C `{body}` markdown report.
+ * Paid markers are anchored and only appear AFTER the buyer paid and the
+ * facilitator verified: the report's "查询支付状态成功并获取资源" header and a
+ * `资源响应状态 200` resource re-fetch are emitted only on a settled trade
+ * (before payment the re-fetch returns 402). We also accept the x402/server
+ * `"status":"fulfilled"` marker and Alipay `TRADE_SUCCESS/TRADE_FINISHED`.
+ * We must NOT match bare "SUCCESS"/"PAID": the literal `"success"` key appears
+ * even when success:false / TRADE_STATUS_UNPAID.
+ */
+function classifyReportText(s: string): PaymentStatus {
+  const text = s.toUpperCase();
+  if (
+    /查询支付状态成功并获取资源/.test(s) ||
+    /资源响应状态[^0-9\n]{0,8}200/.test(s) ||
+    /TRADE_SUCCESS|TRADE_FINISHED|"STATUS":\s*"FULFILLED"/.test(text)
+  ) return 'paid';
+  if (
+    /TRADE_CLOSED|REJECTED|REFUSE|CANCEL/.test(text) ||
+    /交易关闭|支付失败|已拒绝|已取消|已撤销|交易超时/.test(s)
+  ) return 'rejected';
+  if (
+    /WAIT_BUYER_PAY|UNPAID|PENDING|WAITING/.test(text) ||
+    /交易未支付|等待付款|待支付|未支付/.test(s)
+  ) return 'pending';
   return 'unknown';
 }
 

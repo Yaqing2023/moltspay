@@ -165,18 +165,63 @@ export function isWalletReady(lines: string[]): boolean {
 }
 
 /**
+ * Pull the embedded resource JSON out of an alipay-bot 0.3.15 status report.
+ *
+ * The settled `402-query-payment-status` report (Shape C) embeds the re-fetched
+ * resource after a `资源响应体：` label, e.g. `**资源响应体**：\n{ "success": true,
+ * "result": { … } }`. We locate that label, brace-match the following JSON
+ * object (string-aware, so braces inside values don't fool it), parse it and
+ * surface `.result` (the seller's handler output). Returns `undefined` if no
+ * embedded object is found, so the caller can fall back to the raw report.
+ */
+function extractResourceFromReport(report: string): string | undefined {
+  const label = report.search(/资源响应体/);
+  const start = report.indexOf('{', label === -1 ? 0 : label);
+  if (start === -1) return undefined;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < report.length; i++) {
+    const ch = report[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) {
+      const slice = report.slice(start, i + 1);
+      try {
+        const obj = JSON.parse(slice);
+        const r = obj?.result ?? obj?.data ?? obj?.body ?? obj;
+        return typeof r === 'string' ? r : JSON.stringify(r);
+      } catch {
+        return slice;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
  * Extract the resource body from the paid status-poll output.
  *
- * alipay-bot emits JSON; on success the resource lives under data/result/body.
- * Falls back to a `BODY:` marker, then to the joined non-marker lines.
- * (The exact paid-state field is inferred from the CLI's JSON convention and
- * may need a tweak once a real completed trade is observed.)
+ * alipay-bot 0.3.15 (Shape C) wraps the settled report in `{body: "<markdown>"}`
+ * with the resource embedded under a `资源响应体：` label — pull that out and
+ * surface `.result`. Older/other shapes put the resource under data/result/body
+ * at the top level. Falls back to a `BODY:` marker, then to the joined
+ * non-marker lines. Verified live 2026-06-10 against a real completed trade.
  */
 export function extractBody(lines: string[]): string {
   const text = lines.join('\n').trim();
   try {
     const json = JSON.parse(text);
     if (json && typeof json === 'object') {
+      // Shape C: {body:"<markdown report>"} — dig out the embedded resource.
+      if (typeof json.body === 'string') {
+        const inner = extractResourceFromReport(json.body);
+        return inner ?? json.body;
+      }
       const body = json.data ?? json.result ?? json.body ?? json.resource;
       if (body !== undefined) return typeof body === 'string' ? body : JSON.stringify(body);
       return text;

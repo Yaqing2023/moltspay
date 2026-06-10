@@ -46,6 +46,28 @@ describe('parseStatus', () => {
       '{"success":false,"errorCode":"TRADE_STATUS_UNPAID","errorMsg":"交易未支付"}',
     ])).toBe('pending');
   });
+
+  // Regression (live completed trade, tradeNo …065406, 2026-06-10): alipay-bot
+  // 0.3.15 returns the SETTLED status as a `{body:"<markdown>"}` report, not the
+  // bare A/B envelope. The old code returned `unknown` here, so the poll never
+  // terminated after a successful scan+pay. Must read as `paid`.
+  it('reads the Shape-C {body} markdown report of a settled trade as paid', () => {
+    const report = JSON.stringify({
+      body:
+        '**✓ 查询支付状态成功并获取资源**\n\n**交易号**：' + '2'.repeat(32) +
+        '\n**资源响应状态**：200\n**资源响应体**：\n' +
+        '{\n  "success": true,\n  "result": { "video_url": "v.mp4" }\n}',
+    });
+    expect(parseStatus([report])).toBe('paid');
+  });
+
+  // The same {body} envelope while still unpaid (re-fetch 402) stays pending.
+  it('keeps a Shape-C report pending when the resource re-fetch is unpaid', () => {
+    const report = JSON.stringify({
+      body: '**查询支付状态**\n**资源响应状态**：402\n交易未支付，等待付款',
+    });
+    expect(parseStatus([report])).toBe('pending');
+  });
 });
 
 describe('pollUntil', () => {
