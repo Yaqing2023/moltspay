@@ -183,7 +183,7 @@ moltspay pay --rail alipay https://www.sr007.com/api/v1/videos/v_001 \
 4. 402-buyer-pay        发起支付，输出支付链接 + tradeNo
 5. 等用户扫码           回调 onPaymentPending 上抛
 6. 402-query-payment-status  3s 轮询直至成功/超时
-7. 透传资源 body 给调用方
+7. 透传资源 body 给调用方   ⚠️ 当前从 bot stdout 报告正则刮取、会进日志；bot 刻意不吐 Payment-Proof 故 SDK 无法自取，应改为读结构化 resourceResponse 字段 + 不转发进日志，详见 §9.3
 8. 402-buyer-fulfillment-ack  履约确认（异步 fire-and-forget）
 ```
 
@@ -391,6 +391,52 @@ moltspay pay --rail alipay http://merchant.local:3000/services/text-to-video \
 alipay-bot 把链接打印为 markdown `[点击此处](https://u.alipay.cn/xxx)`。`parsePaymentUrl` 的正则 `https?:\/\/\S+` 贪婪匹配会把结尾的 `)` 一并吞入 → 返回的 `paymentUrl` 变成 `https://u.alipay.cn/xxx)`（带尾括号）→ 打开/扫码 404。
 
 **修复（client）：** 提取后 `.replace(/[)\]`>]+$/, '')` 去掉尾部 markdown 字符。**规避（调用方）：** 对 `onPaymentPending` 返回的 `paymentUrl`/`shortenUrl` 自行清洗尾部 `)]`> 等再用。
+
+### 9.3 alipay 路径未走 x402 重试，改刮 bot stdout 报告 → 交付物（如视频 base64）进日志
+
+**状态：** 🟡 已定性 + 已核对 bot（2026-06-13）、修复未落地。最初由一条提议 `--output-dir` 的 issue 触发，该提议**已否决**。**关键结论**：理想 x402 形态（SDK 自己带 proof 重试取 HTTP 响应体）**实测不可行**——alipay-bot 刻意不输出 `Payment-Proof`；CLI 不可改下能做的是「读 bot 的结构化 `resourceResponse` 字段 + 不转发进日志」，见下。
+
+**需求（2026-06-13 用户确认）：**
+1. 交付物**不得**出现在 stdout / 日志；
+2. 交付物应**经资源 URL 的 HTTP 响应体**获取——即标准 x402「带凭证头重试原请求 → 200 + body」，而非从 CLI stdout 文本里刮；
+3. `--output-dir`（让 bot 把交付物落盘）**不是**解法，不采纳为修复方向。
+
+> 原以为这两半需求是同一件事（按 x402 SDK 自取即可同时满足）。实测后修正：bot 不吐 proof，SDK 无法自取；只能分别满足——「不进日志」可达（不转发 bot 输出），「SDK 自己经 HTTP 取」不可达（需 bot 侧改动）。
+
+**服务端本来就是 x402（设计正确）：**
+买家付款后，**带 `Payment-Proof` 头重新请求 `/execute`** → 服务器经 facilitator 验证 → 运行 skill → 返回 **200 + 资源在 HTTP 响应体**。证据：
+- `src/server/index.ts:688-700`：`handleExecute` 收到 `Payment-Proof` 头即走 `handleAlipayExecute` → 验证 + 执行 + 200。
+- `test/server/alipay-payment-proof.test.ts:1-12`：明确「付款后 re-request 带 `Payment-Proof` 头，服务器必须返 200，不是再来一个 402」。
+- EVM 路径就是这么做的（`src/client/node/index.ts:447-462`）：本地构造 proof → 带 `X-Payment` 头重试原请求 → body 直接取自 HTTP 响应（`paidRes`），**全程不碰任何 stdout**。
+
+**Bug：alipay 客户端路径跳过了「SDK 自己带凭证重试」这一步。**
+现状链路（错误实现）：
+1. 结算后 `pollUntil` 调 `402-query-payment-status -t <tradeNo> -r <resourceUrl> -m -d`，让 **bot 在内部** re-request 资源（bot 自己持有 proof，见 `server/index.ts:60-62`），再把 HTTP 响应**渲染成人类 markdown 报告**，资源体嵌在 `资源响应体：` 标签后——`src/client/alipay/poll.ts:233-235`。
+2. 这份报告整段经 `onLine` 流进**日志**，同时作为 `poll.lines` 返回。
+3. SDK 在 Step 7 `const body = extractBody(poll.lines)`——`src/client/alipay/index.ts:466-467`——内部 `extractResourceFromReport`（`index.ts:177`）对报告做花括号配对、抠出嵌入 JSON 的 `.result`。
+
+对视频这种大 payload，base64 整段被塞进报告 → 进 stdout/日志 → 再被字符串扫描。资源**本来就是某个 HTTP 200 响应体**（bot 那次 re-request 的响应），只是被 bot 中转、污染进了报告/日志。
+
+**判定：** 属 **SDK client 架构 bug**——alipay 路径没有像 EVM 路径那样让 SDK 自己发 x402 重试，而是退化成「让 bot 代取 + 刮报告」。`extractResourceFromReport` / 报告刮取整条都是这个错误实现的产物。
+
+**理想的 x402 形态（对齐 EVM 路径）—— 但经实测受阻，见下：**
+理论上应让 alipay 路径与 EVM 路径对称：alipay-bot 只产出 `Payment-Proof`，由 **SDK 自己**发 `fetch(executeUrl, { method, headers:{ 'Payment-Proof': <proof> }, body })` → 200 + 资源取自 HTTP 响应体（镜像 `node/index.ts:455-462`）。proof 结构见 `src/facilitators/alipay.ts:469-493`：base64url `{protocol:{payment_proof,trade_no}, method:{client_session}}`。
+
+**实测结论（2026-06-13，核对真 bot CLI）：alipay-bot 刻意不输出 `Payment-Proof`，故纯 SDK 重试不可行。**
+核对 `~/.local/share/alipay-bot-cli/runtime/dist/cli.js`（v1.0.14，混淆）中全部 8 处 `paymentProof`/`Payment-Proof`，分两类、**无一打到 stdout**：
+1. **内部 re-request 用**：`{resourceUrl, paymentProof, tradeNo, token, …}` → 组 `{'Payment-Proof': base64url({protocol:{payment_proof,trade_no},method:{client_session}})}` 头 → `fetch(resourceUrl,{headers})`。即 **bot 自己就是那个 x402 客户端**，已用 proof 做了鉴权重请求（正是 `server/index.ts:60-62` 所述）。
+2. **输出渲染层刻意剥离 proof**：`const { paymentProof:_, ...rest } = result; return { content: JSON.stringify(rest), … }`。内部结果对象本是 `{success, tradeNo, paymentProof, paymentType, payScheme, shortenUrl, needPolling, goodsInfo, resourceResponse, …}`——渲染时 **`paymentProof` 被删、`resourceResponse`（资源体）被保留**。
+
+这解释了现状:SDK 能从 stdout 刮到资源、却永远拿不到 proof——bot 故意如此(proof 是可重放 bearer 凭证,不外泄给调用方)。**因此「SDK 自己带 proof 重试」在 CLI 不可改的前提下不可达。**
+
+**CLI 不可改下能落地的 SDK 改动（满足「不进日志」、改善取法）：**
+- 交付物来源从「正则刮 `资源响应体：` 文本报告」改为「读 bot 输出里的**结构化 `resourceResponse` 字段**」——更稳、不靠脆弱文本匹配（替代 `extractResourceFromReport`，`index.ts:177`）；
+- bot 这段输出**不再转发给 `onLine`/logger**，交付物只经类型化返回值 `{body}` 出去（`index.ts:466-467`）——**保证不进我们的日志**。
+- 局限:交付物仍经 bot 自己的 stdout 管道(CLI 黑盒决定);真正「SDK 发 HTTP 请求取响应体」需 bot 侧暴露 proof,或 bot 自身不把资源塞进可被日志捕获的输出——**回归 bot 团队**(参见 §5.7)。
+
+> 注:bot 其实**已经**用 proof 做了一次 HTTP 鉴权重请求并把响应放进 `resourceResponse`，所以交付物本质上已来自一次 HTTP 响应体，只是经 bot stdout 中转。
+
+**与 §9.1 的关系：** §9.1 给 `402-query-payment-status` 补 `-m/-d` 让 bot 的内部 re-fetch 跑通——治标但路径正确（bot 本就该做这次鉴权重请求）。本条要改的是**SDK 如何消费 bot 的结果**（读结构化字段、不入日志），而非再依赖文本报告刮取。
 
 ---
 

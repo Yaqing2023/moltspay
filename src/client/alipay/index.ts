@@ -193,7 +193,7 @@ function extractResourceFromReport(report: string): string | undefined {
       const slice = report.slice(start, i + 1);
       try {
         const obj = JSON.parse(slice);
-        const r = obj?.result ?? obj?.data ?? obj?.body ?? obj;
+        const r = obj?.resourceResponse ?? obj?.result ?? obj?.data ?? obj?.body ?? obj;
         return typeof r === 'string' ? r : JSON.stringify(r);
       } catch {
         return slice;
@@ -217,6 +217,20 @@ export function extractBody(lines: string[]): string {
   try {
     const json = JSON.parse(text);
     if (json && typeof json === 'object') {
+      // Preferred (alipay-bot ≥1.0.x): the settled result carries the delivered
+      // resource in a structured `resourceResponse` field — the HTTP response
+      // body from the bot's OWN authenticated x402 re-request (the bot holds the
+      // Payment-Proof and re-requests `/execute` for us). Read that field
+      // directly instead of scraping the human report. See docs/ALIPAY-RAIL.md
+      // §9.3. `resourceResponse` may itself wrap the seller output under
+      // `.result`/`.data`/`.body`, so surface that the same way the report path does.
+      if (json.resourceResponse !== undefined && json.resourceResponse !== null) {
+        const rr = json.resourceResponse;
+        const r = (typeof rr === 'object')
+          ? (rr.result ?? rr.data ?? rr.body ?? rr)
+          : rr;
+        return typeof r === 'string' ? r : JSON.stringify(r);
+      }
       // Shape C: {body:"<markdown report>"} — dig out the embedded resource.
       if (typeof json.body === 'string') {
         const inner = extractResourceFromReport(json.body);
@@ -448,9 +462,10 @@ export class AlipayClient {
     const windowMs = (requirement.maxTimeoutSeconds ?? 30 * 60) * 1000;
     const deadline = this.now() + (opts.timeoutMs ?? windowMs);
     const poll = await pollUntil(tradeNo, resourceUrl, {
+      // No onLine: the status-poll output embeds the resource and must not reach
+      // the log stream — the body is surfaced via the return value below (§9.3).
       deadline,
       signal,
-      onLine,
       runner: this.runner,
       now: this.now,
       // Re-fetch the resource the same way it was paid (POST + body), else the

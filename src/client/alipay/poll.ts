@@ -157,8 +157,10 @@ export interface PollOptions {
   deadline: number;
   /** Abort the poll loop (e.g. caller cancellation). */
   signal?: AbortSignal;
-  /** Forward each status-poll line to the user. */
-  onLine?: (line: string) => void;
+  // NOTE: there is intentionally NO `onLine` here. The status-poll output embeds
+  // the delivered resource, so its raw lines must never be forwarded to the
+  // user's log stream (docs/ALIPAY-RAIL.md §9.3). The resource is surfaced only
+  // via pay402()'s `{body}` return value.
   /** Injectable CLI runner (default: real spawn). */
   runner?: CliRunner;
   /** Injectable sleep (default: real timer that also rejects on abort). */
@@ -251,8 +253,16 @@ export async function pollUntil(
     const myTick = tick;
     lastLaunch = now();
     const run = (async (): Promise<TickResult> => {
+      // SECURITY (docs/ALIPAY-RAIL.md §9.3): the settled `402-query-payment-status`
+      // output embeds the delivered resource (e.g. a video's base64). We must NOT
+      // forward this spawn's raw stdout to the caller — that would leak the
+      // deliverable into stdout/logs. So no `onLine` here. The runner still
+      // collects `lines` independently of onLine (see cli.ts), and parseStatus /
+      // extractBody read that RETURN value — so status detection and body
+      // extraction are unaffected. The resource reaches the caller ONLY via
+      // pay402()'s typed `{body}` result, never the log stream.
       const { lines } = await runner(args, {
-        onLine: opts.onLine, signal, step: 'query-payment-status', flow: tradeNo,
+        signal, step: 'query-payment-status', flow: tradeNo,
       });
       const status = parseStatus(lines);
       alipayLog.debug('poll.tick', { flow: tradeNo, tick: myTick, status });

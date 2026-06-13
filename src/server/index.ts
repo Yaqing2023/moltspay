@@ -62,6 +62,22 @@ const ALIPAY_PAYMENT_NEEDED_HEADER = 'payment-needed';
 // blob here after the buyer pays. The server verifies it via the facilitator.
 const ALIPAY_PAYMENT_PROOF_HEADER = 'payment-proof';
 
+/**
+ * Make an arbitrary string safe to embed in an HTTP header value.
+ *
+ * HTTP header values are limited to Latin-1 (RFC 7230 §3.2.6); Node's
+ * `res.writeHead` throws `Invalid character in header content` on any
+ * code point outside that range. Provider/service names can contain
+ * non-Latin-1 characters (e.g. CJK), so we percent-encode anything
+ * outside printable ASCII and escape `"` so it cannot terminate the
+ * surrounding `Payment ... realm="…"` quoted-string.
+ */
+function headerSafe(value: string): string {
+  return String(value ?? '')
+    .replace(/[^\x20-\x7E]/g, ch => encodeURIComponent(ch))
+    .replace(/"/g, '%22');
+}
+
 // Token contract addresses by network
 const TOKEN_ADDRESSES: Record<string, Record<string, string>> = {
   'eip155:8453': {
@@ -1179,7 +1195,7 @@ export class MoltsPayServer {
       
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
       
-      mppWwwAuth = `Payment id="${challengeId}", realm="${this.manifest.provider.name}", method="tempo", intent="charge", request="${mppRequestEncoded}", description="${config.name}", expires="${expiresAt}"`;
+      mppWwwAuth = `Payment id="${challengeId}", realm="${headerSafe(this.manifest.provider.name)}", method="tempo", intent="charge", request="${mppRequestEncoded}", description="${headerSafe(config.name)}", expires="${expiresAt}"`;
     }
 
     // Build response headers
@@ -1770,7 +1786,7 @@ export class MoltsPayServer {
       
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
       
-      const wwwAuth = `Payment id="${challengeId}", realm="MoltsPay Proxy", method="tempo", intent="charge", request="${mppRequestEncoded}", description="${config.name}", expires="${expiresAt}"`;
+      const wwwAuth = `Payment id="${challengeId}", realm="MoltsPay Proxy", method="tempo", intent="charge", request="${mppRequestEncoded}", description="${headerSafe(config.name)}", expires="${expiresAt}"`;
       
       res.writeHead(402, {
         'Content-Type': 'application/problem+json',

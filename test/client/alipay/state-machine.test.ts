@@ -98,6 +98,22 @@ describe('pure helpers', () => {
     expect(extractBody(['{"code":200,"data":{"url":"v.mp4"}}'])).toBe('{"url":"v.mp4"}');
     expect(extractBody(['{"code":200,"result":"hi"}'])).toBe('hi');
   });
+
+  it('extractBody prefers the structured resourceResponse field (alipay-bot ≥1.0.x)', () => {
+    // The settled result wraps the bot's own x402 re-request HTTP body under
+    // `resourceResponse` (see ALIPAY-RAIL.md §9.3). Surface its `.result`.
+    expect(
+      extractBody(['{"success":true,"tradeNo":"1","resourceResponse":{"result":{"url":"v.mp4"}}}']),
+    ).toBe('{"url":"v.mp4"}');
+    // A string resourceResponse is returned verbatim.
+    expect(
+      extractBody(['{"success":true,"resourceResponse":"hi"}']),
+    ).toBe('hi');
+    // resourceResponse wins over a sibling body report.
+    expect(
+      extractBody(['{"resourceResponse":{"result":"R"},"body":"**资源响应体**：\\n{\\"result\\":\\"OLD\\"}"}']),
+    ).toBe('R');
+  });
 });
 
 describe('AlipayClient.pay402 — 8-step state machine', () => {
@@ -146,6 +162,35 @@ describe('AlipayClient.pay402 — 8-step state machine', () => {
     // MEDIA: line was stripped from the user stream but captured.
     expect(result.media).toEqual(['/tmp/qr.png']);
     expect(lines.some((l) => l.includes('MEDIA:'))).toBe(false);
+  });
+
+  it('does NOT leak the resource into the user/log stream (§9.3)', async () => {
+    // A realistic settled poll whose output embeds the delivered resource.
+    const SECRET = 'data:video/mp4;base64,AAAACONFIDENTIALPAYLOAD';
+    const runner = fakeRunner({
+      '402-query-payment-status': () =>
+        // Emitted as the bot's structured settled result with resourceResponse.
+        Promise.resolve({
+          exitCode: 0,
+          lines: [`{"success":true,"tradeNo":"${TRADE}","resourceResponse":{"result":{"video":"${SECRET}"}}}`],
+        }),
+    });
+    const lines: string[] = [];
+    const client = new AlipayClient({
+      configDir, runner, getVersion: async () => 'v1.0.14', now: () => 0,
+    });
+
+    const result = await client.pay402({
+      resourceUrl: 'http://x/execute',
+      requirement,
+      onLine: (l) => lines.push(l),
+    });
+
+    // The deliverable IS returned via the typed result …
+    expect(result.body).toBe(`{"video":"${SECRET}"}`);
+    // … but it NEVER appears in the forwarded user/log stream.
+    expect(lines.some((l) => l.includes(SECRET))).toBe(false);
+    expect(lines.some((l) => l.includes('resourceResponse'))).toBe(false);
   });
 
   it('Step 3 writes the Payment-Needed header to a tmp file', async () => {
