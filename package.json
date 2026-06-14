@@ -105,6 +105,7 @@
   "files": [
     "dist",
     "schemas",
+    "scripts/postinstall.js",
     ".env.example",
     "README.md",
     "LICENSE"
