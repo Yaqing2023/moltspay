@@ -138,19 +138,24 @@ server 在 402 响应里同时发：
 
 ### 3.1 前置：安装 `alipay-bot`
 
+**`npm install moltspay` 会自动安装**（commit `1e7c5ac` 起）。postinstall 调用已声明依赖 `@alipay/agent-payment` 的 `install-cli`，从支付宝官方 CDN 把 `alipay-bot` 下到本机。失败不阻塞 `npm install`；`MOLTSPAY_SKIP_CLI_INSTALL=1` 可跳过。
+
+手动安装 / 修复（用了 `--ignore-scripts`，或安装时离线）：
+
 ```bash
-# 校验包完整性
-npm view @alipay/agent-payment@1.0.9 dist.integrity
-
-# 安装 + 装 CLI
-npm install @alipay/agent-payment@1.0.9 && \
-  npx @alipay/agent-payment@1.0.9 install-cli
-
-# 验证
+npx -y @alipay/agent-payment install-cli
 alipay-bot --version   # 预期 ≥ 0.3.15
 ```
 
-未安装时 MoltsPay 报 `ALIPAY_CLI_NOT_FOUND`，**不**自动 install（与"不偷偷修改用户环境"原则一致）。
+未安装时 MoltsPay 报 `ALIPAY_CLI_NOT_FOUND` 并提示上面这条命令；运行时 `ensureCli` 是真正的版本闸门（`MIN_CLI_VERSION = 0.3.15`）。
+
+> **依赖与发行（为什么 alipay-bot 不在 package.json）**
+> - `alipay-bot`（= `alipay-bot-cli` 运行时，`0.3.x`，当前 `0.3.15`）**不在 npm**、`license: UNLICENSED`，由支付宝自家 CDN 分发 → 既不能当 package.json 依赖，也不能 vendoring 打进发行包。
+> - 唯一进 package.json 的是 npm 上的安装器 **`@alipay/agent-payment`（`1.0.x`，当前 `^1.0.14`）**，只负责从 CDN 拉 CLI —— Puppeteer 下 Chromium 同款模型：**安装时下载、绝不替支付宝再分发**。
+> - 两套版本号不同线：`1.0.x`=安装器，`0.3.x`=CLI；CLI 版本由支付宝远端配置决定，不由安装器号静态绑定。
+> - License：skills 封装（`github.com/alipay/payment-skills`）= **Apache-2.0**；**CLI 本体无任何公开再分发授权**（其发布仓库私有、运行时 `UNLICENSED`）。
+> - 旧「不偷偷修改用户环境」原则已**针对「显式安装的轨依赖」更新**：用户 `npm install moltspay` 即已 opt-in。
+> - 部署/离线机细节见 server60 `docs/sdk-config-and-logging.md` §1a。
 
 ### 3.2 一次性：开通钱包
 
@@ -229,7 +234,7 @@ console.log(out.payment.tradeNo);   // 32 位 tradeNo
 
 | Code | 含义 | 建议处理 |
 |---|---|---|
-| `ALIPAY_CLI_NOT_FOUND` | `alipay-bot` 未安装 | 引导 `npm install @alipay/agent-payment@1.0.9 && npx ... install-cli` |
+| `ALIPAY_CLI_NOT_FOUND` | `alipay-bot` 未安装 | 引导 `npx -y @alipay/agent-payment install-cli` |
 | `ALIPAY_CLI_VERSION` | `alipay-bot` 版本 < 0.3.15 | 引导 `npx -y @alipay/agent-payment@latest update` |
 | `ALIPAY_NEEDS_WALLET_SETUP` | 钱包未开通 / 已申请未授权 | 引导 `moltspay alipay apply` + `bind` |
 | `ALIPAY_PAYMENT_REJECTED` | 用户在支付宝 APP 取消 | 询问用户重试或换 rail |
