@@ -139,7 +139,7 @@
 - [x] 1 单 1 元 CNY 真实支付：`moltspay pay --rail alipay http://127.0.0.1/execute video-demo`，真实「AI付」钱包扫码付款 → server 读 `Payment-Proof` → `alipay.aipay.agent.payment.verify`（**生产网关** openapi.alipay.com）verified → skill 执行 → `alipay.aipay.agent.fulfillment.confirm` → 资源 200 交付（tradeNo `20260531008281180847110000015839`）
 - [x] 真机暴露并修复 4 个 bug：(1) `check-wallet` 未开通时 exit 0 返回 `{code:500}`（不能靠退出码）；(2) `payment-intent` 的 `-i/--intent-summary` 必需；(3) 直透子命令真名 `apply-wallet`/`bind-wallet`；(4) `parseStatus` 误把 `{"success":false}` 的 `success` 键当成 paid（UNPAID 假成功）
 - [x] **环境关键发现**：买家用**生产** AI付 钱包,seller 必须配**生产网关** `openapi.alipay.com`(沙箱 alipaydev.com 已 502 且环境不互通)
-- alipay-bot 安装：`npx -y @alipay/agent-payment@1.0.9 install-cli`（装 alipay-bot-cli 0.3.15 到 `~/.local/bin`）
+- alipay-bot 安装：`npx -y @alipay/agent-payment install-cli`（装 alipay-bot-cli ≥0.3.15 到 `~/.local/bin`）
 - ⏭️ 录屏归档进 `~/moltspay-qa-notes/`（QA 留痕，待补）
 
 ---

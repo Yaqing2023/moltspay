@@ -345,9 +345,7 @@ async function ensureCli() {
     }
   } catch (e: any) {
     if (e.code === "ENOENT") throw new AlipayCliNotFoundError(
-      "alipay-bot not installed. Run: " +
-      "npm install @alipay/agent-payment@1.0.9 && " +
-      "npx @alipay/agent-payment@1.0.9 install-cli"
+      "alipay-bot not installed. Run: npx -y @alipay/agent-payment install-cli"
     );
     throw e;
   }
