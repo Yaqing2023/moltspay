@@ -1,9 +1,18 @@
 /**
  * alipay-bot presence + version gate (design §5.2.4).
  *
- * We never auto-`npm install` — that mutates the user's environment, which
- * the 1.6.0 "don't silently change the user's machine" principle forbids.
- * Instead we fail with a clear, actionable error and let the user opt in.
+ * alipay-bot is a runtime dependency of the Alipay payment rail. It is NOT on
+ * npm (Alipay distributes it from their own CDN) and is licensed UNLICENSED, so
+ * it can neither be a package.json dependency nor be bundled into this package.
+ * Installing moltspay provisions it automatically via the @alipay/agent-payment
+ * helper's `install-cli` (see scripts/postinstall.js) — the user opted into it
+ * by installing this SDK, so provisioning a declared rail dependency is part of
+ * that install (this supersedes the older 1.6.0 "never touch the user's machine"
+ * stance for the specific case of an explicitly-installed rail dependency).
+ *
+ * This gate is the runtime safety net for when that provisioning did not run or
+ * finish (`npm install --ignore-scripts`, or offline at install time): we fail
+ * with a clear, actionable error telling the user the one command to run.
  */
 
 import { execFile } from 'child_process';
@@ -48,9 +57,7 @@ async function ensureCliUncached(getVersion: VersionGetter): Promise<string> {
   } catch (e: any) {
     if (e?.code === 'ENOENT') {
       throw new AlipayCliNotFoundError(
-        'alipay-bot not installed. Run: ' +
-          'npm install @alipay/agent-payment@1.0.9 && ' +
-          'npx @alipay/agent-payment@1.0.9 install-cli',
+        'alipay-bot not installed. Run: npx -y @alipay/agent-payment install-cli',
       );
     }
     throw e;

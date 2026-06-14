@@ -1827,9 +1827,7 @@ program
     child.on('error', (e: any) => {
       if (e?.code === 'ENOENT') {
         console.error(
-          '❌ alipay-bot not installed. Run: ' +
-            'npm install @alipay/agent-payment@1.0.9 && ' +
-            'npx @alipay/agent-payment@1.0.9 install-cli',
+          '❌ alipay-bot not installed. Run: npx -y @alipay/agent-payment install-cli',
         );
       } else {
         console.error(`❌ ${e.message}`);

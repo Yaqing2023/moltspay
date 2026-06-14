@@ -54,6 +54,7 @@
     "moltspay-mcp": "./dist/mcp/index.js"
   },
   "scripts": {
+    "postinstall": "node scripts/postinstall.js",
     "prebuild": "rm -rf dist",
     "build": "tsup",
     "dev": "tsup --watch",

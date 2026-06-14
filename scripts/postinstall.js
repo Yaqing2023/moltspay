@@ -1,6 +1,30 @@
 #!/usr/bin/env node
 
-const message = `
+/*
+ * postinstall — greet, then provision the alipay-bot CLI.
+ *
+ * alipay-bot is a runtime dependency of the Alipay payment rail. It is NOT on
+ * npm (Alipay distributes it from their own CDN) and is licensed UNLICENSED, so
+ * it can neither be a package.json dependency nor be bundled into this package.
+ * Instead, installing moltspay provisions it automatically by invoking the
+ * @alipay/agent-payment helper's `install-cli`, which downloads the CLI directly
+ * from Alipay's CDN onto THIS machine — we never redistribute it ourselves.
+ *
+ * The user opted into this by installing moltspay (alipay-bot is a declared
+ * dependency of the Alipay rail), so provisioning it is part of that install.
+ *
+ * Best-effort by design: provisioning failure (offline / CDN unreachable) prints
+ * an actionable notice but NEVER fails `npm install`. The runtime `ensureCli`
+ * gate is the real enforcement point and re-states the one command to run.
+ *
+ * Opt out with MOLTSPAY_SKIP_CLI_INSTALL=1 (e.g. CI / sandboxes).
+ */
+
+const { spawnSync } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+
+const banner = `
 ╔══════════════════════════════════════════════════════════════╗
 ║                                                              ║
 ║   🎉  Thanks for installing MoltsPay!                        ║
@@ -15,5 +39,53 @@ const message = `
 ║                                                              ║
 ╚══════════════════════════════════════════════════════════════╝
 `;
+console.log(banner);
 
-console.log(message);
+const PROVISION_HINT = 'npx -y @alipay/agent-payment install-cli';
+
+function warnManual(reason) {
+  console.warn(
+    `\n[moltspay] alipay-bot CLI 未能自动安装（${reason}）。\n` +
+      `           Alipay 支付轨在使用前需手动安装：\n` +
+      `             ${PROVISION_HINT}\n`,
+  );
+}
+
+if (process.env.MOLTSPAY_SKIP_CLI_INSTALL === '1') {
+  console.log('[moltspay] MOLTSPAY_SKIP_CLI_INSTALL=1 — 跳过 alipay-bot 自动安装。');
+  console.log(`[moltspay] 需要时手动安装：${PROVISION_HINT}`);
+  process.exit(0);
+}
+
+console.log('[moltspay] 正在从支付宝官方 CDN 安装 alipay-bot CLI（Alipay 支付轨所需）…');
+
+// Prefer the helper we already pulled in as a declared dependency (no extra
+// network for the helper itself). Fall back to `npx` if it isn't resolvable
+// (odd layout / installed with --ignore-scripts on the dep).
+let result;
+let helperCli = null;
+try {
+  const helperPkgJson = require.resolve('@alipay/agent-payment/package.json');
+  const helperDir = path.dirname(helperPkgJson);
+  const bin = JSON.parse(fs.readFileSync(helperPkgJson, 'utf8')).bin;
+  const rel = typeof bin === 'string' ? bin : bin && bin['agent-payment'];
+  if (rel) helperCli = path.join(helperDir, rel);
+} catch {
+  helperCli = null;
+}
+
+if (helperCli && fs.existsSync(helperCli)) {
+  result = spawnSync(process.execPath, [helperCli, 'install-cli'], { stdio: 'inherit' });
+} else {
+  const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  result = spawnSync(npx, ['-y', '@alipay/agent-payment', 'install-cli'], { stdio: 'inherit' });
+}
+
+if (!result || result.error || result.status !== 0) {
+  warnManual(result && result.error ? result.error.message : '离线或无法访问 *.alipay.com');
+} else {
+  console.log('[moltspay] alipay-bot CLI 安装完成。');
+}
+
+// Never block the install over an optional rail's provisioning.
+process.exit(0);
