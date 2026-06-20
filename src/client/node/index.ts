@@ -53,7 +53,7 @@ export interface PayOptions {
   /** Send raw data at top level instead of wrapped in { params } */
   rawData?: boolean;
   /**
-   * Explicit payment rail (1.7.0): `'alipay'` or a chain name. When set,
+   * Explicit payment rail (2.0.0): `'alipay'` or a chain name. When set,
    * routing skips the default crypto path. `'alipay'` dispatches to the
    * alipay-bot-backed {@link AlipayClient} and needs no EVM wallet.
    */
@@ -195,7 +195,7 @@ export class MoltsPayClient {
     params: Record<string, any>,
     options: PayOptions = {}
   ): Promise<Record<string, any>> {
-    // Alipay fiat rail (1.7.0): when the caller explicitly asks for alipay,
+    // Alipay fiat rail (2.0.0): when the caller explicitly asks for alipay,
     // dispatch BEFORE the EVM wallet check — the alipay rail is backed by
     // alipay-bot and needs no EVM wallet.
     if (options.rail === ALIPAY_RAIL) {
@@ -477,7 +477,7 @@ export class MoltsPayClient {
   }
 
   /**
-   * Pay for a service over the Alipay fiat rail (1.7.0).
+   * Pay for a service over the Alipay fiat rail (2.0.0).
    *
    * Unlike the crypto path this needs no EVM wallet — it shells out to
    * alipay-bot via {@link AlipayClient}. Flow: hit the resource with no

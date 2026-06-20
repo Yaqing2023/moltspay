@@ -1,5 +1,5 @@
 /**
- * Alipay-rail client errors (1.7.0).
+ * Alipay-rail client errors (2.0.0).
  *
  * Every class carries a stable `code` (the 1.6.0 convention established in
  * `../core/errors.ts`) so MCP hosts / upper-layer agents can branch on the

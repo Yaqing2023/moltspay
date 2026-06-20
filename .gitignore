@@ -5,7 +5,6 @@ dist/
 .DS_Store
 
 # Local docs (not published)
-CHANGELOG.md
 docs/ROADMAP.md
 docs/WHITEPAPER.md
 docs/WHITEPAPER.pdf

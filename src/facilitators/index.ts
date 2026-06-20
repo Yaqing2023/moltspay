@@ -61,7 +61,7 @@ export {
   type SolanaPaymentPayload,
 } from './solana.js';
 
-// Alipay AI 收 Facilitator (1.7.0)
+// Alipay AI 收 Facilitator (2.0.0)
 export {
   AlipayFacilitator,
   AlipayFacilitatorConfig,

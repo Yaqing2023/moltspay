@@ -210,7 +210,7 @@ export function getChainById(chainId: number): ChainConfig | undefined {
   return Object.values(CHAINS).find(c => c.chainId === chainId);
 }
 
-// ============ Alipay AI 收 Fiat Rail (1.7.0+) ============
+// ============ Alipay AI 收 Fiat Rail (2.0.0+) ============
 
 /**
  * Chain-id string for the Alipay AI 收 fiat rail.
@@ -220,7 +220,7 @@ export function getChainById(chainId: number): ChainConfig | undefined {
 export const ALIPAY_CHAIN_ID = 'alipay' as const;
 
 /**
- * Rail metadata for the Alipay AI 收 fiat rail (1.7.0+).
+ * Rail metadata for the Alipay AI 收 fiat rail (2.0.0+).
  *
  * Intentionally kept **outside** the {@link CHAINS} Record because that
  * Record is `Record<EvmChainName, ChainConfig>` and an EVM `ChainConfig`

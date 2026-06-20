@@ -1,0 +1,436 @@
+# Changelog
+
+## [2.0.0] - 2026-06-20
+
+First-class **fiat payments via Alipay (支付宝 AI 收)**. This is the milestone release that takes MoltsPay beyond crypto-only settlement.
+
+**No breaking changes to the existing crypto rails.** The Node CLI, the x402 wire protocol, and every chain that worked in 1.6.0 behave identically. The major version bump marks the fiat milestone, not an incompatible API. Upgrading from 1.6.0 requires no code changes; Alipay is strictly opt-in via configuration. (npm 1.7.0 was never published — 2.0.0 supersedes it.)
+
+### Added
+- **Alipay fiat payment rail** — a new `AlipayFacilitator` settling Chinese Yuan (CNY) over the x402 protocol.
+  - New `alipay` chain / `alipay-aipay` scheme, RSA2 signature verification, health-check + settlement APIs.
+  - Opt-in via `provider.alipay` and per-service `services[].alipay` in your services JSON (`seller_id`, `app_id`, key paths, `service_id`, `price_cny`, `goods_name`, …). See `docs/ALIPAY-RAIL.md`.
+  - Equivalent env vars: `ALIPAY_SELLER_ID`, `ALIPAY_APP_ID`, `ALIPAY_SELLER_NAME`, `ALIPAY_PRIVATE_KEY_PATH`, `ALIPAY_PUBLIC_KEY_PATH`, `ALIPAY_GATEWAY_URL`.
+- **Dual-emit HTTP 402 middleware** — services advertise both the x402 `X-Payment-Required` challenge and the legacy alipay-bot `Payment-Needed` header in one response, so existing clients keep working.
+- **Client-side Alipay pay flow** — CLI wrapper around `alipay-bot` with an 8-step `pay402` state machine; consumes `Payment-Proof` on `/execute`.
+- **Key-encoding utilities** — `toPem()` (bare Base64 → PEM), `decodeBase64UrlWithPadFix()` (Base64URL with padding repair), `rsa2Sign()` / `rsa2Verify()`.
+- **Auto-provision of the `alipay-bot` CLI on install** — `postinstall` downloads it from Alipay's official CDN (it is not on npm and is UNLICENSED, so it is never redistributed by us). Best-effort: a provisioning failure prints an actionable notice but never fails `npm install`. Opt out with `MOLTSPAY_SKIP_CLI_INSTALL=1`; provision manually with `npx -y @alipay/agent-payment install-cli`.
+- **Alipay verification scripts** — `verify:alipay:offline` (offline E2E) and `verify:alipay:http` (402 dual-emit).
+
+### Fixed
+- **Paid resource never leaks into the log stream**, and the 402 challenge headers are hardened. The deliverable is returned via the resource-URL HTTP body only — never stdout/logs.
+- **`Payment-Proof` header now consumed and validated** on `/execute`; corrected `UNPAID` status parsing for Alipay transactions.
+- **Settled-trade report recognition** for `alipay-bot` 0.3.15 (Shape C).
+- **`scripts/postinstall.js` is now shipped in the published tarball** (was missing from the `files` whitelist, so auto-provision never ran on a clean install).
+
+### Performance
+- **Cross-flow `check-wallet` cache** — wallet authorization status is cached across payments (it doesn't change once authorized), removing a ~23s spawn from the pre-QR window of every payment after the first.
+- **Overlapping status polls** — `pollUntil` launches overlapping `402-query-payment-status` spawns on a fixed cadence instead of serially; first to observe `paid` wins and aborts the rest. Cuts post-payment detection lag from ~50–60s to ~(cadence + 1 spawn). Tunables: `maxInflight` / `launchIntervalMs` (or `MOLTSPAY_ALIPAY_POLL_MAX_INFLIGHT` / `MOLTSPAY_ALIPAY_POLL_LAUNCH_MS`); set `maxInflight=1` for strict sequential polling. Concurrent polls are read-only verifies — no double-charge or double-delivery.
+- **Skip-cache the payment-intent handshake** and the vendor perf request to shave fixed latency off the buyer-pay path.
+
+### Migration from 1.6.0
+1. No code changes required — fully backward compatible.
+2. Optional: add `provider.alipay` + `services[].alipay` to your services JSON to enable fiat payments.
+3. Optional: update clients to handle the `alipay-aipay` scheme.
+
+## [1.6.0] - 2026-04-24
+
+First-class browser support. Node CLI behavior and the x402 wire protocol are unchanged; everything here is additive.
+
+### Added
+- **Web Client (`moltspay/web`)** — `MoltsPayWebClient` + signer adapters for browser use. No private key ever in browser memory; signing is delegated to an injected wallet.
+  - `eip1193Signer(window.ethereum)` for MetaMask / Rainbow / Frame / any EIP-1193 provider.
+  - `solanaSigner(walletAdapter)` for Phantom / Solflare / Backpack / any `@solana/wallet-adapter` wallet.
+  - `composeSigners(evm, svm)` to route by chain from a single client instance.
+  - `SpendingLedger` — opt-in `localStorage`-backed per-browser spend limits.
+  - `new ./web` subpath export, browser-only bundle (40 KB gzipped, no Node-only APIs).
+  - Error classes `NeedsApprovalError` / `UnsupportedChainError` / `PaymentRejectedError` / `InsufficientBalanceError` / `SpendingLimitExceededError` / `ServerError` / `MoltsPayError` each with a stable `code` field.
+- **`solanaRpc` option on `MoltsPayWebClient`** — per-chain RPC URL override so customers can point Solana traffic at Helius / QuickNode / Alchemy etc. The public `api.mainnet-beta.solana.com` endpoint returns 403 to browser requests, so this is required in practice for Solana mainnet.
+- **Tempo permit settlement path** — server's `TempoFacilitator` now advertises `scheme: "permit"` in the 402 response and accepts EIP-2612 permit payloads, enabling browser payment on Tempo Moderato without a chain switch. Node CLI callers still default to MPP on Tempo; no CLI opt-in changes.
+- **`MoltsPayServer` `cors` option** — CORS is required for browser clients. Default (`*`) preserves 1.5.x behavior; set to a string, string-array, or `false` to tighten. Default response already advertises `Access-Control-Expose-Headers: X-Payment-Required, X-Payment-Response, WWW-Authenticate, Payment-Receipt` so browsers can read the 402 challenge.
+- **React + Vite demo** at `examples/web/` — reference integration showing MetaMask + Phantom + `composeSigners`.
+
+### Fixed
+- **EIP-712 `signTypedData` now calls `ensureChainId`** before signing. Previously MetaMask threw `The Provider is not connected to the requested chain` for any EIP-3009 or permit sign whose `domain.chainId` differed from the wallet's active chain.
+- **Browser wallet disambiguation** in the demo's `detectProvider` now excludes Coinbase Wallet by its proxy-specific keys (`providerMap`, `overrideIsMetaMask`, `selectedProvider`, `qrUrl`). Coinbase Wallet spoofs `isMetaMask: true` via `overrideIsMetaMask`, so naive `providers[0]` or `isMetaMask` filtering mis-picked Coinbase when both wallets were installed.
+- **Server `validatePayment` and `/proxy` now accept `scheme: "permit"`** in addition to `scheme: "exact"`. Previously two hardcoded checks rejected permit payloads before the facilitator router could see them, breaking Tempo browser payments.
+- **EVM settle failure after skill execution now returns HTTP 402** with `{error, message, facilitator}` instead of a false-positive `HTTP 200 {success: true, payment: {status: "pending"}}`. Customers were seeing "Paid" in the UI while no settlement had occurred on-chain. Pay-for-success providers using this path lose the skill cost on settle failure but no longer silently claim success.
+- **Tempo EIP-712 domain name casing** corrected: `pathUSD` → `PathUSD`, `alphaUSD` → `AlphaUSD` etc. — token-per-token fixtures now match what the on-chain TIP-20 contracts expose via `name()`.
+
+### Known Limitations
+Phase 8 browser QA exercised 3 of 8 chains end-to-end in production-equivalent conditions (`base`, `base_sepolia`, `solana_devnet` — all passed with real on-chain settlements). The other 5 chains have code paths covered only by unit tests or by partial integration runs:
+
+- **`bnb` and `bnb_testnet`** — Web Client's `approveBnb` + EIP-712 `PaymentIntent` flow has not been verified end-to-end in a browser. BNB's `requiresApproval: true` code path is structurally distinct from the one-signature flows other chains use. First BNB customer is the de-facto verification.
+- **`solana:mainnet`** — `solanaRpc` override is covered by 3 unit tests but has not been verified in-browser against a real Helius/QuickNode endpoint.
+- **`polygon`** — client-side EIP-3009 signature construction verified via CDP verify, but no successful on-chain settlement run in QA (tester wallet had 0 USDC on Polygon). Code path is identical to `base` which did pass.
+- **`tempo_moderato`** — permit signature + on-chain allowance update verified; the subsequent `transferFrom` step did not run in QA due to tester wallet having 0 pathUSD.
+
+See `docs/WEB-CLIENT-DESIGN.md` §Phase 8 for full QA matrix and 1.6.1 follow-up plan.
+
+## [Unreleased]
+
+### Added
+- **Solana Chain Support** - Full Solana mainnet and devnet integration
+  - New `SolanaFacilitator` for SPL token transfers
+  - Separate ed25519 wallet stored at `~/.moltspay/wallet-solana.json`
+  - `npx moltspay faucet --chain solana_devnet` for free testnet USDC
+  - Official Circle USDC SPL token support
+  - Cost: ~$0.001 SOL per transaction
+  
+- **BNB Chain Support** - BNB Smart Chain mainnet and testnet
+  - New `BNBFacilitator` with EIP-712 intent signing
+  - Gas-sponsored model (server pays ~$0.0001 per tx)
+  - `npx moltspay faucet --chain bnb_testnet` gives USDC + tBNB for gas
+  - Pay-for-success: payment only settles if service succeeds
+  - Note: BNB uses 18 decimals (not 6 like Base/Polygon)
+
+- **Tempo Chain Support** - Tempo Moderato testnet with MPP protocol
+  - New `TempoFacilitator` for native gas-free transfers
+  - TIP-20 tokens: pathUSD (USDC), alphaUSD (USDT)
+  - `npx moltspay faucet --chain tempo_moderato` for free testnet tokens
+  - MPP (Machine Payments Protocol) support alongside x402
+
+- **Testnet Faucet** - `npx moltspay faucet` to get free testnet USDC
+  - Base Sepolia: 1 USDC per request, once per 24 hours
+  - Solana Devnet: 1 USDC per request
+  - BNB Testnet: 1 USDC + 0.001 tBNB (for gas)
+  - Tempo Moderato: 1 pathUSD per request
+
+### Fixed
+- **EIP-712 Domain Name** - Fixed signature verification failures on Base Sepolia
+  - Server now returns correct token domain per network in `extra` field
+  - Base mainnet USDC uses domain name `"USD Coin"`
+  - Base Sepolia USDC uses domain name `"USDC"` (different contract!)
+  - Client now uses server's `extra` field for signing instead of hardcoded values
+- Added `base_sepolia` to supported chains in CLI
+
+## [0.9.5] - 2026-03-04
+
+### Added
+- **Skill Execution Timeout** - Prevents hung skills from blocking requests forever
+  - Configurable via `SKILL_TIMEOUT_SECONDS` env var (default: 1200 = 20 minutes)
+  - Applies to both `/execute` and `/proxy` endpoints
+  - If skill times out, payment is NOT settled (client keeps money)
+
+### Example
+```env
+# In ~/.moltspay/.env
+SKILL_TIMEOUT_SECONDS=1200  # 20 minutes
+```
+
+## [0.9.3] - 2026-02-23
+
+### Fixed
+- Include buyer wallet address (`from`) in `/proxy` response
+
+## [0.9.2] - 2026-02-21
+
+### Added
+- **Proxy Execute Mode** - `/proxy` endpoint now supports skill execution with pay-on-success
+  - Pass `execute: true` + `service` + `params` to execute a skill after payment verification
+  - Skill executes BEFORE settlement - if skill fails, payment is NOT settled (client keeps money)
+  - Perfect for platform integrations (e.g., moltspay.com marketplace)
+- IP whitelist for `/proxy` endpoint (`PROXY_ALLOWED_IPS` env var)
+
+### Changed
+- `/proxy` with `execute: true` now follows pay-on-success model:
+  1. Verify payment signature
+  2. Execute skill
+  3. If success -> settle payment, return result
+  4. If fail -> don't settle, return error
+- Improved logging for proxy execute flow
+
+### Fixed
+- Proxy execute now properly passes params to skill handler
+
+### Example Usage
+```bash
+# Platform calls /proxy with execute mode
+curl -X POST https://server.com/proxy \
+  -H "Content-Type: application/json" \
+  -H "X-Payment: <payment-header>" \
+  -d '{
+    "wallet": "0x...",
+    "amount": 0.99,
+    "execute": true,
+    "service": "text-to-video",
+    "params": {"prompt": "a cat dancing"}
+  }'
+```
+
+## [0.9.1] - 2026-02-20
+
+### Added
+- Facilitator selection via environment variables:
+  - `FACILITATOR_PRIMARY` - Primary facilitator (default: cdp)
+  - `FACILITATOR_FALLBACK` - Comma-separated fallback list
+  - `FACILITATOR_STRATEGY` - Selection strategy (failover/cheapest/fastest/random/roundrobin)
+- Updated `.env.example` with all facilitator config options
+- Placeholder sections for upcoming ChaosChain and Questflow facilitators
+
+### Fixed
+- Users no longer need to modify code to configure facilitators
+
+## [0.9.0] - 2026-02-20
+
+### Added
+- **Facilitator Abstraction Layer** (Phase 1 of v0.9.0)
+  - `Facilitator` interface for pluggable payment facilitators
+  - `CDPFacilitator` class (extracted from server logic)
+  - `FacilitatorRegistry` with selection strategies (failover, cheapest, fastest, random, roundrobin)
+  - New `/health` endpoint showing facilitator status
+- Exports: `moltspay/facilitators` subpath for direct access
+- Server now accepts `facilitators` config option
+
+### Changed
+- Server refactored to use `FacilitatorRegistry` instead of hardcoded CDP logic
+- `/services` endpoint now includes facilitator configuration in response
+
+### Fixed
+- Server now loads `.env` file before reading `USE_MAINNET` (was ignoring env file)
+
+### Migration
+- Fully backward compatible - default behavior unchanged
+- New facilitator config is opt-in:
+  ```typescript
+  const server = new MoltsPayServer('./services.json', {
+    facilitators: {
+      primary: 'cdp',
+      fallback: ['chaoschain'],  // Coming soon
+      strategy: 'failover'
+    }
+  });
+  ```
+
+## [0.8.15] - 2026-02-19
+
+### Changed
+- Entry point discovery now reads `package.json` `main` field
+- Falls back to `index.js` if no `main` specified
+- Providers no longer need to name their entry point `index.js`
+
+## [0.8.14] - 2026-02-19
+
+### Added
+- JSON Schema for `moltspay.services.json` validation
+- `npx moltspay validate <path>` command to validate manifests
+- Schema available at `schemas/moltspay.services.schema.json`
+
+## [0.8.13] - 2026-02-19
+
+### Changed
+- Skill-based architecture: providers add only `moltspay.services.json`
+- `function` field points to existing exports in skill's entry point
+- Server auto-discovers entry point from skill's `package.json`
+- No wrapper code needed - existing skill code stays untouched
+
+### Fixed
+- Various x402 flow improvements
+
+## [0.5.4] - 2026-02-17
+
+### Added
+- Internal module improvements
+
+---
+
+## [0.4.4] - 2026-02-16
+
+### Fixed
+- Fixed imports: use `import { createX402Client } from 'moltspay'` (main export)
+- Removed broken subpath exports (`/x402`, `/cdp`) that didn't exist in build
+
+## [0.4.3] - 2026-02-16
+
+### Fixed
+- Corrected x402 endpoint URL to `https://juai8.com/zen7/v1/video/generate`
+
+## [0.4.2] - 2026-02-16
+
+### Changed
+- **Docs overhaul:** Clarified that local wallet + x402 = NO GAS needed for client agents
+- Moved CDP wallet to "optional/advanced" section (not recommended for most users)
+- Added clear explanation of EIP-3009 signature flow (client signs, facilitator pays gas)
+
+### Fixed
+- Updated x402 example URLs to use actual endpoint: `https://juai8.com/x402pay`
+
+## [0.4.1] - 2026-02-16
+
+### Fixed
+- Updated x402 example URLs to use actual endpoint: `https://juai8.com/x402pay`
+
+## [0.4.0] - 2026-02-16
+
+### Added
+
+#### x402 Protocol Support
+- `createX402Client()` - Create HTTP client with automatic x402 payment handling
+- `x402Fetch()` - One-shot function for paid HTTP requests
+- `isX402Available()` - Check if x402 packages are installed
+- Automatic 402 Payment Required response handling
+- Integration with official `@x402/fetch` and `@x402/evm` packages
+
+#### CDP (Coinbase Developer Platform) Wallet
+- `initCDPWallet()` - Initialize CDP-hosted wallet
+- `CDPWallet` class - Manage CDP wallet operations
+- `npx moltspay init --cdp` - CLI command for CDP wallet creation
+- No gas needed for wallet creation
+- viem account compatibility for x402 integration
+
+#### CLI Enhancements
+- `moltspay init` now supports `--cdp` flag for CDP wallet
+- `moltspay init` shows clear next steps after initialization
+
+### Changed
+- x402 packages moved to peerDependencies (optional)
+- CDP SDK added as optional peerDependency
+- Package exports updated to include `/x402` and `/cdp` subpaths
+
+## [0.3.0] - 2026-02-15
+
+### Added
+- AgentWallet with auto-initialization
+- Direct transfer support (wallet.transfer())
+- Service payment helper (wallet.payService())
+
+## [0.2.1] - 2026-02-15
+
+### Changed
+- Converted all content to English (templates, receipts, guides, comments)
+- Status markers now use `[status:xxx]` format instead of Chinese
+
+## [0.2.0] - 2026-02-15
+
+### Added - Agent-to-Agent Payment Flow
+
+Complete implementation of all features required for Agent-to-Agent conversational payment flow.
+
+#### P0: Core Features
+
+**createWallet()** - Create wallet for buyer Agent
+```typescript
+import { createWallet, loadWallet } from 'moltspay';
+
+// Create new wallet (auto-stored to ~/.moltspay/wallet.json)
+const result = createWallet();
+console.log('Wallet address:', result.address);
+
+// Encrypted storage
+const result = createWallet({ password: 'secure123' });
+
+// Load existing wallet
+const wallet = loadWallet({ password: 'secure123' });
+```
+
+**PermitWallet** - Pay using Boss's Permit authorization
+```typescript
+import { PermitWallet } from 'moltspay';
+
+const wallet = new PermitWallet({ chain: 'base' });
+
+// Pay using Boss-signed Permit
+const result = await wallet.transferWithPermit({
+  to: '0xSELLER...',
+  amount: 3.99,
+  permit: {
+    owner: '0xBOSS...',
+    spender: wallet.address,
+    value: '10000000',
+    deadline: 1234567890,
+    v: 27,
+    r: '0x...',
+    s: '0x...'
+  }
+});
+```
+
+#### P1: Receipt Generation
+
+**generateReceipt()** - Generate transaction receipt
+```typescript
+import { generateReceipt, formatReceiptText } from 'moltspay';
+
+const receipt = generateReceipt({
+  orderId: 'vo_abc123',
+  service: 'Video generation 5s 720p',
+  amount: 3.99,
+  chain: 'base',
+  txHash: '0x...',
+  payerAddress: '0xBUYER...',
+  recipientAddress: '0xSELLER...',
+  delivery: {
+    url: 'https://...',
+    fileHash: 'sha256:...'
+  }
+});
+
+// Format as plain text (for Feishu/WhatsApp)
+console.log(formatReceiptText(receipt));
+```
+
+#### P2: Conversation Templates
+
+**SellerTemplates / BuyerTemplates** - Standardized dialogue templates
+```typescript
+import { SellerTemplates, BuyerTemplates, parseStatusMarker } from 'moltspay';
+
+// Seller templates
+SellerTemplates.askPaymentCapability();
+SellerTemplates.guideInstall();
+SellerTemplates.quote({ service: 'Video gen', price: 3.99, recipientAddress: '0x...' });
+
+// Buyer templates
+BuyerTemplates.requestService('video generation');
+BuyerTemplates.walletCreated('0x...');
+BuyerTemplates.paymentSent('0xtx...', 3.99);
+
+// Parse status markers
+const status = parseStatusMarker('[status:payment_sent tx=0xabc amount=3.99 USDC]');
+// { type: 'payment_sent', data: { txHash: '0xabc', amount: '3.99' } }
+```
+
+### New Exports
+
+```typescript
+// Wallet creation
+export { createWallet, loadWallet, getWalletAddress, walletExists } from 'moltspay';
+
+// Permit wallet
+export { PermitWallet, formatPermitRequest } from 'moltspay';
+
+// Receipt
+export { generateReceipt, generateReceiptFromInvoice, formatReceiptMessage, formatReceiptText, formatReceiptJson } from 'moltspay';
+
+// Conversation templates
+export { SellerTemplates, BuyerTemplates, StatusMarkers, parseStatusMarker } from 'moltspay';
+```
+
+---
+
+## [0.1.3] - 2026-02-10
+
+### Added
+- OrderManager for order management
+- Payment guide message generation
+
+## [0.1.2] - 2026-02-08
+
+### Added
+- SecureWallet (limits/whitelist/audit)
+- AuditLog for immutable audit logging
+
+## [0.1.1] - 2026-02-06
+
+### Added
+- PaymentAgent core class
+- Invoice generation
+- On-chain payment verification
+- Multi-chain support (Base, Polygon, Ethereum)
+
+## [0.1.0] - 2026-02-05
+
+### Added
+- Initial release
+- Basic Wallet class
+- EIP-2612 Permit support

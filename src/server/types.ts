@@ -25,7 +25,7 @@ export interface ServiceConfig {
   /** Function name to import from skill's index.js (new skill-based approach) */
   function?: string;
   /**
-   * Alipay AI 收 per-service config (1.7.0+).
+   * Alipay AI 收 per-service config (2.0.0+).
    * Set when this service accepts CNY payments via the alipay rail.
    * The `price`/`currency` fields above still describe USDC pricing
    * for the x402 rails; `alipay.price_cny` is a separate CNY price.
@@ -34,7 +34,7 @@ export interface ServiceConfig {
 }
 
 /**
- * Per-service Alipay AI 收 configuration (1.7.0+).
+ * Per-service Alipay AI 收 configuration (2.0.0+).
  *
  * Sample:
  * ```json
@@ -86,7 +86,7 @@ export interface ProviderConfig {
   chain?: string;  // Single chain (backward compat)
   chains?: ChainConfig[];  // Multi-chain support
   /**
-   * Alipay AI 收 provider-level config (1.7.0+).
+   * Alipay AI 收 provider-level config (2.0.0+).
    * Required when `chains` includes `"alipay"`.
    * Server validates `private_key_path` / `alipay_public_key_path` are
    * readable + parse as RSA PEM at startup; rejects start otherwise.
@@ -95,7 +95,7 @@ export interface ProviderConfig {
 }
 
 /**
- * Provider-level Alipay AI 收 configuration (1.7.0+).
+ * Provider-level Alipay AI 收 configuration (2.0.0+).
  *
  * The user-facing form uses FILE PATHS for both PEM keys; the server
  * resolves them to PEM strings before constructing AlipayFacilitator.
@@ -127,7 +127,7 @@ export interface ProviderAlipayConfig {
   alipay_public_key_path: string;
   /** Open API gateway URL. Defaults to `"https://openapi.alipay.com/gateway.do"`. */
   gateway_url?: string;
-  /** Signature algorithm. Only `"RSA2"` is supported in 1.7.0. */
+  /** Signature algorithm. Only `"RSA2"` is supported in 2.0.0. */
   sign_type?: 'RSA2';
 }
 

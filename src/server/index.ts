@@ -53,7 +53,7 @@ const MPP_AUTH_HEADER = 'authorization';
 const MPP_WWW_AUTH_HEADER = 'www-authenticate';
 const MPP_RECEIPT_HEADER = 'payment-receipt';
 
-// Alipay AI 收 fiat rail constants (1.7.0)
+// Alipay AI 收 fiat rail constants (2.0.0)
 // Legacy `Payment-Needed` 402 challenge header, mirror of `X-Payment-Required`,
 // kept so `alipay-bot` (@alipay/agent-payment) skills work unchanged.
 const ALIPAY_PAYMENT_NEEDED_HEADER = 'payment-needed';
@@ -235,7 +235,7 @@ export class MoltsPayServer {
   private registry: FacilitatorRegistry;
   private networkId: string;
   private useMainnet: boolean;
-  /** Alipay AI 收 facilitator instance, set when `provider.alipay` is configured (1.7.0). */
+  /** Alipay AI 收 facilitator instance, set when `provider.alipay` is configured (2.0.0). */
   private alipayFacilitator: AlipayFacilitator | null = null;
 
   constructor(servicesPath: string, options: MoltsPayServerOptionsExtended = {}) {
@@ -272,7 +272,7 @@ export class MoltsPayServer {
       },
     };
 
-    // ── Alipay AI 收 fiat rail (1.7.0): opt-in via provider.alipay ──
+    // ── Alipay AI 收 fiat rail (2.0.0): opt-in via provider.alipay ──
     // When configured, resolve the PEM key files (the manifest stores PATHS,
     // the facilitator wants PEM STRINGS) and register the facilitator in the
     // selection so registry.verify/settle route `network: "alipay"` to it.
@@ -685,7 +685,7 @@ export class MoltsPayServer {
       }
     }
 
-    // Alipay fiat rail (1.7.0): a `Payment-Proof` header means the buyer paid
+    // Alipay fiat rail (2.0.0): a `Payment-Proof` header means the buyer paid
     // via alipay-bot and is re-requesting the resource with proof. Route to
     // the facilitator verify→fulfill path (the proof's Base64URL blob carries
     // payment_proof / trade_no / client_session).
@@ -713,7 +713,7 @@ export class MoltsPayServer {
       return this.sendJson(res, 400, { error: 'Invalid X-Payment header' });
     }
 
-    // Alipay fiat rail (1.7.0): route by scheme/network BEFORE the EVM path.
+    // Alipay fiat rail (2.0.0): route by scheme/network BEFORE the EVM path.
     // validatePayment() only accepts 'exact'/'permit' schemes + EVM/SVM
     // networks, so an alipay payment must branch off here or it'd be rejected.
     const payScheme = payment.accepted?.scheme || payment.scheme;
@@ -845,7 +845,7 @@ export class MoltsPayServer {
   }
 
   /**
-   * Execute a service paid via the Alipay AI 收 fiat rail (1.7.0).
+   * Execute a service paid via the Alipay AI 收 fiat rail (2.0.0).
    *
    * Differs from the EVM/SVM path: no token detection, no EIP-3009/permit
    * validation. Verify hits the Alipay Open API (`payment.verify`). Settlement
@@ -1155,7 +1155,7 @@ export class MoltsPayServer {
       }
     }
 
-    // Alipay fiat rail (1.7.0): append the alipay x402 entry when configured.
+    // Alipay fiat rail (2.0.0): append the alipay x402 entry when configured.
     const alipayChallenge = await this.buildAlipayChallenge(config);
     if (alipayChallenge) {
       accepts.push(alipayChallenge.accepts);
@@ -1255,7 +1255,7 @@ export class MoltsPayServer {
       }
     }
 
-    // Alipay fiat rail (1.7.0): append the alipay x402 entry when configured.
+    // Alipay fiat rail (2.0.0): append the alipay x402 entry when configured.
     const alipayChallenge = await this.buildAlipayChallenge(config);
     if (alipayChallenge) {
       accepts.push(alipayChallenge.accepts);

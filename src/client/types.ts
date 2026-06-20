@@ -10,7 +10,7 @@ export interface ClientConfig {
     maxPerDay: number;
   };
   /**
-   * Ordered rail preference (1.7.0). When the server's 402 offers more than
+   * Ordered rail preference (2.0.0). When the server's 402 offers more than
    * one rail (e.g. USDC on Base AND CNY via Alipay) and the caller didn't
    * pass an explicit `rail`, the first entry here that the server also
    * accepts wins. e.g. `["base", "alipay"]`.

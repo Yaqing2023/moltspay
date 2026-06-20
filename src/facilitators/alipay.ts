@@ -1,5 +1,5 @@
 /**
- * Alipay AI 收 Facilitator (1.7.0)
+ * Alipay AI 收 Facilitator (2.0.0)
  *
  * Implements the `Facilitator` interface for Alipay's 智能收 (AI Pay) 402
  * protocol. Adds a fiat rail (CNY) alongside the existing USDC/EVM/SVM

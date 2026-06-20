@@ -2,7 +2,7 @@
  * Rail routing (design §5.2.5).
  *
  * 1.6.0 and earlier, a service accepted exactly one payment method. With the
- * 1.7.0 Alipay rail the server's 402 `accepts[]` can carry BOTH crypto
+ * 2.0.0 Alipay rail the server's 402 `accepts[]` can carry BOTH crypto
  * (USDC on Base, …) and fiat (CNY via Alipay). `selectRail` picks one,
  * deterministically, from the caller's intent + the server's offer.
  *
