@@ -822,6 +822,88 @@ npx moltspay status
 
 **Explorer:** https://explore.testnet.tempo.xyz
 
+## Fiat Rail (Alipay / CNY)
+
+Since **`2.0.0`**, MoltsPay supports a **fiat payment rail via Alipay (支付宝 AI 收)**, settling in **CNY (人民币)** alongside the existing USDC crypto rails. It uses the same HTTP 402 flow, so a service can price in USDC, CNY, or both — a purely additive change that leaves existing crypto-only services untouched.
+
+Unlike the crypto rails, `alipay` is a **fiat rail, not a blockchain**: there is no gas and no on-chain settlement — the buyer pays in the Alipay app and the merchant settles in CNY. The scheme is `alipay-aipay`, signed with RSA2.
+
+> ⚠️ **Node CLI only.** The Alipay client wraps the `alipay-bot` CLI and requires Node ≥ 22. The browser build (`moltspay/web`) throws `UnsupportedChainError` for `alipay`. Provider/server config is 100% native TypeScript.
+
+### Provider Setup (Selling in CNY)
+
+Add `"alipay"` to `chains`, configure `provider.alipay` with your merchant keys, and add a per-service `alipay` block with the CNY price. Crypto and fiat can coexist:
+
+```json
+{
+  "provider": {
+    "name": "My Service",
+    "wallet": "0x...",
+    "chains": ["base", "alipay"],
+    "alipay": {
+      "seller_id": "2088xxxxxxxxxxxx",
+      "app_id": "2021xxxxxxxxxxxx",
+      "seller_name": "My Shop",
+      "service_id_default": "API_XXXXXXXXXXXXXXXX",
+      "private_key_path": "./cert/app_private_key.pem",
+      "alipay_public_key_path": "./cert/alipay_public_key.pem"
+    }
+  },
+  "services": [{
+    "id": "my-service",
+    "function": "handleRequest",
+    "price": 0.50,
+    "currency": "USDC",
+    "alipay": { "price_cny": "7.00", "goods_name": "My Service" }
+  }]
+}
+```
+
+**`provider.alipay`** (required when `chains` includes `alipay`):
+
+| Field | Req | Description |
+|-------|-----|-------------|
+| `seller_id` | ✅ | Merchant Alipay ID (16 digits) |
+| `app_id` | ✅ | Application ID from the Alipay Open Platform (16 digits) |
+| `seller_name` | ✅ | Merchant display name (shown in the 402 challenge) |
+| `service_id_default` | ✅ | Default `service_id` for this provider (e.g. `API_XXXXXXXXXXXXXXXX`) |
+| `private_key_path` | ✅ | Path to the RSA2 merchant private key PEM (relative to the manifest) |
+| `alipay_public_key_path` | ✅ | Path to the Alipay platform public key PEM |
+| `gateway_url` | — | Open API gateway (default production; use the sandbox URL for testing) |
+| `sign_type` | — | Signature algorithm — only `RSA2` is supported |
+
+**`services[].alipay`** (set on each service that accepts CNY):
+
+| Field | Req | Description |
+|-------|-----|-------------|
+| `price_cny` | ✅ | CNY price as a decimal string in **元**, e.g. `"7.00"` = 7 CNY (**NOT cents**) |
+| `goods_name` | ✅ | Goods name shown to the buyer in the Alipay app |
+| `service_id` | — | Per-service override (defaults to `provider.alipay.service_id_default`) |
+
+> ⚠️ `price` (USDC) and `price_cny` (CNY) are **two independent prices** — MoltsPay does no FX conversion. You decide whether USDC `0.50` is equivalent to CNY `7.00`. The merchant-backend unit price must match `price_cny` or the challenge is rejected.
+
+### Client Usage (Paying in CNY)
+
+The Alipay client relies on the `alipay-bot` CLI, which is **auto-provisioned on install** from the official Alipay CDN (postinstall, best-effort). Set `MOLTSPAY_SKIP_CLI_INSTALL=1` to skip it, or install it manually later:
+
+```bash
+# Manual / CI install of the bundled CLI
+npx -y @alipay/agent-payment install-cli
+alipay-bot --version          # expect >= 0.3.15
+
+# One-time: open & authorize the Alipay wallet (scan the returned QR in the app)
+npx moltspay alipay apply
+npx moltspay alipay bind -c "<auth-code>"
+npx moltspay alipay check
+
+# Pay a service in CNY
+npx moltspay pay https://server.com my-service --chain alipay --prompt "..."
+```
+
+> 🔐 **Keep keys safe.** The RSA2 private key authorizes collection on your merchant account. Store the PEM files outside version control and reference them by path in the manifest.
+
+See [`docs/ALIPAY-RAIL.md`](docs/ALIPAY-RAIL.md) for the full reference (402 flow, error codes, end-to-end example, and known issues).
+
 ## Live Example: Zen7 Video Generation
 
 Live service at `https://moltspay.com/a/zen7`
