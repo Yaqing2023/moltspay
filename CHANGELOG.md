@@ -1,5 +1,31 @@
 # Changelog
 
+## [2.1.0] - 2026-06-27
+
+Second **fiat rail: WeChat Pay v3 Native (微信支付 / 扫码付)**, settling in CNY alongside USDC and Alipay.
+
+**No breaking changes.** Every existing rail (crypto + Alipay) behaves identically; WeChat is strictly opt-in via configuration. Upgrading from 2.0.x requires no code changes.
+
+Unlike Alipay AI Pay, WeChat has no autonomous agent-payment product, so this rail is **server-side verify/settle with a human scanning the QR**: the agent issues a payer-agnostic Native `code_url` (no `openid`), anyone scans to pay, and the server confirms by polling the order. One code, one payment.
+
+### Added
+- **WeChat Pay fiat rail** — a new `WechatFacilitator` settling CNY over the x402 protocol.
+  - New `wechat` chain / `wechatpay-native` scheme; **SHA256-RSA** request signing (`WECHATPAY2-SHA256-RSA2048`), optional response-signature verification against the WeChat platform certificate.
+  - `createPaymentRequirements` places a Native order (`POST /v3/pay/transactions/native`) and returns a `code_url`; `verify` queries the order (`trade_state === SUCCESS`); `settle` is an idempotent confirm; `healthCheck` validates keys + gateway reachability.
+  - Amount is converted yuan → fen (`cnyToFen`) for the WeChat API; the manifest uses yuan decimal strings.
+- **WeChat crypto helpers** — `wechatV3Sign` / `buildAuthorizationToken` / `wechatV3VerifyResponse` (`src/facilitators/wechat/sign.ts`) and the `wechatV3Call` v3 JSON gateway client (`src/facilitators/wechat/api.ts`).
+- **HTTP server integration** — opt-in via `provider.wechat` (`mchid`, `appid`, `serial_no`, `private_key_path`, `notify_url`, optional `platform_public_key_path` / `apiv3_key`) and per-service `services[].wechat` (`price_cny`, `description`). 402 responses append a `wechatpay-native` `accepts[]` entry carrying `code_url` + `out_trade_no`; `/execute` dispatches the rail to verify → run skill → fire-and-forget settle.
+- **Scenario-A demo** — `examples/wechat-native-pay.ts` (issue code → `qrcode-terminal` → poll → settle); mock by default, `WECHAT_REAL=1` hits the live gateway.
+- **Docs** — `docs/WECHAT-RAIL-DESIGN.md` (design + scenario A) and `docs/WECHAT-RAIL-PLAN.md` (dev plan).
+
+### Fixed
+- **Fiat rails no longer produce a spurious crypto `accepts[]` entry** — `getProviderChains` now excludes `alipay`/`wechat` from EVM chain iteration (they were defaulting to a base/USDC entry when listed in `provider.chains`). Affects Alipay too.
+
+### Migration from 2.0.x
+1. No code changes required — fully backward compatible.
+2. Optional: add `provider.wechat` + `services[].wechat` to your services JSON to enable WeChat payments.
+3. WeChat confirmation is poll-based; render the `code_url` from the 402 `accepts[]` as a QR and re-request `/execute` with the `out_trade_no`.
+
 ## [2.0.0] - 2026-06-20
 
 First-class **fiat payments via Alipay (支付宝 AI 收)**. This is the milestone release that takes MoltsPay beyond crypto-only settlement.

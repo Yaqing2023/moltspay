@@ -25,7 +25,8 @@ MoltsPay enables agent-to-agent commerce using the [x402 protocol](https://www.x
 - **Payment Verification** - Automatic on-chain verification
 - **Secure Wallet** - Spending limits, whitelist, and audit logging
 - **Multi-chain** - Base, Polygon, Solana, BNB, Tempo (mainnet & testnet)
-- **Fiat Rail (`2.0.0`)** - Accept CNY via 支付宝 AI 收 from China mainland merchants. CLI-only (Node), browser unsupported. See [`docs/ALIPAY-RAIL.md`](docs/ALIPAY-RAIL.md)
+- **Fiat Rail — Alipay (`2.0.0`)** - Accept CNY via 支付宝 AI 收 from China mainland merchants. CLI-only (Node), browser unsupported. See [`docs/ALIPAY-RAIL.md`](docs/ALIPAY-RAIL.md)
+- **Fiat Rail — WeChat Pay (`2.1.0`)** - Accept CNY via WeChat Pay v3 Native (scan-to-pay). Server-side verify/settle; agent issues a payer-agnostic QR, anyone scans to pay. See [`docs/WECHAT-RAIL-DESIGN.md`](docs/WECHAT-RAIL-DESIGN.md)
 - **Agent-to-Agent** - Complete A2A payment flow support
 - **Multi-VM** - EVM chains + Solana (SVM) with unified API
 - **MCP Server** - Expose wallet + payments to Claude Desktop, Cursor, and other MCP hosts
@@ -903,6 +904,76 @@ npx moltspay pay https://server.com my-service --chain alipay --prompt "..."
 > 🔐 **Keep keys safe.** The RSA2 private key authorizes collection on your merchant account. Store the PEM files outside version control and reference them by path in the manifest.
 
 See [`docs/ALIPAY-RAIL.md`](docs/ALIPAY-RAIL.md) for the full reference (402 flow, error codes, end-to-end example, and known issues).
+
+## Fiat Rail (WeChat Pay / CNY)
+
+Since **`2.1.0`**, MoltsPay supports a second **fiat payment rail via WeChat Pay v3 Native (扫码付)**, settling in **CNY (人民币)** alongside USDC and Alipay. It uses the same HTTP 402 flow, so a service can price in USDC, Alipay-CNY, WeChat-CNY, or any combination — purely additive.
+
+Like `alipay`, `wechat` is a **fiat rail, not a blockchain**. The scheme is `wechatpay-native`, requests are signed with **SHA256-RSA** (`WECHATPAY2-SHA256-RSA2048`), and amounts are sent to WeChat in **fen** (the manifest still uses **yuan** decimal strings for consistency).
+
+> ⚠️ **Not an autonomous agent payment.** WeChat Pay has no agent-payment product equivalent to Alipay's `alipay-bot`. The flow is: the agent issues a **payer-agnostic `code_url`** (Native, no `openid` — anyone can scan), a human scans and pays, and the server confirms by **polling the order** (`trade_state === SUCCESS`). It is **one code, one payment** — issue a new code to collect again. See [`docs/WECHAT-RAIL-DESIGN.md`](docs/WECHAT-RAIL-DESIGN.md).
+
+### Provider Setup (Selling in CNY)
+
+Add `"wechat"` to `chains`, configure `provider.wechat` with your merchant credentials, and add a per-service `wechat` block with the CNY price:
+
+```json
+{
+  "provider": {
+    "name": "My Service",
+    "wallet": "0x...",
+    "chains": ["base", "wechat"],
+    "wechat": {
+      "mchid": "1900000001",
+      "appid": "wx8888888888888888",
+      "serial_no": "5157F09EFDC096DE15EBE81A47057A72...",
+      "private_key_path": "./cert/wechat_apiclient_key.pem",
+      "platform_public_key_path": "./cert/wechat_platform_cert.pem",
+      "apiv3_key": "your32byteapiv3keyhere0123456789",
+      "notify_url": "https://your.host/wechat/notify"
+    }
+  },
+  "services": [{
+    "id": "my-service",
+    "function": "handleRequest",
+    "price": 0.50,
+    "currency": "USDC",
+    "wechat": { "price_cny": "7.00", "description": "My Service" }
+  }]
+}
+```
+
+**`provider.wechat`** (required when `chains` includes `wechat`):
+
+| Field | Req | Description |
+|-------|-----|-------------|
+| `mchid` | ✅ | Merchant id (商户号) |
+| `appid` | ✅ | App id (official account / mini-program / app) |
+| `serial_no` | ✅ | Merchant API certificate serial number |
+| `private_key_path` | ✅ | Path to the merchant RSA private key PEM (relative to the manifest) |
+| `notify_url` | ✅ | Async result notify URL (required by Native order create even when polling) |
+| `platform_public_key_path` | — | WeChat platform certificate / public key PEM — enables response signature verification |
+| `apiv3_key` | — | APIv3 key (32 bytes) — only needed for callback decryption (Phase 2) |
+| `api_base` | — | Open API base URL (default `https://api.mch.weixin.qq.com`) |
+
+**`services[].wechat`** (set on each service that accepts CNY):
+
+| Field | Req | Description |
+|-------|-----|-------------|
+| `price_cny` | ✅ | CNY price as a decimal string in **yuan**, e.g. `"7.00"` = 7 CNY (**NOT fen**) |
+| `description` | ✅ | Order description shown to the payer in the WeChat app |
+
+> ⚠️ `price` (USDC) and `price_cny` (CNY) are **independent prices** — MoltsPay does no FX conversion.
+
+### How It Works
+
+1. An unpaid request to `/execute` returns **402** with a `wechatpay-native` entry in `accepts[]`, carrying `extra.code_url` (`weixin://wxpay/bizpayurl?pr=...`) and `extra.out_trade_no`.
+2. Render `code_url` as a QR (e.g. `qrcode-terminal`); a human scans and pays.
+3. The client re-requests `/execute` with an `X-Payment` payload echoing `out_trade_no`; the server verifies via order query and, on `SUCCESS`, runs the skill and confirms settlement.
+
+See [`examples/wechat-native-pay.ts`](examples/wechat-native-pay.ts) for a runnable scenario-A demo (mock by default; `WECHAT_REAL=1` hits the live gateway).
+
+> 🔐 **Keep keys safe.** The merchant private key and APIv3 key authorize collection on your merchant account. Store them outside version control and reference them by path.
 
 ## Live Example: Zen7 Video Generation
 

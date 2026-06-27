@@ -1,6 +1,6 @@
 {
   "name": "moltspay",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "Payment infrastructure for AI Agents - Server & Client SDK",
   "keywords": [
     "ai-agent",
@@ -110,6 +110,7 @@
     "README.md",
     "LICENSE",
     "docs/ALIPAY-RAIL.md",
+    "docs/WECHAT-RAIL-DESIGN.md",
     "docs/MCP-USAGE.md"
   ],
   "repository": {
