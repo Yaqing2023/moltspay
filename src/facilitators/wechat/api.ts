@@ -31,7 +31,7 @@ export const WECHAT_API_BASE = 'https://api.mch.weixin.qq.com';
  * `provider.wechat` in `moltspay.services.json` (PEMs resolved by the server).
  */
 export interface WechatV3Config {
-  /** Merchant id (商户号). */
+  /** Merchant id (mchid). */
   mchid: string;
   /** Merchant API certificate serial number. */
   serial_no: string;
