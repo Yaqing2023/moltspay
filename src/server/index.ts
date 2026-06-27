@@ -17,6 +17,7 @@
 import { readFileSync, existsSync } from 'fs';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import * as path from 'path';
+import crypto from 'node:crypto';
 import {
   FacilitatorRegistry,
   FacilitatorSelection,
@@ -28,9 +29,13 @@ import {
   AlipayFacilitatorConfig,
   ALIPAY_NETWORK,
   ALIPAY_SCHEME,
+  WechatFacilitator,
+  WechatFacilitatorConfig,
+  WECHAT_NETWORK,
+  WECHAT_SCHEME,
 } from '../facilitators/index.js';
 import { toPem } from '../facilitators/alipay/encoding.js';
-import { isAlipayChainId } from '../chains/index.js';
+import { isAlipayChainId, isWechatChainId } from '../chains/index.js';
 import {
   ServicesManifest,
   ServiceConfig,
@@ -237,6 +242,8 @@ export class MoltsPayServer {
   private useMainnet: boolean;
   /** Alipay AI 收 facilitator instance, set when `provider.alipay` is configured (2.0.0). */
   private alipayFacilitator: AlipayFacilitator | null = null;
+  /** WeChat Pay Native facilitator instance, set when `provider.wechat` is configured (2.1.0). */
+  private wechatFacilitator: WechatFacilitator | null = null;
 
   constructor(servicesPath: string, options: MoltsPayServerOptionsExtended = {}) {
     // Load env files FIRST (before reading USE_MAINNET)
@@ -309,11 +316,58 @@ export class MoltsPayServer {
       }
     }
 
+    // ── WeChat Pay v3 Native fiat rail (2.1.0): opt-in via provider.wechat ──
+    // Same model as Alipay: resolve the PEM key files (manifest stores PATHS,
+    // the facilitator wants PEM STRINGS) and register the facilitator so
+    // registry.verify/settle route `network: "wechat"` to it. The platform
+    // public key may be a public-key PEM OR an X.509 certificate PEM; the
+    // latter is normalized to a public-key PEM via X509Certificate. Key-load
+    // failure is fatal — a misconfigured rail must not start silently.
+    const providerWechat = this.manifest.provider.wechat;
+    if (providerWechat) {
+      try {
+        const baseDir = path.dirname(servicesPath);
+        const readPem = (p: string) =>
+          readFileSync(path.isAbsolute(p) ? p : path.resolve(baseDir, p), 'utf-8');
+        const toPublicKeyPem = (pem: string): string =>
+          pem.includes('BEGIN CERTIFICATE')
+            ? new crypto.X509Certificate(pem).publicKey.export({ type: 'spki', format: 'pem' }).toString()
+            : pem;
+        const wechatFacilitatorConfig: WechatFacilitatorConfig = {
+          mchid: providerWechat.mchid,
+          appid: providerWechat.appid,
+          serial_no: providerWechat.serial_no,
+          private_key_pem: readPem(providerWechat.private_key_path),
+          platform_public_key_pem: providerWechat.platform_public_key_path
+            ? toPublicKeyPem(readPem(providerWechat.platform_public_key_path))
+            : undefined,
+          apiv3_key: providerWechat.apiv3_key,
+          notify_url: providerWechat.notify_url,
+          api_base: providerWechat.api_base,
+        };
+        facilitatorConfig.config = {
+          ...facilitatorConfig.config,
+          wechat: wechatFacilitatorConfig as unknown as FacilitatorConfig,
+        };
+        facilitatorConfig.fallback = facilitatorConfig.fallback || [];
+        if (facilitatorConfig.primary !== 'wechat' && !facilitatorConfig.fallback.includes('wechat')) {
+          facilitatorConfig.fallback.push('wechat');
+        }
+      } catch (err: any) {
+        throw new Error(`[MoltsPay] WeChat rail configured but key load failed: ${err.message}`);
+      }
+    }
+
     this.registry = new FacilitatorRegistry(facilitatorConfig);
 
     if (providerAlipay) {
       this.alipayFacilitator = this.registry.get('alipay') as AlipayFacilitator;
       console.log(`[MoltsPay] Alipay AI 收 rail enabled (seller ${providerAlipay.seller_id})`);
+    }
+
+    if (providerWechat) {
+      this.wechatFacilitator = this.registry.get('wechat') as WechatFacilitator;
+      console.log(`[MoltsPay] WeChat Pay rail enabled (mchid ${providerWechat.mchid})`);
     }
 
     // Get primary facilitator for logging
@@ -371,15 +425,23 @@ export class MoltsPayServer {
     // If chains array is defined, use it
     // Supports both string array ["base", "polygon"] and object array [{chain, wallet, tokens}]
     if (provider.chains && provider.chains.length > 0) {
-      return provider.chains.map(c => {
-        const chainName = typeof c === 'string' ? c : c.chain;
-        const explicitWallet = typeof c === 'object' ? c.wallet : null;
-        return {
-          network: CHAIN_TO_NETWORK[chainName] || 'eip155:8453',
-          wallet: getWalletForChain(chainName, explicitWallet || undefined),
-          tokens: (typeof c === 'object' ? c.tokens : null) || ['USDC'],
-        };
-      });
+      return provider.chains
+        // Fiat rails (alipay/wechat) carry no EVM network/token; they are
+        // emitted separately via buildAlipayChallenge/buildWechatChallenge.
+        // Excluding them here prevents a spurious base/USDC accepts[] entry.
+        .filter(c => {
+          const chainName = typeof c === 'string' ? c : c.chain;
+          return !isAlipayChainId(chainName) && !isWechatChainId(chainName);
+        })
+        .map(c => {
+          const chainName = typeof c === 'string' ? c : c.chain;
+          const explicitWallet = typeof c === 'object' ? c.wallet : null;
+          return {
+            network: CHAIN_TO_NETWORK[chainName] || 'eip155:8453',
+            wallet: getWalletForChain(chainName, explicitWallet || undefined),
+            tokens: (typeof c === 'object' ? c.tokens : null) || ['USDC'],
+          };
+        });
     }
     
     // Fallback to single chain (backward compat)
@@ -721,6 +783,9 @@ export class MoltsPayServer {
     if (payScheme === ALIPAY_SCHEME || (payNetwork ? isAlipayChainId(payNetwork) : false)) {
       return this.handleAlipayExecute(skill, params || {}, payment, res);
     }
+    if (payScheme === WECHAT_SCHEME || (payNetwork ? isWechatChainId(payNetwork) : false)) {
+      return this.handleWechatExecute(skill, params || {}, payment, res);
+    }
 
     // Validate basic payment fields
     const validation = this.validatePayment(payment, skill.config);
@@ -961,6 +1026,133 @@ export class MoltsPayServer {
   }
 
   /**
+   * Execute a service paid via the WeChat Pay v3 Native fiat rail (2.1.0).
+   *
+   * Differs from the EVM/SVM path: no token detection, no EIP-3009/permit
+   * validation. The buyer (a human) scanned the Native QR and paid; the
+   * client re-requests carrying `out_trade_no` in the X-Payment payload.
+   * Verify queries the order (`trade_state === SUCCESS`). Settlement is an
+   * idempotent re-confirm and is FIRE-AND-FORGET (mirrors the Alipay path):
+   * a confirm failure is logged but does NOT fail the delivered response —
+   * the order was already verified SUCCESS.
+   */
+  private async handleWechatExecute(
+    skill: RegisteredSkill,
+    params: Record<string, any>,
+    payment: X402PaymentPayload,
+    res: ServerResponse
+  ): Promise<void> {
+    if (!this.wechatFacilitator) {
+      return this.sendJson(res, 402, { error: 'WeChat rail not configured on this server' });
+    }
+
+    // Verify/settle extract out_trade_no from the payload; requirements.network
+    // drives registry routing to the wechat facilitator. Pass the client's
+    // out_trade_no through requirements.extra as a fallback for verify().
+    const outTradeNo =
+      typeof payment.accepted?.extra?.out_trade_no === 'string'
+        ? payment.accepted.extra.out_trade_no
+        : undefined;
+    const requirements: X402PaymentRequirements = {
+      scheme: WECHAT_SCHEME,
+      network: WECHAT_NETWORK,
+      asset: 'CNY',
+      amount: skill.config.wechat?.price_cny || '0',
+      payTo: this.manifest.provider.wechat?.mchid || '',
+      maxTimeoutSeconds: 300,
+      extra: outTradeNo ? { out_trade_no: outTradeNo } : undefined,
+    };
+
+    console.log(`[MoltsPay] Verifying WeChat payment...`);
+    const verifyResult = await this.registry.verify(payment, requirements);
+    if (!verifyResult.valid) {
+      return this.sendJson(res, 402, {
+        error: `Payment verification failed: ${verifyResult.error}`,
+        facilitator: verifyResult.facilitator,
+      });
+    }
+    console.log(`[MoltsPay] WeChat payment verified by ${verifyResult.facilitator}`);
+
+    // Execute skill (same timeout contract as the EVM path).
+    const timeoutSeconds = parseInt(process.env.SKILL_TIMEOUT_SECONDS || '1200');
+    console.log(`[MoltsPay] Executing skill: ${skill.id} (timeout: ${timeoutSeconds}s)`);
+    let result: any;
+    try {
+      result = await Promise.race([
+        skill.handler(params),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`Skill timeout after ${timeoutSeconds}s`)), timeoutSeconds * 1000)
+        )
+      ]);
+    } catch (err: any) {
+      console.error('[MoltsPay] Skill execution failed:', err.message);
+      return this.sendJson(res, 500, {
+        error: 'Service execution failed',
+        message: err.message,
+      });
+    }
+
+    // Settlement confirm — fire-and-forget: log failures, never roll back.
+    let settlement: (SettleResult & { facilitator: string });
+    try {
+      settlement = await this.registry.settle(payment, requirements);
+      if (settlement.success) {
+        console.log(`[MoltsPay] WeChat settlement confirmed: ${settlement.transaction}`);
+      } else {
+        console.error(`[MoltsPay] WeChat settlement confirm failed (non-fatal): ${settlement.error}`);
+      }
+    } catch (err: any) {
+      console.error(`[MoltsPay] WeChat settlement confirm threw (non-fatal): ${err.message}`);
+      settlement = { success: false, error: err.message, facilitator: 'wechat' };
+    }
+
+    const responseHeaders: Record<string, string> = {};
+    if (settlement.success) {
+      responseHeaders[PAYMENT_RESPONSE_HEADER] = Buffer.from(JSON.stringify({
+        success: true,
+        transaction: settlement.transaction,
+        network: WECHAT_NETWORK,
+        facilitator: settlement.facilitator,
+      })).toString('base64');
+    }
+
+    this.sendJson(res, 200, {
+      success: true,
+      result,
+      payment: settlement.success
+        ? { transaction: settlement.transaction, status: 'fulfilled', facilitator: settlement.facilitator }
+        : { status: 'delivered_unconfirmed', error: settlement.error },
+    }, responseHeaders);
+  }
+
+  /**
+   * Build the WeChat 402 challenge for a service, or null when the wechat rail
+   * isn't configured for this server or this service. Placing a Native order
+   * is a network call that returns a fresh `code_url` + `out_trade_no`; the
+   * x402 `accepts[]` entry carries both in `extra` so the client can render
+   * the QR and later echo `out_trade_no` back for verification.
+   *
+   * NOTE: each 402 emit creates one pending WeChat order (inherent to Native);
+   * unpaid orders expire per `time_expire`. A build failure degrades
+   * gracefully (the other rails' accepts[] still ship).
+   */
+  private async buildWechatChallenge(
+    config: ServiceConfig
+  ): Promise<{ accepts: X402PaymentRequirements } | null> {
+    if (!this.wechatFacilitator || !config.wechat) return null;
+    try {
+      const req = await this.wechatFacilitator.createPaymentRequirements({
+        priceCny: config.wechat.price_cny,
+        description: config.wechat.description,
+      });
+      return { accepts: req.x402Accepts };
+    } catch (err: any) {
+      console.error(`[MoltsPay] WeChat challenge build failed for ${config.id}: ${err.message}`);
+      return null;
+    }
+  }
+
+  /**
    * Handle MPP (Machine Payments Protocol) request
    * Supports both x402 and MPP protocols on service endpoints
    */
@@ -1161,6 +1353,12 @@ export class MoltsPayServer {
       accepts.push(alipayChallenge.accepts);
     }
 
+    // WeChat fiat rail (2.1.0): append the wechat x402 entry when configured.
+    const wechatChallenge = await this.buildWechatChallenge(config);
+    if (wechatChallenge) {
+      accepts.push(wechatChallenge.accepts);
+    }
+
     const x402PaymentRequired = {
       x402Version: X402_VERSION,
       accepts,
@@ -1259,6 +1457,12 @@ export class MoltsPayServer {
     const alipayChallenge = await this.buildAlipayChallenge(config);
     if (alipayChallenge) {
       accepts.push(alipayChallenge.accepts);
+    }
+
+    // WeChat fiat rail (2.1.0): append the wechat x402 entry when configured.
+    const wechatChallenge = await this.buildWechatChallenge(config);
+    if (wechatChallenge) {
+      accepts.push(wechatChallenge.accepts);
     }
 
     // Get list of accepted chains for response

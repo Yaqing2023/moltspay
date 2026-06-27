@@ -32,16 +32,16 @@
         },
         "chain": {
           "type": "string",
-          "enum": ["base", "polygon", "base_sepolia", "tempo_moderato", "bnb", "bnb_testnet", "solana", "solana_devnet", "alipay"],
+          "enum": ["base", "polygon", "base_sepolia", "tempo_moderato", "bnb", "bnb_testnet", "solana", "solana_devnet", "alipay", "wechat"],
           "default": "base",
-          "description": "Single chain mode (use 'chains' for multi-chain). 'alipay' is a fiat rail (2.0+), not a blockchain."
+          "description": "Single chain mode (use 'chains' for multi-chain). 'alipay'/'wechat' are fiat rails (2.0+/2.1+), not blockchains."
         },
         "chains": {
           "type": "array",
-          "description": "Supported chains/rails. EVM chains use 'wallet', Solana chains use 'solana_wallet', 'alipay' (2.0+) uses 'provider.alipay'.",
+          "description": "Supported chains/rails. EVM chains use 'wallet', Solana chains use 'solana_wallet', 'alipay' (2.0+) uses 'provider.alipay', 'wechat' (2.1+) uses 'provider.wechat'.",
           "items": {
             "type": "string",
-            "enum": ["base", "polygon", "base_sepolia", "tempo_moderato", "bnb", "bnb_testnet", "solana", "solana_devnet", "alipay"]
+            "enum": ["base", "polygon", "base_sepolia", "tempo_moderato", "bnb", "bnb_testnet", "solana", "solana_devnet", "alipay", "wechat"]
           },
           "examples": [
             ["base", "polygon", "solana_devnet"],
@@ -93,6 +93,50 @@
               "description": "Signature algorithm. Only RSA2 is supported in 2.0."
             }
           }
+        },
+        "wechat": {
+          "type": "object",
+          "description": "WeChat Pay v3 Native provider config (2.1+). Required when 'chains' contains 'wechat'.",
+          "required": ["mchid", "appid", "serial_no", "private_key_path", "notify_url"],
+          "properties": {
+            "mchid": {
+              "type": "string",
+              "description": "Merchant id (商户号)"
+            },
+            "appid": {
+              "type": "string",
+              "description": "App id (official account / mini-program / app)"
+            },
+            "serial_no": {
+              "type": "string",
+              "description": "Merchant API certificate serial number"
+            },
+            "private_key_path": {
+              "type": "string",
+              "description": "Path to the merchant RSA private key PEM file (relative to moltspay.services.json)"
+            },
+            "platform_public_key_path": {
+              "type": "string",
+              "description": "Path to the WeChat platform certificate public key PEM (enables response verification)"
+            },
+            "apiv3_key": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 32,
+              "description": "APIv3 key (32 bytes). Only needed for callback decryption (Phase 2)"
+            },
+            "notify_url": {
+              "type": "string",
+              "format": "uri",
+              "description": "Async result notify URL. Required by Native order create even when polling."
+            },
+            "api_base": {
+              "type": "string",
+              "format": "uri",
+              "default": "https://api.mch.weixin.qq.com",
+              "description": "Open API base URL"
+            }
+          }
         }
       }
     },
@@ -138,6 +182,22 @@
               "goods_name": {
                 "type": "string",
                 "description": "Goods name shown to the user in the Alipay app"
+              }
+            }
+          },
+          "wechat": {
+            "type": "object",
+            "description": "WeChat Pay Native per-service config (2.1+). Set when this service accepts CNY payments.",
+            "required": ["price_cny", "description"],
+            "properties": {
+              "price_cny": {
+                "type": "string",
+                "pattern": "^\\d+(\\.\\d{1,2})?$",
+                "description": "CNY price as decimal string in yuan (e.g. '10.00' = 10 CNY, NOT fen)"
+              },
+              "description": {
+                "type": "string",
+                "description": "Order description shown to the payer in the WeChat app"
               }
             }
           }

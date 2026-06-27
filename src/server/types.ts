@@ -31,6 +31,35 @@ export interface ServiceConfig {
    * for the x402 rails; `alipay.price_cny` is a separate CNY price.
    */
   alipay?: ServiceAlipayConfig;
+  /**
+   * WeChat Pay v3 Native per-service config (2.1.0+).
+   * Set when this service accepts CNY payments via the wechat rail.
+   * The `price`/`currency` fields above still describe USDC pricing for the
+   * x402 rails; `wechat.price_cny` is a separate CNY price.
+   */
+  wechat?: ServiceWechatConfig;
+}
+
+/**
+ * Per-service WeChat Pay Native configuration (2.1.0+).
+ *
+ * Sample:
+ * ```json
+ * "wechat": {
+ *   "price_cny": "10.00",
+ *   "description": "Demo video - series one"
+ * }
+ * ```
+ */
+export interface ServiceWechatConfig {
+  /**
+   * CNY price as a decimal string in **yuan** (e.g. `"10.00"` = 10 CNY).
+   * NOT fen: `"100"` means 100 yuan, not 100 fen.
+   * Must match `/^\d+(\.\d{1,2})?$/`.
+   */
+  price_cny: string;
+  /** Order description shown to the payer in the WeChat app. */
+  description: string;
 }
 
 /**
@@ -92,6 +121,50 @@ export interface ProviderConfig {
    * readable + parse as RSA PEM at startup; rejects start otherwise.
    */
   alipay?: ProviderAlipayConfig;
+  /**
+   * WeChat Pay v3 provider-level config (2.1.0+).
+   * Required when `chains` includes `"wechat"`. The server resolves the PEM
+   * file paths + validates them at startup; rejects start otherwise.
+   */
+  wechat?: ProviderWechatConfig;
+}
+
+/**
+ * Provider-level WeChat Pay v3 configuration (2.1.0+).
+ *
+ * The user-facing form uses FILE PATHS for the PEM keys; the server resolves
+ * them to PEM strings before constructing WechatFacilitator.
+ *
+ * Sample:
+ * ```json
+ * "wechat": {
+ *   "mchid": "1900000001",
+ *   "appid": "wx8888888888888888",
+ *   "serial_no": "5157F09EFDC096DE15EBE81A47057A72...",
+ *   "private_key_path": "./cert/wechat_apiclient_key.pem",
+ *   "platform_public_key_path": "./cert/wechat_platform_cert.pem",
+ *   "apiv3_key": "your32byteapiv3keyhere0123456789",
+ *   "notify_url": "https://your.host/wechat/notify"
+ * }
+ * ```
+ */
+export interface ProviderWechatConfig {
+  /** Merchant id (商户号). */
+  mchid: string;
+  /** App id (official account / mini-program / app). */
+  appid: string;
+  /** Merchant API certificate serial number. */
+  serial_no: string;
+  /** Path to the merchant RSA private key PEM (relative to moltspay.services.json). */
+  private_key_path: string;
+  /** Path to the WeChat platform certificate public key PEM. Enables response verification. */
+  platform_public_key_path?: string;
+  /** APIv3 key (32 bytes). Only needed for callback decryption (Phase 2). */
+  apiv3_key?: string;
+  /** Async result notify URL. Required by Native order create even when polling. */
+  notify_url: string;
+  /** Open API base URL. Defaults to `"https://api.mch.weixin.qq.com"`. */
+  api_base?: string;
 }
 
 /**
