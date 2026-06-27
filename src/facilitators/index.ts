@@ -74,6 +74,17 @@ export {
   ALIPAY_GATEWAY_SANDBOX,
 } from './alipay.js';
 
+// WeChat Pay v3 Native Facilitator (2.1.0)
+export {
+  WechatFacilitator,
+  WechatFacilitatorConfig,
+  WechatPaymentRequirements,
+  WECHAT_NETWORK,
+  WECHAT_SCHEME,
+  WECHAT_API_BASE,
+  WECHAT_AMOUNT_REGEX,
+} from './wechat.js';
+
 // Registry
 export {
   FacilitatorRegistry,

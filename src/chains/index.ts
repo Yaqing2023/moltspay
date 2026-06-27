@@ -253,6 +253,45 @@ export function isAlipayChainId(id: string): id is typeof ALIPAY_CHAIN_ID {
   return id === ALIPAY_CHAIN_ID;
 }
 
+// ============ WeChat Pay Fiat Rail (2.1.0+) ============
+
+/**
+ * Chain-id string for the WeChat Pay v3 Native fiat rail.
+ * Used in `provider.chains: ["wechat", ...]` to opt the provider into
+ * accepting CNY payments via WeChat scan-to-pay.
+ */
+export const WECHAT_CHAIN_ID = 'wechat' as const;
+
+/**
+ * Rail metadata for the WeChat Pay Native fiat rail (2.1.0+).
+ *
+ * Like {@link ALIPAY_RAIL}, kept outside the EVM-only {@link CHAINS} Record;
+ * a fiat rail has no rpc / tokens / chainId. Server dispatch detects it via
+ * {@link isWechatChainId} rather than the EVM/SVM type guards.
+ */
+export const WECHAT_RAIL = {
+  /** Chain-id string used in user manifests + routing. */
+  id: WECHAT_CHAIN_ID,
+  /** Rail family — distinct from `ChainFamily` ('evm' | 'svm'). */
+  type: 'fiat-rail' as const,
+  /** Quote currency. */
+  currency: 'CNY' as const,
+  /** Decimal places for the `amount` field (yuan with up to 2 decimals). */
+  decimals: 2 as const,
+  /** x402 `scheme` string — matches `WECHAT_SCHEME` in src/facilitators/wechat.ts. */
+  facilitator: 'wechatpay-native' as const,
+} as const;
+
+/**
+ * Runtime type guard: is this chain-id string the WeChat Pay fiat rail?
+ *
+ * Used by the server layer to route a payment to {@link WechatFacilitator}
+ * instead of an EVM/SVM verifier.
+ */
+export function isWechatChainId(id: string): id is typeof WECHAT_CHAIN_ID {
+  return id === WECHAT_CHAIN_ID;
+}
+
 /**
  * ERC20 ABI (minimal, only required methods)
  */
