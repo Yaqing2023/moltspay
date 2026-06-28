@@ -18,6 +18,27 @@ if (!globalThis.crypto) {
   (globalThis as any).crypto = webcrypto;
 }
 
+// Fiat-gateway IPv4 pinning. The fiat gateways (WeChat v3
+// api.mch.weixin.qq.com, Alipay openapi.alipay.com) resolve AAAA-first; on a
+// host whose IPv6 egress is a black hole, undici's fetch has no Happy-Eyeballs
+// fallback and hangs (ETIMEDOUT) — net.setDefaultAutoSelectFamily does not
+// reliably recover a no-RST IPv6 black hole. Pin DNS resolution to IPv4 for
+// ONLY these gateway hostnames; all other traffic (crypto RPCs, CDP, Solana)
+// keeps default dual-stack resolution. Harmless on IPv6-healthy hosts (the
+// gateways have A records). Must run before any fetch().
+import dns from 'dns';
+const FIAT_IPV4_ONLY_HOSTS = new Set([
+  'api.mch.weixin.qq.com',
+  'openapi.alipay.com',
+]);
+const __realLookup = dns.lookup.bind(dns);
+(dns as unknown as { lookup: typeof dns.lookup }).lookup = ((host: string, opts: unknown, cb: unknown) => {
+  if (typeof opts === 'function') { cb = opts; opts = {}; }
+  const o = (typeof opts === 'object' && opts !== null ? opts : {}) as Record<string, unknown>;
+  const next = FIAT_IPV4_ONLY_HOSTS.has(host) ? { ...o, family: 4 } : o;
+  return (__realLookup as unknown as (h: string, o: unknown, c: unknown) => unknown)(host, next, cb);
+}) as typeof dns.lookup;
+
 import { Command } from 'commander';
 import { homedir } from 'os';
 import { join, dirname, resolve } from 'path';
@@ -1662,15 +1683,16 @@ program
   .option('--data <json>', 'Raw JSON data to send (for custom input formats)')
   .option('--token <token>', 'Token to pay with (USDC or USDT)', 'USDC')
   .option('--chain <chain>', 'Chain to pay on (base, polygon, base_sepolia, tempo_moderato, solana, or solana_devnet).')
-  .option('--rail <rail>', 'Payment rail: a chain name, or "alipay" for the Alipay fiat rail (CNY via alipay-bot)')
+  .option('--rail <rail>', 'Payment rail: a chain name, "alipay" (CNY via alipay-bot), or "wechat" (CNY via WeChat Native, scan to pay)')
   .option('--config-dir <dir>', 'Config directory with wallet.json', DEFAULT_CONFIG_DIR)
   .option('--json', 'Output raw JSON only')
   .action(async (server, service, paramsJson, options) => {
     const client = new MoltsPayClient({ configDir: options.configDir });
     const useAlipay = options.rail?.toLowerCase() === 'alipay';
+    const useWechat = options.rail?.toLowerCase() === 'wechat';
 
-    // The Alipay rail is backed by alipay-bot and needs no EVM wallet.
-    if (!useAlipay && !client.isInitialized) {
+    // The fiat rails (Alipay/WeChat) are scan-to-pay and need no EVM wallet.
+    if (!useAlipay && !useWechat && !client.isInitialized) {
       console.error('❌ Wallet not initialized. Run: npx moltspay init');
       process.exit(1);
     }
@@ -1733,7 +1755,7 @@ program
     const token = (options.token || 'USDC').toUpperCase();
 
     // USDT requires gas - check native balance (EVM rails only)
-    if (!useAlipay && token === 'USDT') {
+    if (!useAlipay && !useWechat && token === 'USDT') {
       const balance = await client.getBalance();
       if (balance.native < 0.0001) {
         console.log('\n⚠️  USDT requires a small amount of ETH for gas (~$0.01)');
@@ -1758,6 +1780,8 @@ program
       if (imageDisplay) console.log(`   Image: ${imageDisplay}`);
       if (useAlipay) {
         console.log(`   Rail: alipay (CNY via alipay-bot)`);
+      } else if (useWechat) {
+        console.log(`   Rail: wechat (CNY via WeChat Native, scan to pay)`);
       } else {
         console.log(`   Chain: ${chain || '(auto)'}`);  // Will be determined by server
         console.log(`   Token: ${token}`);
@@ -1770,20 +1794,34 @@ program
       // All chains use the same pay() flow - protocol detection happens inside.
       // --rail alipay dispatches to the alipay-bot-backed AlipayClient, which
       // streams CLI output verbatim and surfaces the payment URL to the user.
-      const result = await client.pay(server, service, params, useAlipay ? {
+      // --rail wechat dispatches to WechatClient: it renders the Native code_url
+      // as a QR and polls the resource until the scanned order is verified paid.
+      const railOptions = useAlipay ? {
         rail: 'alipay',
         rawData: useRawData,
-        onPaymentPending: ({ paymentUrl, shortenUrl }) => {
+        onPaymentPending: ({ paymentUrl, shortenUrl }: { paymentUrl: string; shortenUrl?: string; tradeNo: string }) => {
           if (!options.json) {
             process.stdout.write(`\n📲 请用支付宝扫码或访问：${shortenUrl ?? paymentUrl}\n\n`);
           }
         },
-        onLine: (line) => { if (!options.json) process.stdout.write(line + '\n'); },
+        onLine: (line: string) => { if (!options.json) process.stdout.write(line + '\n'); },
+      } : useWechat ? {
+        rail: 'wechat',
+        rawData: useRawData,
+        onPaymentPending: ({ paymentUrl, tradeNo }: { paymentUrl: string; shortenUrl?: string; tradeNo: string }) => {
+          if (!options.json) {
+            process.stdout.write(`\n📲 请用微信扫码支付（订单号 ${tradeNo}）：\n`);
+            // Render the weixin:// code_url as a scannable terminal QR.
+            void printQRCode(paymentUrl);
+            process.stdout.write(`\n   或复制链接到微信打开：${paymentUrl}\n   等待支付中…\n\n`);
+          }
+        },
       } : {
         token: token as 'USDC' | 'USDT',
         chain,
         rawData: useRawData
-      });
+      };
+      const result = await client.pay(server, service, params, railOptions as any);
 
       if (options.json) {
         console.log(JSON.stringify(result));

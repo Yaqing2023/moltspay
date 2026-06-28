@@ -15,6 +15,8 @@ import { UnsupportedRailError } from './errors.js';
 
 /** Rail identifier as used in `{ rail }` / `--rail`: 'alipay' or a chain name. */
 export const ALIPAY_RAIL = 'alipay';
+/** WeChat Pay Native fiat rail (2.1.0). Like Alipay, settled off-chain (CNY). */
+export const WECHAT_RAIL = 'wechat';
 
 export interface RailAvailability {
   /** Caller has an EVM wallet able to pay (e.g. funded USDC). */
@@ -45,6 +47,7 @@ export interface RailSelection {
  */
 export function railOf(req: X402PaymentRequirements): string {
   if (req.scheme === 'alipay-aipay' || req.network === ALIPAY_RAIL) return ALIPAY_RAIL;
+  if (req.scheme === 'wechatpay-native' || req.network === WECHAT_RAIL) return WECHAT_RAIL;
   return networkToChainName(req.network) ?? req.network;
 }
 

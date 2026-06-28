@@ -38,8 +38,9 @@ import {
 import type { PaymentSigner } from '../signer.js';
 import { NodeSigner } from './signer.js';
 import { AlipayClient } from '../alipay/index.js';
+import { WechatClient } from '../wechat/index.js';
 import { timeStep } from '../alipay/log.js';
-import { selectRail, ALIPAY_RAIL } from '../alipay/router.js';
+import { selectRail, ALIPAY_RAIL, WECHAT_RAIL } from '../alipay/router.js';
 
 export * from '../types.js';
 
@@ -200,6 +201,12 @@ export class MoltsPayClient {
     // alipay-bot and needs no EVM wallet.
     if (options.rail === ALIPAY_RAIL) {
       return this.payViaAlipay(serverUrl, service, params, options);
+    }
+
+    // WeChat Pay Native fiat rail (2.1.0): like Alipay, dispatch before the EVM
+    // wallet check — the buyer scans a QR, no crypto wallet is needed.
+    if (options.rail === WECHAT_RAIL) {
+      return this.payViaWechat(serverUrl, service, params, options);
     }
 
     if (!this.wallet || !this.walletData) {
@@ -560,6 +567,84 @@ export class MoltsPayClient {
       return json.result ?? json;
     } catch {
       return { body: result.body, payment: result.payment, media: result.media };
+    }
+  }
+
+  /**
+   * Pay for a service over the WeChat Pay Native fiat rail (2.1.0).
+   *
+   * Mirrors {@link payViaAlipay} and needs no EVM wallet. The server placed the
+   * Native order when it built the 402, so its `wechatpay-native` accepts[]
+   * entry already carries `extra.code_url` + `extra.out_trade_no`. Flow: hit the
+   * resource to get the 402, confirm the server offers the wechat rail, surface
+   * the code_url (caller renders a QR), then poll the resource with the
+   * out_trade_no proof until the server verifies the order paid and delivers.
+   */
+  private async payViaWechat(
+    serverUrl: string,
+    service: string,
+    params: Record<string, any>,
+    options: PayOptions,
+  ): Promise<Record<string, any>> {
+    // Discover the resource endpoint (same as the crypto/alipay path).
+    let executeUrl = `${serverUrl}/execute`;
+    try {
+      const services = await this.getServices(serverUrl);
+      const svc = services.services?.find((s: any) => s.id === service);
+      if (svc?.endpoint) executeUrl = `${serverUrl}${svc.endpoint}`;
+    } catch {
+      // Fall back to /execute.
+    }
+
+    const requestBody: any = options.rawData ? { service, ...params } : { service, params };
+    const bodyJson = JSON.stringify(requestBody);
+
+    // Trigger the 402 challenge (this is also what created the Native order).
+    const res = await fetch(executeUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: bodyJson,
+    });
+    if (res.status !== 402) {
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && (data as any).result) return (data as any).result;
+      throw new Error((data as any).error || `Expected 402, got ${res.status}`);
+    }
+
+    const header = res.headers.get(PAYMENT_REQUIRED_HEADER);
+    if (!header) throw new Error('Missing x-payment-required header on 402');
+    const parsed = JSON.parse(Buffer.from(header, 'base64').toString('utf-8'));
+    const accepts: X402PaymentRequirements[] = Array.isArray(parsed)
+      ? parsed
+      : parsed.accepts ?? [parsed];
+
+    // Confirm the server offers wechat (throws UnsupportedRailError otherwise).
+    const { requirement } = selectRail({
+      serverAccepts: accepts,
+      explicitRail: WECHAT_RAIL,
+      preference: this.railPreference,
+      availability: { evmReady: this.isInitialized },
+    });
+
+    const wechat = new WechatClient();
+    const result = await wechat.pay402({
+      resourceUrl: executeUrl,
+      requirement,
+      method: 'POST',
+      data: bodyJson,
+      onPaymentPending: options.onPaymentPending
+        ? (info) => options.onPaymentPending!({ paymentUrl: info.codeUrl, tradeNo: info.outTradeNo })
+        : undefined,
+      timeoutMs: options.timeoutMs,
+      signal: options.signal,
+    });
+
+    // Best-effort: parse a JSON body, else return it raw under `body`.
+    try {
+      const json = JSON.parse(result.body);
+      return json.result ?? json;
+    } catch {
+      return { body: result.body };
     }
   }
 
