@@ -48,7 +48,7 @@ import { ethers } from 'ethers';
 import { MoltsPayClient } from '../client/index.js';
 import { MoltsPayServer } from '../server/index.js';
 import { filterEnv as filterAlipayEnv } from '../client/alipay/cli.js';
-import { printQRCode } from '../onramp/index.js';
+import { printQRCode, writeQRCodePng } from '../onramp/index.js';
 import { CHAINS } from '../chains/index.js';
 import { SOLANA_CHAINS, getSolanaExplorerUrl, getSolanaTxExplorerUrl, isSolanaChain } from '../chains/solana.js';
 import { 
@@ -1795,7 +1795,7 @@ program
       // --rail alipay dispatches to the alipay-bot-backed AlipayClient, which
       // streams CLI output verbatim and surfaces the payment URL to the user.
       // --rail wechat dispatches to WechatClient: it renders the Native code_url
-      // as a QR and polls the resource until the scanned order is verified paid.
+      // as terminal/media QR and polls until the scanned order is verified paid.
       const railOptions = useAlipay ? {
         rail: 'alipay',
         rawData: useRawData,
@@ -1810,10 +1810,16 @@ program
         rawData: useRawData,
         onPaymentPending: ({ paymentUrl, tradeNo }: { paymentUrl: string; shortenUrl?: string; tradeNo: string }) => {
           if (!options.json) {
+            const qrPath = writeQRCodePng(paymentUrl, { filename: `wechat-${tradeNo}.png` });
             process.stdout.write(`\n📲 请用微信扫码支付（订单号 ${tradeNo}）：\n`);
+            process.stdout.write(`MEDIA: ${qrPath}\n`);
             // Render the weixin:// code_url as a scannable terminal QR.
             void printQRCode(paymentUrl);
-            process.stdout.write(`\n   或复制链接到微信打开：${paymentUrl}\n   等待支付中…\n\n`);
+            process.stdout.write(
+              `\n   已生成二维码图片：${qrPath}\n` +
+              `   Native code_url 是二维码载荷，不是普通浏览器付款链接。\n` +
+              `   等待支付中…\n\n`,
+            );
           }
         },
       } : {

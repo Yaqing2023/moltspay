@@ -332,6 +332,8 @@ MoltsPay supports multiple payment protocols, each optimized for different chain
 | x402 + SOL | Solana | Gasless (server pays) | HTTP 402 + SPL transfer |
 | x402 + BNB | BNB | Gasless (server pays) | HTTP 402 + EIP-712 intent signing |
 | MPP | Tempo | Gas-free native | HTTP 402 + WWW-Authenticate |
+| x402 + Alipay | Alipay | No blockchain gas | HTTP 402 + Alipay AI Pay proof |
+| x402 + WeChat Pay | WeChat Pay Native | No blockchain gas | HTTP 402 + scan-to-pay QR, poll-based verify |
 
 ### How x402 Protocol Works
 
@@ -592,6 +594,8 @@ npx moltspay pay <url> <service> --chain solana_devnet # Pay on Solana devnet
 npx moltspay pay <url> <service> --chain bnb           # Pay on BNB
 npx moltspay pay <url> <service> --chain bnb_testnet   # Pay on BNB testnet
 npx moltspay pay <url> <service> --chain tempo_moderato # Pay on Tempo
+npx moltspay pay <url> <service> --rail alipay         # Pay with Alipay AI Pay
+npx moltspay pay <url> <service> --rail wechat         # Pay with WeChat Pay Native QR
 
 # === Server Commands ===
 npx moltspay start <skill-dir>       # Start server
@@ -601,6 +605,7 @@ npx moltspay validate <path>         # Validate manifest
 # === Options ===
 --port <port>                        # Server port (default 3000)
 --chain <chain>                      # Chain: base, polygon, solana, bnb, tempo_moderato, + testnets
+--rail <rail>                        # Fiat rail: alipay or wechat
 --token <token>                      # Token: USDC, USDT
 --max-per-tx <amount>                # Spending limit per transaction
 --max-per-day <amount>               # Daily spending limit
@@ -898,7 +903,7 @@ npx moltspay alipay bind -c "<auth-code>"
 npx moltspay alipay check
 
 # Pay a service in CNY
-npx moltspay pay https://server.com my-service --chain alipay --prompt "..."
+npx moltspay pay https://server.com my-service --rail alipay --prompt "..."
 ```
 
 > 🔐 **Keep keys safe.** The RSA2 private key authorizes collection on your merchant account. Store the PEM files outside version control and reference them by path in the manifest.
@@ -912,6 +917,16 @@ Since **`2.1.0`**, MoltsPay supports a second **fiat payment rail via WeChat Pay
 Like `alipay`, `wechat` is a **fiat rail, not a blockchain**. The scheme is `wechatpay-native`, requests are signed with **SHA256-RSA** (`WECHATPAY2-SHA256-RSA2048`), and amounts are sent to WeChat in **fen** (the manifest still uses **yuan** decimal strings for consistency).
 
 > ⚠️ **Not an autonomous agent payment.** WeChat Pay has no agent-payment product equivalent to Alipay's `alipay-bot`. The flow is: the agent issues a **payer-agnostic `code_url`** (Native, no `openid` — anyone can scan), a human scans and pays, and the server confirms by **polling the order** (`trade_state === SUCCESS`). It is **one code, one payment** — issue a new code to collect again. See [`docs/WECHAT-RAIL-DESIGN.md`](docs/WECHAT-RAIL-DESIGN.md).
+
+### Implementation Status
+
+The WeChat rail is implemented on the `2.1.0` code path:
+
+- `WechatFacilitator` creates Native orders, returns `code_url` / `out_trade_no`, verifies `SUCCESS` by querying WeChat Pay v3, and settles idempotently.
+- Server 402 integration emits a `wechatpay-native` entry in `accepts[]` when a service has `services[].wechat` pricing.
+- CLI support is available through `--rail wechat`. The CLI renders terminal ASCII QR for local terminals, writes a PNG QR image, and emits a `MEDIA: <path>` line so chat surfaces such as webchat, Discord, or Feishu can upload the QR image instead of showing fragile ASCII art. Browser support is intentionally not provided because the flow requires a human QR scan and server-side order verification.
+- Unit and wiring tests cover signing, facilitator behavior, chain/registry wiring, and server integration. Local server integration tests require an environment that allows binding `127.0.0.1`.
+- Release housekeeping: update any stale roadmap docs and tag `v2.1.0` after the normal test gates pass in a non-sandboxed environment.
 
 ### Provider Setup (Selling in CNY)
 
@@ -968,7 +983,7 @@ Add `"wechat"` to `chains`, configure `provider.wechat` with your merchant crede
 ### How It Works
 
 1. An unpaid request to `/execute` returns **402** with a `wechatpay-native` entry in `accepts[]`, carrying `extra.code_url` (`weixin://wxpay/bizpayurl?pr=...`) and `extra.out_trade_no`.
-2. Render `code_url` as a QR (e.g. `qrcode-terminal`); a human scans and pays.
+2. Render `code_url` as a QR; a human scans and pays. In a CLI terminal this can be ASCII QR, but chat UIs should use the emitted `MEDIA: <path>` PNG image. The Native `code_url` is a QR payload, not a normal HTTPS checkout link.
 3. The client re-requests `/execute` with an `X-Payment` payload echoing `out_trade_no`; the server verifies via order query and, on `SUCCESS`, runs the skill and confirms settlement.
 
 See [`examples/wechat-native-pay.ts`](examples/wechat-native-pay.ts) for a runnable scenario-A demo (mock by default; `WECHAT_REAL=1` hits the live gateway).

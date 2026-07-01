@@ -5,9 +5,10 @@
  * via Coinbase Pay (US only, debit card / Apple Pay)
  */
 
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, mkdtempSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
+import { homedir, tmpdir } from 'os';
+import { deflateSync } from 'zlib';
 
 const CDP_API_BASE = 'https://api.developer.coinbase.com';
 
@@ -187,4 +188,115 @@ export async function printQRCode(url: string): Promise<void> {
       resolve();
     });
   });
+}
+
+interface QRCodeVendor {
+  addData(input: string): void;
+  make(): void;
+  getModuleCount(): number;
+  isDark(row: number, col: number): boolean;
+}
+
+interface QRCodePngOptions {
+  dir?: string;
+  filename?: string;
+  scale?: number;
+  margin?: number;
+}
+
+function qrMatrix(input: string): boolean[][] {
+  const QRCode = require('qrcode-terminal/vendor/QRCode') as new (
+    typeNumber: number,
+    errorCorrectLevel: number,
+  ) => QRCodeVendor;
+  const QRErrorCorrectLevel = require('qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel') as {
+    L: number;
+  };
+  const qrcode = new QRCode(-1, QRErrorCorrectLevel.L);
+  qrcode.addData(input);
+  qrcode.make();
+
+  const count = qrcode.getModuleCount();
+  return Array.from({ length: count }, (_, row) =>
+    Array.from({ length: count }, (_, col) => qrcode.isDark(row, col)),
+  );
+}
+
+function crc32(buf: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of buf) {
+    crc ^= byte;
+    for (let i = 0; i < 8; i++) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const typeBuf = Buffer.from(type, 'ascii');
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length, 0);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])), 0);
+  return Buffer.concat([len, typeBuf, data, crc]);
+}
+
+function encodePngRgba(width: number, height: number, rgba: Buffer): Buffer {
+  const scanlines = Buffer.alloc((width * 4 + 1) * height);
+  for (let y = 0; y < height; y++) {
+    const rowStart = y * (width * 4 + 1);
+    scanlines[rowStart] = 0;
+    rgba.copy(scanlines, rowStart + 1, y * width * 4, (y + 1) * width * 4);
+  }
+
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 6; // RGBA
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', deflateSync(scanlines)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+/**
+ * Render a QR payload as a PNG image and return the written file path.
+ */
+export function writeQRCodePng(input: string, opts: QRCodePngOptions = {}): string {
+  const scale = opts.scale ?? 8;
+  const margin = opts.margin ?? 4;
+  const matrix = qrMatrix(input);
+  const modules = matrix.length;
+  const width = (modules + margin * 2) * scale;
+  const rgba = Buffer.alloc(width * width * 4, 255);
+
+  for (let y = 0; y < width; y++) {
+    for (let x = 0; x < width; x++) {
+      const moduleX = Math.floor(x / scale) - margin;
+      const moduleY = Math.floor(y / scale) - margin;
+      const dark = moduleX >= 0 && moduleY >= 0 && moduleX < modules && moduleY < modules
+        ? matrix[moduleY][moduleX]
+        : false;
+      if (dark) {
+        const idx = (y * width + x) * 4;
+        rgba[idx] = 0;
+        rgba[idx + 1] = 0;
+        rgba[idx + 2] = 0;
+      }
+    }
+  }
+
+  const dir = opts.dir ?? mkdtempSync(join(tmpdir(), 'moltspay-wechat-qr-'));
+  const filename = opts.filename ?? 'wechat-pay-qr.png';
+  const path = join(dir, filename.replace(/[^a-zA-Z0-9_.-]/g, '_'));
+  writeFileSync(path, encodePngRgba(width, width, rgba));
+  return path;
 }

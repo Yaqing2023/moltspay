@@ -34,7 +34,7 @@ This milestone does **poll-based confirmation only**. It excludes `aesgcm.ts` ca
 
 | Item | Output |
 |---|---|
-| `examples/wechat-native-pay.ts` | runnable scenario A demo: issue code → render with `qrcode-terminal` → 3s poll `verify` until SUCCESS/timeout → print `transaction_id` |
+| `examples/wechat-native-pay.ts` | runnable scenario A demo: issue code → render QR → 3s poll `verify` until SUCCESS/timeout → print `transaction_id` |
 | `src/facilitators/registry.ts` | `registerFactory('wechat', ...)` |
 | `src/facilitators/index.ts` | export `WechatFacilitator` + types + `WECHAT_NETWORK/WECHAT_SCHEME` |
 | `src/chains/index.ts` | `WECHAT_CHAIN_ID`, `isWechatChainId`, `WECHAT_RAIL{type:'fiat-rail'}` |
@@ -123,4 +123,4 @@ git push origin main --tags
 | M4 wrap-up | wrap-up |
 | **Total** | **~1.5–2 person-days** |
 
-No new third-party dependency (`qrcode-terminal` / `crypto` already present).
+No new third-party dependency (`qrcode-terminal`, `crypto`, and `zlib`/`fs` from Node are already present). CLI output should include terminal ASCII QR plus a generated PNG path emitted as `MEDIA: <path>` for chat surfaces.
