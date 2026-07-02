@@ -57,6 +57,18 @@ export { resetWalletCache } from './client/alipay/index.js';
 // Alipay payment-intent handshake skip-cache control (call on session reset)
 export { resetIntentCache } from './client/alipay/index.js';
 
+// WeChat Native recoverable session client
+export { WechatClient } from './client/wechat/index.js';
+export type {
+  WechatClientOptions,
+  WechatPaymentSession,
+  WechatPaymentResult,
+  WechatPayOptions,
+  WechatPendingInfo,
+  WechatSessionStatus,
+  WechatStartOptions,
+} from './client/wechat/index.js';
+
 // Chain configuration
 export { CHAINS, getChain, listChains, getChainById, ERC20_ABI } from './chains/index.js';
 

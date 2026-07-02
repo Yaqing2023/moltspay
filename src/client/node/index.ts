@@ -38,7 +38,7 @@ import {
 import type { PaymentSigner } from '../signer.js';
 import { NodeSigner } from './signer.js';
 import { AlipayClient } from '../alipay/index.js';
-import { WechatClient } from '../wechat/index.js';
+import { WechatClient, type WechatPaymentSession } from '../wechat/index.js';
 import { timeStep } from '../alipay/log.js';
 import { selectRail, ALIPAY_RAIL, WECHAT_RAIL } from '../alipay/router.js';
 
@@ -67,6 +67,16 @@ export interface PayOptions {
   timeoutMs?: number;
   /** Cancellation (alipay poll loop). */
   signal?: AbortSignal;
+  /**
+   * WeChat: after `startWechatPayment()`, let the SDK client poll in the
+   * background and invoke the callbacks below. `pay --rail wechat` always polls
+   * because it is the blocking terminal wrapper.
+   */
+  autoPoll?: boolean;
+  /** WeChat: called when the background poll fulfills the resource. */
+  onWechatPaymentCompleted?: (session: WechatPaymentSession) => void | Promise<void>;
+  /** WeChat: called when background poll expires, fails, or is cancelled. */
+  onWechatPaymentFailed?: (session: WechatPaymentSession) => void | Promise<void>;
 }
 
 // x402 constants, X402PaymentRequirements, and EIP3009Authorization
@@ -586,6 +596,37 @@ export class MoltsPayClient {
     params: Record<string, any>,
     options: PayOptions,
   ): Promise<Record<string, any>> {
+    const session = await this.startWechatPayment(serverUrl, service, params, options);
+
+    const wechat = new WechatClient({ configDir: this.configDir });
+    const result = await wechat.pollSession(session.paymentSessionId, {
+      timeoutMs: options.timeoutMs,
+      signal: options.signal,
+    });
+
+    if (result.status !== 'completed') {
+      throw new Error(result.lastError || `WeChat payment ended with status ${result.status}`);
+    }
+
+    // Best-effort: parse a JSON body, else return it raw under `body`.
+    try {
+      const json = JSON.parse(result.resultBody ?? '');
+      return json.result ?? json;
+    } catch {
+      return { body: result.resultBody ?? '' };
+    }
+  }
+
+  /**
+   * Start a recoverable WeChat Pay Native session and return immediately with
+   * QR metadata. The SDK client persists enough context to poll/fulfill later.
+   */
+  async startWechatPayment(
+    serverUrl: string,
+    service: string,
+    params: Record<string, any>,
+    options: PayOptions = {},
+  ): Promise<WechatPaymentSession> {
     // Discover the resource endpoint (same as the crypto/alipay path).
     let executeUrl = `${serverUrl}/execute`;
     try {
@@ -626,8 +667,8 @@ export class MoltsPayClient {
       availability: { evmReady: this.isInitialized },
     });
 
-    const wechat = new WechatClient();
-    const result = await wechat.pay402({
+    const wechat = new WechatClient({ configDir: this.configDir });
+    const session = wechat.start402({
       resourceUrl: executeUrl,
       requirement,
       method: 'POST',
@@ -637,15 +678,56 @@ export class MoltsPayClient {
         : undefined,
       timeoutMs: options.timeoutMs,
       signal: options.signal,
+      context: {
+        serverUrl,
+        service,
+        params,
+        rawData: options.rawData ?? false,
+        rail: WECHAT_RAIL,
+      },
     });
 
-    // Best-effort: parse a JSON body, else return it raw under `body`.
-    try {
-      const json = JSON.parse(result.body);
-      return json.result ?? json;
-    } catch {
-      return { body: result.body };
+    if (options.autoPoll || options.onWechatPaymentCompleted || options.onWechatPaymentFailed) {
+      void wechat.pollSession(session.paymentSessionId, {
+        timeoutMs: options.timeoutMs,
+        signal: options.signal,
+      }).then(async (finalSession) => {
+        if (finalSession.status === 'completed') {
+          await options.onWechatPaymentCompleted?.(finalSession);
+        } else {
+          await options.onWechatPaymentFailed?.(finalSession);
+        }
+      }).catch(async (error: unknown) => {
+        const failed = await wechat.fulfill(session.paymentSessionId).catch(() => ({
+          ...session,
+          status: 'failed' as const,
+          lastError: error instanceof Error ? error.message : String(error),
+        }));
+        await options.onWechatPaymentFailed?.(failed);
+      });
     }
+
+    return session;
+  }
+
+  /** Query a persisted WeChat session once. */
+  async getWechatPaymentStatus(identifier: string): Promise<WechatPaymentSession> {
+    return new WechatClient({ configDir: this.configDir }).status(identifier);
+  }
+
+  /** Idempotently fulfill a paid WeChat session, returning stored or fetched result. */
+  async fulfillWechatPayment(identifier: string): Promise<WechatPaymentSession> {
+    return new WechatClient({ configDir: this.configDir }).fulfill(identifier);
+  }
+
+  /** Mark a local WeChat session as cancelled. */
+  cancelWechatPayment(identifier: string): WechatPaymentSession {
+    return new WechatClient({ configDir: this.configDir }).cancel(identifier);
+  }
+
+  /** List persisted WeChat sessions, newest first. */
+  listWechatPaymentSessions(): WechatPaymentSession[] {
+    return new WechatClient({ configDir: this.configDir }).listSessions();
   }
 
   /**

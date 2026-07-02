@@ -1,11 +1,11 @@
 # WeChat Pay Rail (WeChat Pay v3)
 
-> **Target**: `moltspay@2.1.0` (proposed)
-> **Status**: Design (partially implemented — M1/M2 landed)
-> **Scope**: **Server-side verify/settle** (the focus of this doc); the client side is "render a QR + a human scans", NOT a fully autonomous agent payment
+> **Target**: `moltspay@2.1.0`
+> **Status**: Implemented: server-side verify/settle plus SDK-managed recoverable buyer sessions
+> **Scope**: WeChat Native scan-to-pay: SDK client persists the payment session, surfaces QR media, polls in the background, and fulfills idempotently after a human pays.
 > **Author**: Mirrors the existing Alipay Rail (2.0.0) source, layer by layer
 
-WeChat Pay Rail is the proposed 2nd fiat rail for MoltsPay. It lets a China-mainland merchant accept CNY using the **WeChat Pay v3 standard merchant API**, alongside the existing USDC/EVM/SVM crypto rails and the Alipay AI Pay rail. One `provider.wechat` block plus a per-service `wechat` object lets a single skill accept USDC / Alipay / WeChat at once.
+WeChat Pay Rail is the 2nd fiat rail for MoltsPay. It lets a China-mainland merchant accept CNY using the **WeChat Pay v3 standard merchant API**, alongside the existing USDC/EVM/SVM crypto rails and the Alipay AI Pay rail. One `provider.wechat` block plus a per-service `wechat` object lets a single skill accept USDC / Alipay / WeChat at once.
 
 ## TL;DR
 
@@ -18,10 +18,10 @@ WeChat Pay Rail is the proposed 2nd fiat rail for MoltsPay. It lets a China-main
 | Response/callback verify | WeChat **platform certificate** public key verifies `Wechatpay-Signature` (`timestamp\nnonce\nbody\n`) |
 | Callback decryption | **AES-256-GCM** (apiv3 key + nonce + associated_data + auth tag) — Phase 2 |
 | Server | 100% native Node `crypto`, no third-party deps; holds merchant RSA private key + apiv3 key |
-| Client | server returns `code_url` → render a QR → **a human scans**; not an autonomous agent payment |
+| Client | server returns `code_url` → SDK persists session → render QR → **a human scans** → SDK polls/fulfills; not a fully autonomous payer |
 | Merchant eligibility | China mainland only (business license + WeChat merchant onboarding + APIv3 key) |
 
-> **Fundamental difference vs the Alipay rail**: Alipay AI Pay ships an agent-payment protocol (the `alipay-bot` CLI), so an agent can pay fully autonomously. WeChat Pay has **no equivalent autonomous agent-payment product**; the standard merchant API assumes a human scans a QR / confirms in the WeChat app. So this rail's client shape is "server issues a code → human scans → server confirms by polling/callback". This doc focuses on the confirmed scope: **server-side verify/settle is viable**.
+> **Fundamental difference vs the Alipay rail**: Alipay AI Pay ships an agent-payment protocol (the `alipay-bot` CLI), so an agent can pay fully autonomously. WeChat Pay has **no equivalent autonomous payer product**; the standard merchant API assumes a human scans a QR / confirms in the WeChat app. So this rail's client shape is "server issues a code → SDK persists the session and polls → human scans → server verifies by polling/callback".
 
 ---
 
@@ -102,7 +102,28 @@ One merchant (one `mchid`). The agent is the **merchant-side code issuer** and i
 ### 4.2 Sequence
 
 ```
-Agent (merchant side)                WeChat Pay                Payer (any WeChat user)
+SDK client / channel                 Server / WeChat Pay       Payer (any WeChat user)
+  |  POST /execute (no payment)         |                              |
+  |  <-- 402 accepts[wechat] -----------|                              |
+  |  persist payment_session            |                              |
+  |  surface code_url / MEDIA QR        |                              |
+  |                                     |                              |
+  |  channel shows QR -------------------------------------------------->|
+  |                                     |  <-------- scan + confirm pay -|
+  |                                     |                              |
+  |  poll /execute with X-Payment       |                              |
+  |      { out_trade_no } ------------->|  query order                  |
+  |  <-- 402 pending -------------------|  NOTPAY                      |
+  |  poll /execute with X-Payment ----->|  query order                  |
+  |  <-- 200 resource ------------------|  SUCCESS + settle            |
+  |  store completed result             |                              |
+  |  send async result to channel       |                              |
+```
+
+Server-side order creation still maps to the facilitator sequence:
+
+```
+Agent/server                         WeChat Pay                Payer (any WeChat user)
   |  createPaymentRequirements()        |                              |
   |  POST /v3/pay/transactions/native ->|                              |
   |  <-- { code_url } -------------------|                              |
@@ -133,13 +154,65 @@ Each order's `out_trade_no` is generated by the facilitator (unique). The `code_
 
 ### 4.4 Polling / timeout / close strategy
 
-- **Poll interval**: 3s (mirrors the alipay-bot polling model); `verify()` queries the order once per tick.
+- **Poll interval**: 3s (mirrors the alipay-bot polling model); SDK `status()` replays `/execute` once per tick, and server `verify()` queries the order.
 - **Total timeout**: default 5min (<= WeChat's default order lifetime). `createPaymentRequirements` may set `time_expire`.
 - **Terminal states**: `SUCCESS` → success, stop; `CLOSED`/`PAYERROR` → failure, stop; timeout → call close API, then stop.
 - **Idempotency**: both `verify()` and `settle()` are pure query/confirm, safe to retry; no side effects.
 - **Concurrency**: multiple distinct `code_url`s may poll concurrently without interference (but each code is still one-code-one-payment).
 
-### 4.5 Scenario driver (agent usage sketch)
+### 4.5 SDK client payment session manager
+
+The buyer-side lifecycle is owned by `WechatClient` / `MoltsPayClient`, not by OpenClaw, Discord, Feishu, or any specific channel adapter.
+
+Persisted session shape:
+
+```json
+{
+  "paymentSessionId": "mpay_sess_...",
+  "status": "pending",
+  "resourceUrl": "https://server.com/execute",
+  "method": "POST",
+  "data": "{\"service\":\"my-service\",\"params\":{\"prompt\":\"hello\"}}",
+  "requirement": { "scheme": "wechatpay-native", "network": "wechat" },
+  "codeUrl": "weixin://wxpay/bizpayurl?pr=...",
+  "outTradeNo": "WX...",
+  "createdAt": "2026-07-02T...",
+  "updatedAt": "2026-07-02T...",
+  "expiresAt": "2026-07-02T...",
+  "context": {
+    "serverUrl": "https://server.com",
+    "service": "my-service",
+    "rail": "wechat"
+  }
+}
+```
+
+Storage location:
+
+```text
+<configDir>/wechat-sessions/<paymentSessionId>.json
+```
+
+SDK methods:
+
+```ts
+const session = await client.startWechatPayment(serverUrl, service, params, {
+  rail: 'wechat',
+  autoPoll: true,
+  onPaymentPending: ({ paymentUrl, tradeNo }) => {},
+  onWechatPaymentCompleted: async (completed) => {},
+  onWechatPaymentFailed: async (failed) => {},
+});
+
+await client.getWechatPaymentStatus(session.paymentSessionId);
+await client.fulfillWechatPayment(session.paymentSessionId);
+client.cancelWechatPayment(session.paymentSessionId);
+client.listWechatPaymentSessions();
+```
+
+The blocking `client.pay(..., { rail: 'wechat' })` path is now a wrapper around the same session flow: start a persisted session, show the QR, poll until completed/expired, then return the result. This keeps terminal UX compatible while giving channels a non-blocking, recoverable integration path.
+
+### 4.6 Scenario driver (agent usage sketch)
 
 ```ts
 import { WechatFacilitator } from 'moltspay/facilitators';
@@ -285,7 +358,38 @@ export function isWechatChainId(id: string): id is typeof WECHAT_CHAIN_ID {
   ```
 - **402 challenge**: add `buildWechatChallenge(config)` (mirrors `buildAlipayChallenge`), push into `accepts[]`; carry `code_url` in `accepts.extra` for the client QR
 
-### 5.7 Config example `moltspay.services.json`
+### 5.7 Buyer SDK `src/client/wechat/index.ts`
+
+`WechatClient` is the buyer-side payment lifecycle owner:
+
+- `start402(opts)` validates `extra.code_url` / `extra.out_trade_no`, persists the session, calls `onPaymentPending`, and returns immediately.
+- `status(identifier)` reloads a session by `payment_session_id` or `out_trade_no`, replays `/execute` with `X-Payment`, and stores `pending` / `completed` / `expired` / `failed`.
+- `pollSession(identifier)` repeatedly calls `status()` until terminal state.
+- `fulfill(identifier)` is idempotent: completed sessions return stored `resultBody`; otherwise it performs one status check.
+- `cancel(identifier)` marks the local session cancelled.
+- `listSessions()` lists persisted sessions newest first.
+
+`MoltsPayClient.startWechatPayment()` wraps discovery, 402 challenge parsing, rail selection, and `WechatClient.start402()`. It supports `autoPoll`, `onWechatPaymentCompleted`, and `onWechatPaymentFailed` so long-lived channel runtimes can let the SDK client handle polling and asynchronous fulfillment.
+
+### 5.8 CLI integration `src/cli/index.ts`
+
+Two user-facing shapes exist:
+
+```bash
+# Interactive terminal wrapper; blocks until paid/timeout.
+moltspay pay <url> <service> --rail wechat --prompt "..."
+
+# Recoverable non-blocking session commands for skill/channel integrations.
+moltspay wechat start <url> <service> --prompt "..."
+moltspay wechat status <payment_session_id|out_trade_no>
+moltspay wechat fulfill <payment_session_id|out_trade_no>
+moltspay wechat cancel <payment_session_id|out_trade_no>
+moltspay wechat list
+```
+
+`wechat start` writes a PNG QR, emits `MEDIA: <path>`, and exits immediately. `status` / `fulfill` can resume after exec timeout, process restart, or user/channel recovery.
+
+### 5.9 Config example `moltspay.services.json`
 ```json
 {
   "provider": {
@@ -331,15 +435,15 @@ Acceptance: `npm run test:run` all green + `npm run typecheck` (`tsc --noEmit`) 
 |---|---|---|
 | yuan/fen unit confusion | High | `cnyToFen` single conversion + `Math.round` against float drift + regex check, unit-tested (`"0.10"→10`) |
 | Response/callback not verified (fund safety) | High | `wechatV3VerifyResponse` enforced; platform cert injected in v1, later auto-download + rotation via `/v3/certificates` |
-| Async nature of scan payment | Medium | `verify` is a single query, the client polls (same model as alipay-bot); optionally wire a notify webhook for proactive confirmation |
-| Not an autonomous agent payment | Medium | Doc states clearly: this rail requires a human to scan, unlike Alipay's autonomous flow |
+| Async nature of scan payment | Medium | SDK client persists payment sessions and polls/fulfills in the background; sessions can be resumed by id or `out_trade_no` |
+| Not a fully autonomous payer | Medium | Doc states clearly: this rail requires a human to scan, unlike Alipay's autonomous flow |
 | Platform certificate expiry | Low | Certificate auto-download scheduled for 2.2.0 |
 
 ---
 
 ## 8. Phasing
 
-- **Phase 1 (this design, server verify/settle)**: 5.1–5.6 + tests. Delivers a usable WeChat Native collection rail (human scans).
+- **Phase 1 (implemented, server verify/settle + SDK sessions)**: 5.1–5.8 + tests. Delivers a usable WeChat Native collection rail with recoverable buyer sessions.
 - **Phase 2**: async notify webhook route (reusing callback verify + `aesgcm.ts`) + platform certificate auto-download/rotation.
 - **Phase 3 (external dependency)**: if WeChat ships an autonomous agent-payment product, build the agent-side autonomous payment client (counterpart of `alipay-bot`).
 
@@ -347,4 +451,4 @@ Acceptance: `npm run test:run` all green + `npm run typecheck` (`tsc --noEmit`) 
 
 ## 9. Effort
 
-About **10 new files + 4 integration points + 6 test files**, same order of magnitude as the 2.0.0 Alipay integration. The core verify/settle logic is simple (one signed call + one order query); complexity concentrates in the `sign`/`aesgcm`/`api` helpers, all on standard Node `crypto` with **no new third-party dependency**.
+About **10 new files + 6 integration points + 6 test files**, same order of magnitude as the 2.0.0 Alipay integration. The core verify/settle logic is simple (one signed call + one order query); complexity concentrates in the `sign`/`aesgcm`/`api` helpers and the buyer-side recoverable session manager, all on standard Node APIs with **no new third-party dependency**.

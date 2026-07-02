@@ -1,15 +1,16 @@
 # WeChat Pay Rail — Development Plan (Scenario A)
 
 > **Companion design**: [WECHAT-RAIL-DESIGN.md](./WECHAT-RAIL-DESIGN.md)
-> **Scope**: Scenario A — agent issues a Native code, payer not pre-bound, one-code-one-payment, all funds to one `mchid`, **poll-based confirmation**
-> **Target**: `moltspay@2.1.0` (proposed)
-> **Effort**: ~1.5–2 person-days
+> **Scope**: Scenario A — server issues a Native code, payer not pre-bound, one-code-one-payment, all funds to one `mchid`, **SDK-managed poll-based confirmation**
+> **Target**: `moltspay@2.1.0`
+> **Status**: Implemented through server verify/settle plus recoverable SDK buyer sessions
+> **Effort**: ~2–2.5 person-days
 
-This milestone does **poll-based confirmation only**. It excludes `aesgcm.ts` callback decryption, the notify webhook, the deep server `/execute` 402 wiring, and the full `provider.wechat` config — those belong to Phase 2 (see design §8).
+This milestone uses **poll-based confirmation**. It excludes `aesgcm.ts` callback decryption, the notify webhook, and platform certificate auto-download/rotation — those belong to Phase 2 (see design §8). Server `/execute` 402 wiring, `provider.wechat` config, buyer-side recoverable sessions, and CLI session commands are part of the implemented 2.1.0 path.
 
 ---
 
-## 1. Milestones (M1 → M4, strictly serial)
+## 1. Milestones (M1 → M5, strictly serial)
 
 ### M1 — Crypto + API base (highest risk, first) — DONE
 
@@ -30,7 +31,7 @@ This milestone does **poll-based confirmation only**. It excludes `aesgcm.ts` ca
 - **Depends on**: M1
 - **Acceptance**: `createPaymentRequirements`/`verify`/`settle` pass with mock `fetch`; yuan→fen unit test (`"0.10"→10`)
 
-### M3 — Scenario driver + integration wiring
+### M3 — Scenario driver + integration wiring — DONE
 
 | Item | Output |
 |---|---|
@@ -42,14 +43,35 @@ This milestone does **poll-based confirmation only**. It excludes `aesgcm.ts` ca
 - **Depends on**: M2
 - **Acceptance**: demo runs (mock/sandbox); `registry.get('wechat')` works
 
-### M4 — Wrap-up
+### M4 — Server 402 integration — DONE
+
+| Item | Output |
+|---|---|
+| `server/index.ts` | `provider.wechat` config loading, 402 `wechatpay-native` `accepts[]`, `/execute` verify → skill → settle dispatch |
+| schema / chain metadata | `wechat` fiat rail in `chains`, config schema, manifest examples |
+
+- **Depends on**: M3
+- **Acceptance**: server emits `code_url` / `out_trade_no`, accepts `X-Payment` proof, and returns resource after WeChat `SUCCESS`
+
+### M5 — Buyer SDK sessions + CLI recovery — DONE
+
+| Item | Output |
+|---|---|
+| `src/client/wechat/index.ts` | `WechatClient` session manager: `start402`, `status`, `pollSession`, `fulfill`, `cancel`, `listSessions` |
+| `src/client/node/index.ts` | `MoltsPayClient.startWechatPayment`, `getWechatPaymentStatus`, `fulfillWechatPayment`, `cancelWechatPayment`, `listWechatPaymentSessions`; `autoPoll` callbacks |
+| `src/cli/index.ts` | `moltspay wechat start/status/fulfill/cancel/list`; `pay --rail wechat` remains blocking wrapper over persisted sessions |
+
+- **Depends on**: M4
+- **Acceptance**: channel integrations can start a QR session without blocking, SDK persists context under `<configDir>/wechat-sessions`, and status/fulfill can resume by `payment_session_id` or `out_trade_no`
+
+### M6 — Wrap-up
 
 | Item | Output |
 |---|---|
 | Tests complete | `test/facilitators/wechat/{sign,facilitator}.test.ts` (+ any added in M3) |
 | Gates | `tsc --noEmit` zero errors, `vitest run` all green, `tsup` build passes |
 
-- **Depends on**: M3
+- **Depends on**: M5
 - **Acceptance**: all three gates pass, PR mergeable
 
 ---
@@ -98,7 +120,7 @@ A new rail is a new feature → semantic-version **minor: `2.0.1 → 2.1.0`**.
 ```bash
 # 1) Version & changelog
 #    package.json: version -> 2.1.0
-#    CHANGELOG.md: add a 2.1.0 entry (WeChat Native rail / scenario A)
+#    CHANGELOG.md: add a 2.1.0 entry (WeChat Native rail / scenario A / recoverable sessions)
 #    package.json "files": if shipping docs/WECHAT-RAIL.md, add it explicitly
 
 # 2) Publish (auto-triggers prepublishOnly: typecheck + build + verify:web)
@@ -109,7 +131,7 @@ git tag v2.1.0
 git push origin main --tags
 ```
 
-**Cadence suggestion**: the first version can **skip npm** — if only validating scenario A, merge to `main` + tag is enough; publish 2.1.0 once Phase 2 (notify + cert rotation) is complete, to avoid shipping a partial feature. npm credentials (PAT/OTP) reuse the existing release setup.
+**Cadence suggestion**: 2.1.0 is publishable with poll-based confirmation because the buyer session manager makes channel flows recoverable. Phase 2 (notify + cert rotation) remains additive and can ship later. npm credentials (PAT/OTP) reuse the existing release setup.
 
 ---
 
@@ -120,7 +142,9 @@ git push origin main --tags
 | M1 crypto+API | half day |
 | M2 facilitator | half day |
 | M3 demo+wiring | half day |
-| M4 wrap-up | wrap-up |
-| **Total** | **~1.5–2 person-days** |
+| M4 server 402 integration | half day |
+| M5 SDK sessions + CLI recovery | half day |
+| M6 wrap-up | wrap-up |
+| **Total** | **~2–2.5 person-days** |
 
-No new third-party dependency (`qrcode-terminal`, `crypto`, and `zlib`/`fs` from Node are already present). CLI output should include terminal ASCII QR plus a generated PNG path emitted as `MEDIA: <path>` for chat surfaces.
+No new third-party dependency (`qrcode-terminal`, `crypto`, and `fs` from Node are already present). CLI output should include terminal ASCII QR plus a generated PNG path emitted as `MEDIA: <path>` for chat surfaces. Channel integrations should prefer the SDK session API or `moltspay wechat start/status/fulfill` over the blocking `pay --rail wechat` wrapper.

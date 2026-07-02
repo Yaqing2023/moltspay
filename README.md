@@ -26,7 +26,7 @@ MoltsPay enables agent-to-agent commerce using the [x402 protocol](https://www.x
 - **Secure Wallet** - Spending limits, whitelist, and audit logging
 - **Multi-chain** - Base, Polygon, Solana, BNB, Tempo (mainnet & testnet)
 - **Fiat Rail — Alipay (`2.0.0`)** - Accept CNY via 支付宝 AI 收 from China mainland merchants. CLI-only (Node), browser unsupported. See [`docs/ALIPAY-RAIL.md`](docs/ALIPAY-RAIL.md)
-- **Fiat Rail — WeChat Pay (`2.1.0`)** - Accept CNY via WeChat Pay v3 Native (scan-to-pay). Server-side verify/settle; agent issues a payer-agnostic QR, anyone scans to pay. See [`docs/WECHAT-RAIL-DESIGN.md`](docs/WECHAT-RAIL-DESIGN.md)
+- **Fiat Rail — WeChat Pay (`2.1.0`)** - Accept CNY via WeChat Pay v3 Native (scan-to-pay). SDK-managed recoverable sessions persist QR/order context, poll in the background, and fulfill idempotently. See [`docs/WECHAT-RAIL-DESIGN.md`](docs/WECHAT-RAIL-DESIGN.md)
 - **Agent-to-Agent** - Complete A2A payment flow support
 - **Multi-VM** - EVM chains + Solana (SVM) with unified API
 - **MCP Server** - Expose wallet + payments to Claude Desktop, Cursor, and other MCP hosts
@@ -597,6 +597,13 @@ npx moltspay pay <url> <service> --chain tempo_moderato # Pay on Tempo
 npx moltspay pay <url> <service> --rail alipay         # Pay with Alipay AI Pay
 npx moltspay pay <url> <service> --rail wechat         # Pay with WeChat Pay Native QR
 
+# === WeChat Recoverable Sessions ===
+npx moltspay wechat start <url> <service> --prompt "..."   # Start order, return QR metadata immediately
+npx moltspay wechat status <session-or-out_trade_no>        # Query/recover a pending session
+npx moltspay wechat fulfill <session-or-out_trade_no>       # Idempotently fulfill if paid
+npx moltspay wechat cancel <session-or-out_trade_no>        # Mark local session cancelled
+npx moltspay wechat list                                   # List persisted WeChat sessions
+
 # === Server Commands ===
 npx moltspay start <skill-dir>       # Start server
 npx moltspay stop                    # Stop server
@@ -916,7 +923,7 @@ Since **`2.1.0`**, MoltsPay supports a second **fiat payment rail via WeChat Pay
 
 Like `alipay`, `wechat` is a **fiat rail, not a blockchain**. The scheme is `wechatpay-native`, requests are signed with **SHA256-RSA** (`WECHATPAY2-SHA256-RSA2048`), and amounts are sent to WeChat in **fen** (the manifest still uses **yuan** decimal strings for consistency).
 
-> ⚠️ **Not an autonomous agent payment.** WeChat Pay has no agent-payment product equivalent to Alipay's `alipay-bot`. The flow is: the agent issues a **payer-agnostic `code_url`** (Native, no `openid` — anyone can scan), a human scans and pays, and the server confirms by **polling the order** (`trade_state === SUCCESS`). It is **one code, one payment** — issue a new code to collect again. See [`docs/WECHAT-RAIL-DESIGN.md`](docs/WECHAT-RAIL-DESIGN.md).
+> ⚠️ **Not a fully autonomous payer.** WeChat Pay has no agent-payment product equivalent to Alipay's `alipay-bot`. The flow is: the server issues a **payer-agnostic `code_url`** (Native, no `openid` — anyone can scan), the SDK client persists the session and polls, a human scans and pays, and the server verifies the order (`trade_state === SUCCESS`). It is **one code, one payment** — issue a new code to collect again. See [`docs/WECHAT-RAIL-DESIGN.md`](docs/WECHAT-RAIL-DESIGN.md).
 
 ### Implementation Status
 
@@ -924,7 +931,12 @@ The WeChat rail is implemented on the `2.1.0` code path:
 
 - `WechatFacilitator` creates Native orders, returns `code_url` / `out_trade_no`, verifies `SUCCESS` by querying WeChat Pay v3, and settles idempotently.
 - Server 402 integration emits a `wechatpay-native` entry in `accepts[]` when a service has `services[].wechat` pricing.
-- CLI support is available through `--rail wechat`. The CLI renders terminal ASCII QR for local terminals, writes a PNG QR image, and emits a `MEDIA: <path>` line so chat surfaces such as webchat, Discord, or Feishu can upload the QR image instead of showing fragile ASCII art. Browser support is intentionally not provided because the flow requires a human QR scan and server-side order verification.
+- `WechatClient` owns the buyer-side payment lifecycle: it persists `payment_session_id`, `out_trade_no`, QR payload, original request body, and service context under `<configDir>/wechat-sessions`; it can poll, fulfill, cancel, and recover sessions by session id or `out_trade_no`.
+- `MoltsPayClient.startWechatPayment()` starts a session and returns immediately with QR metadata. It can also run SDK-managed background polling with `autoPoll` plus completion/failure callbacks for long-lived channel runtimes.
+- CLI support has two shapes:
+  - `moltspay pay --rail wechat` is the interactive terminal wrapper. It renders terminal ASCII QR, writes a PNG QR image, emits `MEDIA: <path>`, and waits for payment completion.
+  - `moltspay wechat start/status/fulfill/cancel/list` is the non-blocking recoverable interface for skills, chat channels, and operational recovery.
+- Browser support is intentionally not provided because the flow requires a human QR scan and server-side order verification.
 - Unit and wiring tests cover signing, facilitator behavior, chain/registry wiring, and server integration. Local server integration tests require an environment that allows binding `127.0.0.1`.
 - Release housekeeping: update any stale roadmap docs and tag `v2.1.0` after the normal test gates pass in a non-sandboxed environment.
 
@@ -983,8 +995,64 @@ Add `"wechat"` to `chains`, configure `provider.wechat` with your merchant crede
 ### How It Works
 
 1. An unpaid request to `/execute` returns **402** with a `wechatpay-native` entry in `accepts[]`, carrying `extra.code_url` (`weixin://wxpay/bizpayurl?pr=...`) and `extra.out_trade_no`.
-2. Render `code_url` as a QR; a human scans and pays. In a CLI terminal this can be ASCII QR, but chat UIs should use the emitted `MEDIA: <path>` PNG image. The Native `code_url` is a QR payload, not a normal HTTPS checkout link.
-3. The client re-requests `/execute` with an `X-Payment` payload echoing `out_trade_no`; the server verifies via order query and, on `SUCCESS`, runs the skill and confirms settlement.
+2. The SDK client persists a payment session before surfacing the QR. A channel runtime can show the returned PNG/`MEDIA` image and continue independently of the original tool call.
+3. A human scans and pays. The Native `code_url` is a QR payload, not a normal HTTPS checkout link.
+4. The SDK client polls by re-requesting `/execute` with an `X-Payment` payload echoing `out_trade_no`; the server verifies via order query and, on `SUCCESS`, runs the skill and confirms settlement.
+5. If the process is interrupted, the session can be resumed by `payment_session_id` or `out_trade_no`; `fulfill` is idempotent and returns the stored result once completed.
+
+### Buyer SDK Usage
+
+Blocking terminal-style payment:
+
+```ts
+import { MoltsPayClient } from 'moltspay/client';
+
+const client = new MoltsPayClient();
+const result = await client.pay(
+  'https://server.com',
+  'my-service',
+  { prompt: 'hello' },
+  {
+    rail: 'wechat',
+    onPaymentPending: ({ paymentUrl, tradeNo }) => {
+      console.log('Render this as a QR:', paymentUrl, tradeNo);
+    },
+  },
+);
+```
+
+Recoverable channel/session payment:
+
+```ts
+const session = await client.startWechatPayment(
+  'https://server.com',
+  'my-service',
+  { prompt: 'hello' },
+  {
+    rail: 'wechat',
+    autoPoll: true,
+    onPaymentPending: ({ paymentUrl, tradeNo }) => {
+      // Render paymentUrl as QR and send it to the current channel.
+    },
+    onWechatPaymentCompleted: async (completed) => {
+      // Send completed.resultBody, parsed as needed, back to the channel.
+    },
+    onWechatPaymentFailed: async (failed) => {
+      // Notify timeout/cancel/failure.
+    },
+  },
+);
+
+console.log(session.paymentSessionId, session.outTradeNo);
+```
+
+CLI recoverable flow:
+
+```bash
+npx moltspay wechat start https://server.com my-service --prompt "hello" --json
+npx moltspay wechat status mpay_sess_...
+npx moltspay wechat fulfill mpay_sess_...
+```
 
 See [`examples/wechat-native-pay.ts`](examples/wechat-native-pay.ts) for a runnable scenario-A demo (mock by default; `WECHAT_REAL=1` hits the live gateway).
 

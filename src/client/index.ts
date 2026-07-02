@@ -10,3 +10,13 @@
  */
 
 export * from './node/index.js';
+export { WechatClient } from './wechat/index.js';
+export type {
+  WechatClientOptions,
+  WechatPaymentSession,
+  WechatPaymentResult,
+  WechatPayOptions,
+  WechatPendingInfo,
+  WechatSessionStatus,
+  WechatStartOptions,
+} from './wechat/index.js';

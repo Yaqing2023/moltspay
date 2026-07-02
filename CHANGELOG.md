@@ -6,7 +6,7 @@ Second **fiat rail: WeChat Pay v3 Native (微信支付 / 扫码付)**, settling 
 
 **No breaking changes.** Every existing rail (crypto + Alipay) behaves identically; WeChat is strictly opt-in via configuration. Upgrading from 2.0.x requires no code changes.
 
-Unlike Alipay AI Pay, WeChat has no autonomous agent-payment product, so this rail is **server-side verify/settle with a human scanning the QR**: the agent issues a payer-agnostic Native `code_url` (no `openid`), anyone scans to pay, and the server confirms by polling the order. One code, one payment.
+Unlike Alipay AI Pay, WeChat has no autonomous payer product, so this rail is **SDK-managed scan-to-pay with server-side verify/settle**: the server issues a payer-agnostic Native `code_url` (no `openid`), the SDK client persists the payment session and polls, anyone scans to pay, and the server confirms by polling the order. One code, one payment.
 
 ### Added
 - **WeChat Pay fiat rail** — a new `WechatFacilitator` settling CNY over the x402 protocol.
@@ -15,6 +15,9 @@ Unlike Alipay AI Pay, WeChat has no autonomous agent-payment product, so this ra
   - Amount is converted yuan → fen (`cnyToFen`) for the WeChat API; the manifest uses yuan decimal strings.
 - **WeChat crypto helpers** — `wechatV3Sign` / `buildAuthorizationToken` / `wechatV3VerifyResponse` (`src/facilitators/wechat/sign.ts`) and the `wechatV3Call` v3 JSON gateway client (`src/facilitators/wechat/api.ts`).
 - **HTTP server integration** — opt-in via `provider.wechat` (`mchid`, `appid`, `serial_no`, `private_key_path`, `notify_url`, optional `platform_public_key_path` / `apiv3_key`) and per-service `services[].wechat` (`price_cny`, `description`). 402 responses append a `wechatpay-native` `accepts[]` entry carrying `code_url` + `out_trade_no`; `/execute` dispatches the rail to verify → run skill → fire-and-forget settle.
+- **Recoverable WeChat buyer sessions** — `WechatClient` persists `payment_session_id`, `out_trade_no`, QR payload, original request body, service context, status, and result under `<configDir>/wechat-sessions`. Sessions can be recovered by session id or `out_trade_no`, polled, fulfilled idempotently, cancelled, and listed.
+- **WeChat SDK orchestration APIs** — `MoltsPayClient.startWechatPayment()`, `getWechatPaymentStatus()`, `fulfillWechatPayment()`, `cancelWechatPayment()`, and `listWechatPaymentSessions()`. `startWechatPayment()` supports `autoPoll`, `onWechatPaymentCompleted`, and `onWechatPaymentFailed` so channel runtimes can let the SDK client own payment polling and asynchronous fulfillment.
+- **WeChat CLI session commands** — `moltspay wechat start/status/fulfill/cancel/list` for non-blocking QR issuance and operational recovery. `moltspay pay --rail wechat` remains the blocking terminal wrapper, now built on the same persisted session flow.
 - **Scenario-A demo** — `examples/wechat-native-pay.ts` (issue code → `qrcode-terminal` → poll → settle); mock by default, `WECHAT_REAL=1` hits the live gateway.
 - **Docs** — `docs/WECHAT-RAIL-DESIGN.md` (design + scenario A) and `docs/WECHAT-RAIL-PLAN.md` (dev plan).
 
@@ -24,7 +27,8 @@ Unlike Alipay AI Pay, WeChat has no autonomous agent-payment product, so this ra
 ### Migration from 2.0.x
 1. No code changes required — fully backward compatible.
 2. Optional: add `provider.wechat` + `services[].wechat` to your services JSON to enable WeChat payments.
-3. WeChat confirmation is poll-based; render the `code_url` from the 402 `accepts[]` as a QR and re-request `/execute` with the `out_trade_no`.
+3. For terminal use, `moltspay pay --rail wechat` still blocks until paid/timeout.
+4. For chat/channel integrations, use `startWechatPayment()` or `moltspay wechat start` so the SDK client persists the session before the QR is shown, then recover with `status` / `fulfill` by `payment_session_id` or `out_trade_no`.
 
 ## [2.0.0] - 2026-06-20
 
