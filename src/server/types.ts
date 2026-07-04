@@ -38,6 +38,32 @@ export interface ServiceConfig {
    * x402 rails; `wechat.price_cny` is a separate CNY price.
    */
   wechat?: ServiceWechatConfig;
+  /**
+   * Custodial balance per-service config (2.2.0+).
+   * Set when this service accepts password-free deduction from
+   * server-custodied buyer balances. `balance.price` defaults to the
+   * service's top-level `price` when omitted.
+   */
+  balance?: ServiceBalanceConfig;
+}
+
+/**
+ * Per-service custodial balance configuration (2.2.0+).
+ *
+ * Sample:
+ * ```json
+ * "balance": {
+ *   "price": "3.99"
+ * }
+ * ```
+ */
+export interface ServiceBalanceConfig {
+  /**
+   * Price in the ledger currency as a decimal string (e.g. `"3.99"`).
+   * Defaults to the service's top-level `price` when omitted.
+   * Must match `/^\d+(\.\d{1,2})?$/`.
+   */
+  price?: string;
 }
 
 /**
@@ -127,6 +153,36 @@ export interface ProviderConfig {
    * file paths + validates them at startup; rejects start otherwise.
    */
   wechat?: ProviderWechatConfig;
+  /**
+   * Custodial balance rail provider-level config (2.2.0+).
+   * Required when `chains` includes `"balance"`. Requires Node >= 22.5
+   * (node:sqlite); the server rejects start otherwise.
+   */
+  balance?: ProviderBalanceConfig;
+}
+
+/**
+ * Provider-level custodial balance rail configuration (2.2.0+).
+ *
+ * Sample:
+ * ```json
+ * "balance": {
+ *   "db_path": "./data/balance.sqlite",
+ *   "currency": "USD",
+ *   "single_limit": "5.00",
+ *   "daily_limit": "10.00"
+ * }
+ * ```
+ */
+export interface ProviderBalanceConfig {
+  /** SQLite ledger file path (relative to moltspay.services.json). Created on first start. */
+  db_path: string;
+  /** Ledger quote currency. Defaults to `"USD"`. */
+  currency?: string;
+  /** Default per-transaction limit for new buyers, decimal string. Defaults to `"5.00"`. */
+  single_limit?: string;
+  /** Default daily limit for new buyers, decimal string. Defaults to `"10.00"`. */
+  daily_limit?: string;
 }
 
 /**

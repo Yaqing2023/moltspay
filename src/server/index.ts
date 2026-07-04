@@ -33,9 +33,15 @@ import {
   WechatFacilitatorConfig,
   WECHAT_NETWORK,
   WECHAT_SCHEME,
+  BalanceFacilitator,
+  BalanceFacilitatorConfig,
+  BALANCE_SCHEME,
+  toSat,
+  fromSat,
 } from '../facilitators/index.js';
 import { toPem } from '../facilitators/alipay/encoding.js';
-import { isAlipayChainId, isWechatChainId } from '../chains/index.js';
+import { verifyPayment as verifyOnChainPayment } from '../verify/index.js';
+import { isAlipayChainId, isWechatChainId, isBalanceChainId } from '../chains/index.js';
 import {
   ServicesManifest,
   ServiceConfig,
@@ -244,6 +250,8 @@ export class MoltsPayServer {
   private alipayFacilitator: AlipayFacilitator | null = null;
   /** WeChat Pay Native facilitator instance, set when `provider.wechat` is configured (2.1.0). */
   private wechatFacilitator: WechatFacilitator | null = null;
+  /** Custodial balance facilitator instance, set when `provider.balance` is configured (2.2.0). */
+  private balanceFacilitator: BalanceFacilitator | null = null;
 
   constructor(servicesPath: string, options: MoltsPayServerOptionsExtended = {}) {
     // Load env files FIRST (before reading USE_MAINNET)
@@ -358,6 +366,34 @@ export class MoltsPayServer {
       }
     }
 
+    // ── Custodial balance rail (2.2.0): opt-in via provider.balance ──
+    // No key material — just resolve the ledger db path relative to the
+    // manifest. Ledger construction (and the Node >= 22.5 check inside it)
+    // happens when the registry instantiates the facilitator below; a
+    // failure there is fatal, same as a fiat-rail key-load failure.
+    const providerBalance = this.manifest.provider.balance;
+    if (providerBalance) {
+      const baseDir = path.dirname(servicesPath);
+      const balanceFacilitatorConfig: BalanceFacilitatorConfig = {
+        db_path: providerBalance.db_path === ':memory:'
+          ? providerBalance.db_path
+          : path.isAbsolute(providerBalance.db_path)
+            ? providerBalance.db_path
+            : path.resolve(baseDir, providerBalance.db_path),
+        currency: providerBalance.currency,
+        single_limit: providerBalance.single_limit,
+        daily_limit: providerBalance.daily_limit,
+      };
+      facilitatorConfig.config = {
+        ...facilitatorConfig.config,
+        balance: balanceFacilitatorConfig as unknown as FacilitatorConfig,
+      };
+      facilitatorConfig.fallback = facilitatorConfig.fallback || [];
+      if (facilitatorConfig.primary !== 'balance' && !facilitatorConfig.fallback.includes('balance')) {
+        facilitatorConfig.fallback.push('balance');
+      }
+    }
+
     this.registry = new FacilitatorRegistry(facilitatorConfig);
 
     if (providerAlipay) {
@@ -368,6 +404,11 @@ export class MoltsPayServer {
     if (providerWechat) {
       this.wechatFacilitator = this.registry.get('wechat') as WechatFacilitator;
       console.log(`[MoltsPay] WeChat Pay rail enabled (mchid ${providerWechat.mchid})`);
+    }
+
+    if (providerBalance) {
+      this.balanceFacilitator = this.registry.get('balance') as BalanceFacilitator;
+      console.log(`[MoltsPay] Custodial balance rail enabled (ledger ${providerBalance.db_path})`);
     }
 
     // Get primary facilitator for logging
@@ -426,12 +467,13 @@ export class MoltsPayServer {
     // Supports both string array ["base", "polygon"] and object array [{chain, wallet, tokens}]
     if (provider.chains && provider.chains.length > 0) {
       return provider.chains
-        // Fiat rails (alipay/wechat) carry no EVM network/token; they are
-        // emitted separately via buildAlipayChallenge/buildWechatChallenge.
+        // Fiat rails (alipay/wechat) and the balance rail carry no EVM
+        // network/token; they are emitted separately via
+        // buildAlipayChallenge/buildWechatChallenge/buildBalanceChallenge.
         // Excluding them here prevents a spurious base/USDC accepts[] entry.
         .filter(c => {
           const chainName = typeof c === 'string' ? c : c.chain;
-          return !isAlipayChainId(chainName) && !isWechatChainId(chainName);
+          return !isAlipayChainId(chainName) && !isWechatChainId(chainName) && !isBalanceChainId(chainName);
         })
         .map(c => {
           const chainName = typeof c === 'string' ? c : c.chain;
@@ -583,6 +625,24 @@ export class MoltsPayServer {
 
       if (url.pathname === '/health' && req.method === 'GET') {
         return await this.handleHealthCheck(res);
+      }
+
+      // Custodial balance rail management endpoints (2.2.0).
+      if (url.pathname.startsWith('/balance') && this.balanceFacilitator) {
+        if (url.pathname === '/balance' && req.method === 'GET') {
+          return this.handleBalanceQuery(url, res);
+        }
+        if (url.pathname === '/balance/topup' && req.method === 'POST') {
+          const body = await this.readBody(req);
+          return await this.handleBalanceTopup(body, res);
+        }
+        if (url.pathname === '/balance/refund' && req.method === 'POST') {
+          const body = await this.readBody(req);
+          return this.handleBalanceRefund(body, res);
+        }
+        if (url.pathname === '/balance/transactions' && req.method === 'GET') {
+          return this.handleBalanceTransactions(url, res);
+        }
       }
 
       if (url.pathname === '/execute' && req.method === 'POST') {
@@ -785,6 +845,9 @@ export class MoltsPayServer {
     }
     if (payScheme === WECHAT_SCHEME || (payNetwork ? isWechatChainId(payNetwork) : false)) {
       return this.handleWechatExecute(skill, params || {}, payment, res);
+    }
+    if (payScheme === BALANCE_SCHEME || (payNetwork ? isBalanceChainId(payNetwork) : false)) {
+      return this.handleBalanceExecute(skill, params || {}, payment, res);
     }
 
     // Validate basic payment fields
@@ -1153,6 +1216,283 @@ export class MoltsPayServer {
   }
 
   /**
+   * Handle /execute for the custodial balance rail (2.2.0).
+   *
+   * Execution order is INVERTED relative to the QR rails: the deduction IS
+   * the settlement, so it must land before the skill runs, and a skill
+   * failure refunds it. `settle()` is idempotent on the client's
+   * `request_id`, so a retried request never double-charges.
+   *
+   *   QR rails:  verify(paid?) → run skill → settle (confirm, fire-and-forget)
+   *   balance:   verify implicit in settle (atomic deduct) → run skill → [fail → refund]
+   */
+  private async handleBalanceExecute(
+    skill: RegisteredSkill,
+    params: Record<string, any>,
+    payment: X402PaymentPayload,
+    res: ServerResponse
+  ): Promise<void> {
+    if (!this.balanceFacilitator) {
+      return this.sendJson(res, 402, { error: 'Balance rail not configured on this server' });
+    }
+
+    const requirements = this.balanceRequirementsFor(skill.config);
+
+    // Atomic deduct (settle). checkDeduct runs inside the same transaction,
+    // so a separate verify() call here would only add a TOCTOU window.
+    console.log(`[MoltsPay] Deducting balance for ${skill.id}...`);
+    const settlement = await this.balanceFacilitator.settle(payment, requirements);
+    if (!settlement.success) {
+      return this.sendJson(res, 402, {
+        error: `Balance deduction failed: ${settlement.error}`,
+        code: settlement.status,
+        facilitator: 'balance',
+      });
+    }
+    console.log(`[MoltsPay] Balance deducted (tx ${settlement.transaction}${settlement.status === 'replayed' ? ', replayed' : ''})`);
+
+    // Execute skill (same timeout contract as the other rails).
+    const timeoutSeconds = parseInt(process.env.SKILL_TIMEOUT_SECONDS || '1200');
+    console.log(`[MoltsPay] Executing skill: ${skill.id} (timeout: ${timeoutSeconds}s)`);
+    let result: any;
+    try {
+      result = await Promise.race([
+        skill.handler(params),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`Skill timeout after ${timeoutSeconds}s`)), timeoutSeconds * 1000)
+        )
+      ]);
+    } catch (err: any) {
+      console.error('[MoltsPay] Skill execution failed:', err.message);
+      // The buyer was already charged — reverse it. refund() is idempotent
+      // per deduct, so a crash-retry of this path cannot double-credit.
+      const refund = this.balanceFacilitator.refund(settlement.transaction!, `skill_failed: ${err.message}`.slice(0, 200));
+      if (!refund.success) {
+        console.error(`[MoltsPay] Balance refund FAILED for ${settlement.transaction}: ${refund.error} — manual reconciliation needed`);
+      } else {
+        console.log(`[MoltsPay] Balance refunded (tx ${refund.txId})`);
+      }
+      return this.sendJson(res, 500, {
+        error: 'Service execution failed',
+        message: err.message,
+        refunded: refund.success,
+      });
+    }
+
+    const responseHeaders: Record<string, string> = {
+      [PAYMENT_RESPONSE_HEADER]: Buffer.from(JSON.stringify({
+        success: true,
+        transaction: settlement.transaction,
+        network: 'balance',
+        facilitator: 'balance',
+      })).toString('base64'),
+    };
+    this.sendJson(res, 200, {
+      success: true,
+      result,
+      payment: { transaction: settlement.transaction, status: 'fulfilled', facilitator: 'balance' },
+    }, responseHeaders);
+  }
+
+  /** The balance rail's requirements for a service (price defaults to `config.price`). */
+  private balanceRequirementsFor(config: ServiceConfig): X402PaymentRequirements {
+    const price = config.balance?.price ?? config.price.toFixed(2);
+    return {
+      scheme: BALANCE_SCHEME,
+      network: 'balance',
+      asset: this.balanceFacilitator?.currency ?? 'USD',
+      amount: price,
+      payTo: 'custodial',
+      maxTimeoutSeconds: 30,
+      extra: { service_id: config.id },
+    };
+  }
+
+  /**
+   * Build the balance 402 challenge for a service, or null when the rail
+   * isn't configured for this server or this service. Pure — nothing is
+   * minted, so unlike the QR rails a 402 emit has no side effects.
+   */
+  private buildBalanceChallenge(config: ServiceConfig): { accepts: X402PaymentRequirements } | null {
+    if (!this.balanceFacilitator || !config.balance) return null;
+    try {
+      return { accepts: this.balanceRequirementsFor(config) };
+    } catch (err: any) {
+      console.error(`[MoltsPay] Balance challenge build failed for ${config.id}: ${err.message}`);
+      return null;
+    }
+  }
+
+  /** GET /balance?buyer_id= — balance, limits, and today's spend. */
+  private handleBalanceQuery(url: URL, res: ServerResponse): void {
+    const buyerId = url.searchParams.get('buyer_id');
+    if (!buyerId) {
+      return this.sendJson(res, 400, { error: 'buyer_id query parameter is required' });
+    }
+    const ledger = this.balanceFacilitator!.getLedger();
+    const buyer = ledger.getBuyer(buyerId);
+    if (!buyer) {
+      // A never-seen buyer is a valid empty account, not an error.
+      return this.sendJson(res, 200, {
+        buyer_id: buyerId,
+        balance: '0.00',
+        currency: this.balanceFacilitator!.currency,
+        exists: false,
+      });
+    }
+    this.sendJson(res, 200, {
+      buyer_id: buyerId,
+      balance: fromSat(buyer.balance_sat),
+      currency: this.balanceFacilitator!.currency,
+      single_limit: fromSat(buyer.single_limit_sat),
+      daily_limit: fromSat(buyer.daily_limit_sat),
+      today_spent: fromSat(ledger.spentTodaySat(buyerId)),
+      status: buyer.status,
+      exists: true,
+    });
+  }
+
+  /**
+   * POST /balance/topup — verify an externally settled payment and credit
+   * the buyer's ledger balance. MVP verification per rail:
+   *
+   * - `crypto`: `tx_hash` is verified on-chain (receipt success + USDC/USDT
+   *   transfer to the provider wallet + amount >= `amount`).
+   * - `wechat`: `out_trade_no` is queried via the WeChat rail; must be
+   *   SUCCESS. The credited `amount` is in LEDGER currency — CNY→ledger FX
+   *   is the operator's call in the MVP; the fiat amount is logged.
+   * - `alipay`: same trust model as wechat, but Alipay AI-Pay verification
+   *   needs the buyer's payment_proof (not just a trade_no), so the MVP
+   *   accepts the operator-confirmed `trade_no` as the idempotency ref
+   *   WITHOUT gateway verification. Guard this endpoint accordingly.
+   *
+   * All rails: the external reference is UNIQUE in the ledger — replaying
+   * the same tx_hash / trade number never credits twice.
+   */
+  private async handleBalanceTopup(body: any, res: ServerResponse): Promise<void> {
+    const { buyer_id, rail, amount } = body || {};
+    if (typeof buyer_id !== 'string' || !buyer_id) {
+      return this.sendJson(res, 400, { error: 'buyer_id is required' });
+    }
+    let amountSat: number;
+    try {
+      amountSat = toSat(String(amount));
+      if (amountSat <= 0) throw new Error('amount must be positive');
+    } catch (err: any) {
+      return this.sendJson(res, 400, { error: `Invalid amount: ${err.message}` });
+    }
+
+    let externalRef: string;
+    let description: string;
+    if (rail === 'crypto') {
+      const txHash = body.tx_hash;
+      if (typeof txHash !== 'string' || !txHash) {
+        return this.sendJson(res, 400, { error: 'tx_hash is required for rail "crypto"' });
+      }
+      const check = await verifyOnChainPayment({
+        txHash,
+        expectedAmount: amountSat / 100,
+        expectedTo: this.manifest.provider.wallet,
+        chain: body.chain || 'base',
+      });
+      if (!check.verified) {
+        return this.sendJson(res, 402, { error: `On-chain verification failed: ${check.error}` });
+      }
+      externalRef = txHash.toLowerCase();
+      description = `crypto topup ${check.amount} ${check.token} on ${body.chain || 'base'}`;
+    } else if (rail === 'wechat') {
+      const outTradeNo = body.out_trade_no;
+      if (typeof outTradeNo !== 'string' || !outTradeNo) {
+        return this.sendJson(res, 400, { error: 'out_trade_no is required for rail "wechat"' });
+      }
+      if (!this.wechatFacilitator) {
+        return this.sendJson(res, 400, { error: 'WeChat rail not configured on this server' });
+      }
+      const wxPayload: X402PaymentPayload = {
+        x402Version: X402_VERSION,
+        scheme: WECHAT_SCHEME,
+        network: WECHAT_NETWORK,
+        payload: { out_trade_no: outTradeNo },
+      };
+      const wxReqs: X402PaymentRequirements = {
+        scheme: WECHAT_SCHEME, network: WECHAT_NETWORK, asset: 'CNY', amount: '0',
+        payTo: this.manifest.provider.wechat?.mchid || '', maxTimeoutSeconds: 30,
+        extra: { out_trade_no: outTradeNo },
+      };
+      const check = await this.wechatFacilitator.verify(wxPayload, wxReqs);
+      if (!check.valid) {
+        return this.sendJson(res, 402, { error: `WeChat order verification failed: ${check.error}` });
+      }
+      externalRef = `wechat:${outTradeNo}`;
+      description = `wechat topup out_trade_no=${outTradeNo} fiat=${JSON.stringify(check.details?.amount ?? null)}`;
+      console.log(`[MoltsPay] WeChat topup verified: ${description}`);
+    } else if (rail === 'alipay') {
+      const tradeNo = body.trade_no;
+      if (typeof tradeNo !== 'string' || !tradeNo) {
+        return this.sendJson(res, 400, { error: 'trade_no is required for rail "alipay"' });
+      }
+      // MVP: no gateway verification possible without the buyer's
+      // payment_proof — operator-trusted credit, idempotent on trade_no.
+      externalRef = `alipay:${tradeNo}`;
+      description = `alipay topup trade_no=${tradeNo} (operator-confirmed, unverified)`;
+      console.warn(`[MoltsPay] Alipay topup credited without gateway verification: ${tradeNo}`);
+    } else {
+      return this.sendJson(res, 400, { error: 'rail must be one of "crypto" | "alipay" | "wechat"' });
+    }
+
+    const ledger = this.balanceFacilitator!.getLedger();
+    const result = ledger.topup({ buyerId: buyer_id, amountSat, externalRef, description });
+    this.sendJson(res, 200, {
+      success: true,
+      tx_id: result.txId,
+      balance: fromSat(result.balanceSat),
+      replayed: result.replayed ?? false,
+    });
+  }
+
+  /** POST /balance/refund — reverse a deduct (operator/agent use). */
+  private handleBalanceRefund(body: any, res: ServerResponse): void {
+    const { tx_id, reason } = body || {};
+    if (typeof tx_id !== 'string' || !tx_id) {
+      return this.sendJson(res, 400, { error: 'tx_id is required' });
+    }
+    const result = this.balanceFacilitator!.refund(tx_id, typeof reason === 'string' ? reason : undefined);
+    if (!result.success) {
+      return this.sendJson(res, result.error === 'tx_not_found' ? 404 : 400, { error: result.error });
+    }
+    this.sendJson(res, 200, {
+      success: true,
+      tx_id: result.txId,
+      balance: fromSat(result.balanceSat!),
+      replayed: result.replayed ?? false,
+    });
+  }
+
+  /** GET /balance/transactions?buyer_id=&limit=&offset= — history, newest first. */
+  private handleBalanceTransactions(url: URL, res: ServerResponse): void {
+    const buyerId = url.searchParams.get('buyer_id');
+    if (!buyerId) {
+      return this.sendJson(res, 400, { error: 'buyer_id query parameter is required' });
+    }
+    const limit = Math.min(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 100);
+    const offset = parseInt(url.searchParams.get('offset') || '0', 10) || 0;
+    const rows = this.balanceFacilitator!.getLedger().listTransactions(buyerId, limit, offset);
+    this.sendJson(res, 200, {
+      buyer_id: buyerId,
+      transactions: rows.map(r => ({
+        tx_id: r.id,
+        type: r.type,
+        amount: fromSat(r.amount_sat),
+        service: r.service,
+        description: r.description,
+        external_ref: r.external_ref,
+        status: r.status,
+        created_at: r.created_at,
+      })),
+    });
+  }
+
+  /**
    * Handle MPP (Machine Payments Protocol) request
    * Supports both x402 and MPP protocols on service endpoints
    */
@@ -1359,6 +1699,12 @@ export class MoltsPayServer {
       accepts.push(wechatChallenge.accepts);
     }
 
+    // Custodial balance rail (2.2.0): append the balance x402 entry when configured.
+    const balanceChallenge = this.buildBalanceChallenge(config);
+    if (balanceChallenge) {
+      accepts.push(balanceChallenge.accepts);
+    }
+
     const x402PaymentRequired = {
       x402Version: X402_VERSION,
       accepts,
@@ -1463,6 +1809,12 @@ export class MoltsPayServer {
     const wechatChallenge = await this.buildWechatChallenge(config);
     if (wechatChallenge) {
       accepts.push(wechatChallenge.accepts);
+    }
+
+    // Custodial balance rail (2.2.0): append the balance x402 entry when configured.
+    const balanceChallenge = this.buildBalanceChallenge(config);
+    if (balanceChallenge) {
+      accepts.push(balanceChallenge.accepts);
     }
 
     // Get list of accepted chains for response
