@@ -381,3 +381,91 @@ The balance system was originally positioned as an application on top of MoltsPa
 Users would top up via MoltsPay (on-chain transfer) and spend via the balance service (internal deduction), avoiding an on-chain transaction per purchase.
 
 The original plan noted a future merge — "MoltsPay adds a `/balance` layer supporting custodial balance mode" — with the standalone build chosen for short-term speed. That future merge is now the chosen direction.
+
+---
+
+## SDK integration design (2026-07-04, supersedes the standalone-service sections above)
+
+This section defines how the custodial balance rail lives *inside* the MoltsPay SDK, replacing the standalone port-4402 service. It follows the same shape as the Alipay/WeChat rails (facilitator + provider config + 402 challenge + `/execute` dispatch).
+
+### x402 scheme
+
+- **Scheme**: `balance` — **Network**: `balance` (registered in `src/chains` beside `alipay`/`wechat`, excluded from EVM chain iteration the same way).
+- 402 `accepts[]` entry:
+  ```json
+  {
+    "scheme": "balance",
+    "network": "balance",
+    "asset": "USD",
+    "amount": "3.99",
+    "payTo": "custodial",
+    "maxTimeoutSeconds": 30,
+    "extra": { "topup": { "hint": "POST /balance/topup" } }
+  }
+  ```
+  Building this challenge is **pure** (no network call, no order minted) — the double-charge class of bug from the WeChat rail cannot occur here.
+- Client `X-Payment` payload:
+  ```json
+  {
+    "x402Version": 1,
+    "scheme": "balance",
+    "network": "balance",
+    "payload": { "buyer_id": "<id>", "request_id": "<uuid>" }
+  }
+  ```
+  `request_id` (client-generated UUID) makes the deduction idempotent: replaying the same request never double-deducts.
+
+### Identity: generic buyer account
+
+`webchat_session_id` generalizes to an opaque **`buyer_id`** — the SDK does not know or care whether it is a webchat session, a device id, or an API key. The `users` table becomes `buyers` (`buyer_id TEXT PRIMARY KEY` replacing `webchat_session_id`). Channel runtimes (webchat/Zen7) map their own session ids to `buyer_id` at the application layer.
+
+> Trust model (MVP): `buyer_id` is a bearer identifier — anyone who presents it can spend that balance. Acceptable for channel-mediated use (the channel runtime holds the id); signed buyer tokens can be added later without schema changes.
+
+### Whitelist / free tier
+
+**Stays in the application layer.** The SDK has no concept of "Boss free" — a channel that wants to skip payment for a user simply doesn't route that request through the paid path.
+
+### Facilitator mapping
+
+`BalanceFacilitator implements Facilitator` (name `balance`), backed by a SQLite ledger:
+
+| Interface method | Balance rail semantics |
+|---|---|
+| `createPaymentRequirements()` | pure — formats the `accepts[]` entry (no I/O) |
+| `verify()` | read-only precheck: buyer exists + `status='active'` + balance ≥ amount + within single/daily limits |
+| `settle()` | **the atomic deduction** — single SQL transaction (`UPDATE ... WHERE balance_sat >= ?`), records a `deduct` transaction row, returns its `tx_id` as `transaction`. Idempotent on `request_id`: a replay returns the original `tx_id` without deducting again |
+| `refund(txId, reason)` | extra method (not on the interface): reverses a deduct, used by the server on skill failure |
+| `healthCheck()` | DB open + `PRAGMA integrity_check` quick form |
+
+**Execution order differs from the QR rails** — deduct *before* running the skill, refund on failure:
+
+```
+QR rails:      verify(paid?) → run skill → settle (confirm, fire-and-forget)
+Balance rail:  verify(funds?) → settle (atomic deduct) → run skill → [failure → refund]
+```
+
+### Server integration
+
+- **Provider config** (`moltspay.services.json`): `provider.balance = { "db_path": "./data/balance.sqlite", "currency": "USD", "daily_limit": "10.00", "single_limit": "5.00" }` — opt-in like `provider.alipay`/`provider.wechat`.
+- **Per-service config**: `services[].balance = { "price": "3.99" }` (defaults to the service's USD price when omitted).
+- **`/execute` dispatch**: `scheme === 'balance'` → `handleBalanceExecute` (verify → deduct → run → refund-on-failure).
+- **Balance management endpoints** (mounted on the same HTTP server, replacing the standalone API):
+  - `GET  /balance?buyer_id=` — balance + limits + today's spend
+  - `POST /balance/topup` — `{buyer_id, rail: "crypto"|"alipay"|"wechat", tx_hash?|trade_no?|out_trade_no?, amount}`; the server verifies via the corresponding existing facilitator, then credits
+  - `POST /balance/refund` — `{tx_id, reason}` (operator/agent use)
+  - `GET  /balance/transactions?buyer_id=&limit=&offset=`
+
+### Storage
+
+- SQLite via **`node:sqlite`** (built-in, zero new dependencies). Requires Node ≥ 22.5 **only when the balance rail is enabled** — checked at rail init with a clear error; other rails keep working on Node 18.
+- DB file at `provider.balance.db_path`, created on first init with WAL mode.
+- Amounts stored as integer cents (`*_sat` columns, 1 USD = 100), matching the original design.
+
+### SDK client / CLI
+
+- `MoltsPayClient`: `getBalance(buyerId)`, `topupBalance(opts)`, `listBalanceTransactions(buyerId)`; `pay()` gains automatic balance-rail selection when the 402 offers `balance` and a `buyer_id` is configured.
+- CLI: `moltspay balance [--buyer <id>]`, `moltspay balance topup --rail <r> ...`, `moltspay balance transactions`.
+
+### Out of scope for the MVP (Phase 2+)
+
+HD-wallet per-buyer deposit addresses and automatic on-chain detection; automatic Alipay/WeChat callback crediting (MVP verifies operator/user-reported `tx_hash`/`trade_no`); signed buyer tokens; limit-management UI.
