@@ -27,6 +27,7 @@ MoltsPay enables agent-to-agent commerce using the [x402 protocol](https://www.x
 - **Multi-chain** - Base, Polygon, Solana, BNB, Tempo (mainnet & testnet)
 - **Fiat Rail — Alipay (`2.0.0`)** - Accept CNY via 支付宝 AI 收 from China mainland merchants. CLI-only (Node), browser unsupported. See [`docs/ALIPAY-RAIL.md`](docs/ALIPAY-RAIL.md)
 - **Fiat Rail — WeChat Pay (`2.1.0`)** - Accept CNY via WeChat Pay v3 Native (scan-to-pay). SDK-managed recoverable sessions persist QR/order context, poll in the background, and fulfill idempotently. See [`docs/WECHAT-RAIL-DESIGN.md`](docs/WECHAT-RAIL-DESIGN.md)
+- **Balance Rail — Password-Free (`2.2.0`)** - Top up once, then pay with no signature or QR per transaction. Server-custodied SQLite ledger with atomic deducts, hard spending limits, and idempotent retries. See [`docs/BALANCE-RAIL-DESIGN.md`](docs/BALANCE-RAIL-DESIGN.md)
 - **Agent-to-Agent** - Complete A2A payment flow support
 - **Multi-VM** - EVM chains + Solana (SVM) with unified API
 - **MCP Server** - Expose wallet + payments to Claude Desktop, Cursor, and other MCP hosts
@@ -596,6 +597,7 @@ npx moltspay pay <url> <service> --chain bnb_testnet   # Pay on BNB testnet
 npx moltspay pay <url> <service> --chain tempo_moderato # Pay on Tempo
 npx moltspay pay <url> <service> --rail alipay         # Pay with Alipay AI Pay
 npx moltspay pay <url> <service> --rail wechat         # Pay with WeChat Pay Native QR
+npx moltspay pay <url> <service> --rail balance        # Pay password-free from prepaid balance
 
 # === WeChat Recoverable Sessions ===
 npx moltspay wechat start <url> <service> --prompt "..."   # Start order, return QR metadata immediately
@@ -603,6 +605,12 @@ npx moltspay wechat status <session-or-out_trade_no>        # Query/recover a pe
 npx moltspay wechat fulfill <session-or-out_trade_no>       # Idempotently fulfill if paid
 npx moltspay wechat cancel <session-or-out_trade_no>        # Mark local session cancelled
 npx moltspay wechat list                                   # List persisted WeChat sessions
+
+# === Custodial Balance (Password-Free) ===
+npx moltspay balance set-buyer <id>                        # Persist the buyer id (bearer semantics)
+npx moltspay balance query <url>                           # Balance, limits, today's spend
+npx moltspay balance topup <url> <amount> --rail crypto --tx-hash 0x...   # Credit from a settled payment
+npx moltspay balance transactions <url>                    # Ledger history, newest first
 
 # === Server Commands ===
 npx moltspay start <skill-dir>       # Start server
@@ -612,7 +620,7 @@ npx moltspay validate <path>         # Validate manifest
 # === Options ===
 --port <port>                        # Server port (default 3000)
 --chain <chain>                      # Chain: base, polygon, solana, bnb, tempo_moderato, + testnets
---rail <rail>                        # Fiat rail: alipay or wechat
+--rail <rail>                        # Rail: alipay, wechat, or balance (password-free)
 --token <token>                      # Token: USDC, USDT
 --max-per-tx <amount>                # Spending limit per transaction
 --max-per-day <amount>               # Daily spending limit
@@ -1057,6 +1065,122 @@ npx moltspay wechat fulfill mpay_sess_...
 See [`examples/wechat-native-pay.ts`](examples/wechat-native-pay.ts) for a runnable scenario-A demo (mock by default; `WECHAT_REAL=1` hits the live gateway).
 
 > 🔐 **Keep keys safe.** The merchant private key and APIv3 key authorize collection on your merchant account. Store them outside version control and reference them by path.
+
+## Balance Rail (Password-Free Payments)
+
+Since **`2.2.0`**, MoltsPay supports a third payment mode: a **custodial balance rail (免密支付)**. A buyer tops up once — via any existing rail — and subsequent purchases are deducted from a server-custodied balance: **no signature, no QR scan, no password per transaction**. It uses the same HTTP 402 flow (scheme/network `balance`), so a service can offer crypto, Alipay-CNY, WeChat-CNY, and balance simultaneously — purely additive.
+
+Unlike the other rails, nothing settles externally at purchase time: the ledger lives in SQLite on the provider server (Node's built-in `node:sqlite`, zero new dependencies). Enabling the rail requires **Node.js >= 22.5** on the server; servers that don't enable it keep the package's `node >= 18` floor.
+
+> ⚠️ **Custodial trust model.** Buyer funds are held by the provider, and `buyer_id` is a **bearer identifier** — anyone who presents it can spend that balance. This fits channel-mediated use (the channel runtime holds the id and maps its own sessions to it). Signed buyer tokens are planned. See [`docs/BALANCE-RAIL-DESIGN.md`](docs/BALANCE-RAIL-DESIGN.md).
+
+### Money-Safety Design
+
+- **Integer-cent accounting** — no floating-point drift.
+- **Atomic check-and-deduct** — a single SQLite transaction (`UPDATE ... WHERE balance_sat >= ?`); a balance can never go negative under concurrency.
+- **Triple idempotency**, each enforced by a unique index: deducts replay on the client's `request_id`, top-ups replay on the external settlement reference, refunds replay per deduct. No retry can double-charge, double-credit, or double-refund.
+- **Server-side hard limits** per buyer: per-transaction (default `5.00`) and daily (default `10.00`).
+- **Automatic refund** — the deduct lands *before* the skill runs; if the skill fails, the server refunds it in the same request.
+- **Pure 402 challenges** — unlike the QR rails, a 402 response mints nothing, so unpaid challenges have no side effects.
+- **Full audit trail** — every top-up, deduct, and refund is a permanent ledger row, queryable per buyer.
+
+### Provider Setup
+
+Add `"balance"` to `chains`, configure `provider.balance`, and add a per-service `balance` block (its `price` defaults to the service's top-level price):
+
+```json
+{
+  "provider": {
+    "name": "My Service",
+    "wallet": "0x...",
+    "chains": ["base", "balance"],
+    "balance": {
+      "db_path": "./data/balance.sqlite",
+      "currency": "USD",
+      "single_limit": "5.00",
+      "daily_limit": "10.00"
+    }
+  },
+  "services": [{
+    "id": "my-service",
+    "function": "handleRequest",
+    "price": 3.99,
+    "currency": "USDC",
+    "balance": { "price": "3.99" }
+  }]
+}
+```
+
+**`provider.balance`** (required when `chains` includes `balance`):
+
+| Field | Req | Description |
+|-------|-----|-------------|
+| `db_path` | ✅ | SQLite ledger file path (relative to the manifest); created on first start |
+| `currency` | — | Ledger quote currency (default `USD`) |
+| `single_limit` | — | Default per-transaction limit for new buyers (default `"5.00"`) |
+| `daily_limit` | — | Default daily limit for new buyers (default `"10.00"`) |
+
+**`services[].balance`**:
+
+| Field | Req | Description |
+|-------|-----|-------------|
+| `price` | — | Price in the ledger currency as a decimal string; defaults to the service's `price` |
+
+The server also exposes balance-management endpoints:
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /balance?buyer_id=` | Balance, limits, and today's spend |
+| `POST /balance/topup` | Verify an externally settled payment and credit the ledger |
+| `POST /balance/refund` | Reverse a deduct (operator/agent use) |
+| `GET /balance/transactions?buyer_id=` | Ledger history, newest first |
+
+> ⚠️ **Protect these endpoints** (reverse-proxy auth / IP allowlist). In particular, the `alipay` top-up path is operator-trusted in this MVP: Alipay AI-Pay verification requires the buyer-side `payment_proof`, so the server credits a reported `trade_no` without gateway verification. The `crypto` path verifies the `tx_hash` on-chain (receipt + transfer to the provider wallet + amount) and the `wechat` path queries the order for `SUCCESS`; all three are idempotent on the external reference.
+
+### How It Works
+
+1. An unpaid request to `/execute` returns **402** with a `balance` entry in `accepts[]` (pure — nothing is minted).
+2. The client re-requests with an `X-Payment` payload carrying `{ buyer_id, request_id }`, where `request_id` is a fresh client-generated UUID.
+3. The server **deducts atomically first** (idempotent on `request_id`), then runs the skill, and refunds automatically if the skill fails. This is the inverse of the QR rails (verify paid → run → confirm).
+4. The response carries the ledger transaction id in `X-Payment-Response`.
+
+### Buyer Usage
+
+```bash
+# One-time: persist your buyer id (bearer semantics — treat it like a token)
+npx moltspay balance set-buyer my-buyer-id
+
+# Top up once, via any settled rail
+npx moltspay balance topup https://server.com 10.00 --rail crypto --tx-hash 0xabc... --chain base
+npx moltspay balance topup https://server.com 10.00 --rail wechat --out-trade-no MP1719...
+npx moltspay balance topup https://server.com 10.00 --rail alipay --trade-no 2026...
+
+# Then pay password-free — no wallet, no QR
+npx moltspay pay https://server.com my-service '{"prompt":"hello"}' --rail balance
+
+# Check balance and history
+npx moltspay balance query https://server.com
+npx moltspay balance transactions https://server.com
+```
+
+SDK equivalent:
+
+```ts
+import { MoltsPayClient } from 'moltspay/client';
+
+const client = new MoltsPayClient();
+client.setBuyerId('my-buyer-id'); // persisted in config.json
+
+await client.topupBalance('https://server.com', {
+  rail: 'crypto', amount: '10.00', txHash: '0xabc...', chain: 'base',
+});
+
+const result = await client.pay('https://server.com', 'my-service',
+  { prompt: 'hello' }, { rail: 'balance' });
+
+const info = await client.getBuyerBalance('https://server.com');
+console.log(info.balance, info.today_spent);
+```
 
 ## Live Example: Zen7 Video Generation
 

@@ -1,46 +1,46 @@
 # Alipay Rail (支付宝 AI 收)
 
 > **Target**: `moltspay@1.7.0`
-> **Status**: 设计完成、rc.1 实现中
-> **Scope**: 服务端 + Node CLI 客户端；浏览器**不支持**（1.7.0 写死，1.8.0 走收银台 URL 回退）
+> **Status**: Design complete, rc.1 implementation in progress
+> **Scope**: Server + Node CLI client; browser **not supported** (hard-coded in 1.7.0; 1.8.0 falls back to a cashier URL)
 
-Alipay Rail 是 MoltsPay 1.7.0 引入的第 9 条 rail（继 Base / Polygon / Solana / BNB / Tempo / XRPL 之后），让中国大陆商户用支付宝 AI 收为 AI Agent 提供 CNY 计价服务。一处 `provider.alipay` + 每个 service 一段 `alipay` 子对象，同一个 skill 即可同时接受 USDC 和 CNY 两种支付，由 Agent 端按偏好/能力路由。
+Alipay Rail is the 9th rail introduced in MoltsPay 1.7.0 (following Base / Polygon / Solana / BNB / Tempo / XRPL). It lets China-mainland merchants use Alipay AI Pay (支付宝 AI 收) to offer CNY-priced services to AI Agents. One `provider.alipay` block plus a per-service `alipay` sub-object lets a single skill accept both USDC and CNY payments, with the Agent side routing by preference/capability.
 
 ## TL;DR
 
-| 维度 | 值 |
+| Aspect | Value |
 |---|---|
-| Chain id | `"alipay"`（`type: "fiat-rail"`，与 EVM/SVM 同位） |
-| 货币 | CNY（`amount` 单位是**元**字符串，不是分） |
-| 签名 | RSA2（SHA256WithRSA），商户私钥签 8 字段字典序拼接 |
-| Client | Node CLI shell-out `alipay-bot@0.3.15`（1.7.0）；TS 原生待 1.8.0 |
-| Server | 100% 原生 TS，持有 RSA2 私钥 |
-| Browser | 不支持（throw `UnsupportedChainError`） |
-| 商户资质 | **仅中国大陆**（ICP + 营业执照 + 支付宝开放平台入驻） |
-| 与 1.6.0 兼容 | server 双发 `X-Payment-Required` + `Payment-Needed`，老 `alipay-bot` skill 0 改动 |
+| Chain id | `"alipay"` (`type: "fiat-rail"`, peer of EVM/SVM) |
+| Currency | CNY (`amount` is a string in **yuan (元)**, not fen) |
+| Signature | RSA2 (SHA256WithRSA), merchant private key signs 8 fields concatenated in dictionary order |
+| Client | Node CLI shell-out to `alipay-bot@0.3.15` (1.7.0); native TS deferred to 1.8.0 |
+| Server | 100% native TS, holds the RSA2 private key |
+| Browser | Not supported (throws `UnsupportedChainError`) |
+| Merchant eligibility | **China mainland only** (ICP filing + business license + Alipay Open Platform onboarding) |
+| 1.6.0 compatibility | server dual-sends `X-Payment-Required` + `Payment-Needed`; legacy `alipay-bot` skill works with 0 changes |
 
-## 1. 适用前提
+## 1. Prerequisites
 
-支付宝 AI 收**仅适用中国大陆商户**，需通过支付宝开放平台入驻审核。
+Alipay AI Pay is **China-mainland merchants only** and requires passing the Alipay Open Platform onboarding review.
 
-| 资质 | 用途 |
+| Credential | Purpose |
 |---|---|
-| ICP 备案 | 必须 |
-| 企业营业执照 | 商户入驻 |
-| 支付宝开放平台账号 | 创建应用 + 获取密钥 |
-| AI 收产品开通 | 必须 |
+| ICP filing (ICP 备案) | Required |
+| Business license | Merchant onboarding |
+| Alipay Open Platform account | Create the app + obtain keys |
+| AI Pay product activation | Required |
 
-入驻完成后会拿到：
-- `seller_id`（商户 ID，16 位数字）
-- `app_id`（应用 ID，16 位数字）
-- RSA2 商户私钥（`.txt`）+ 支付宝公钥（`.txt`）
-- `service_id`（服务 ID，形如 `API_0EA6DC4FC99A4DF7`，以"推进开发"页面显示为准）
+After onboarding you will receive:
+- `seller_id` (merchant ID, 16 digits)
+- `app_id` (application ID, 16 digits)
+- RSA2 merchant private key (`.txt`) + Alipay public key (`.txt`)
+- `service_id` (service ID, shaped like `API_0EA6DC4FC99A4DF7`; the value shown on the "推进开发" (Promote Development) page is authoritative)
 
-> 入驻流程见支付宝官方文档：https://ideservice.alipay.com/cms/site/0j7svz.md
+> For the onboarding flow see the official Alipay docs: https://ideservice.alipay.com/cms/site/0j7svz.md
 >
-> 海外商户或个人开发者请使用 USDC rail（Base / Polygon / Solana / BNB / Tempo），无需入驻。
+> Overseas merchants or individual developers should use a USDC rail (Base / Polygon / Solana / BNB / Tempo) — no onboarding needed.
 
-## 2. 服务端配置
+## 2. Server-side configuration
 
 ### 2.1 `provider.alipay`
 
@@ -64,26 +64,26 @@ Alipay Rail 是 MoltsPay 1.7.0 引入的第 9 条 rail（继 Base / Polygon / So
 }
 ```
 
-| 字段 | 必填 | 说明 |
+| Field | Required | Description |
 |---|---|---|
-| `seller_id` | ✅ | 商户支付宝 ID |
-| `app_id` | ✅ | 应用 ID |
-| `seller_name` | ✅ | 商户全称（402 challenge 里 `method.seller_name`） |
-| `service_id_default` | ✅ | 默认 service_id；service 级可覆盖 |
-| `private_key_path` | ✅ | RSA2 商户私钥文件路径（相对 `moltspay.services.json` 所在目录） |
-| `alipay_public_key_path` | ✅ | 支付宝公钥文件路径（验签 `Payment-Proof`） |
-| `gateway_url` | 可选 | 默认 `https://openapi.alipay.com/gateway.do`；沙箱用 `https://openapi.alipaydev.com/gateway.do` |
-| `sign_type` | 可选 | 默认 `RSA2`，目前唯一支持值 |
+| `seller_id` | ✅ | Merchant Alipay ID |
+| `app_id` | ✅ | Application ID |
+| `seller_name` | ✅ | Merchant full legal name (`method.seller_name` in the 402 challenge) |
+| `service_id_default` | ✅ | Default service_id; can be overridden per service |
+| `private_key_path` | ✅ | Path to the RSA2 merchant private key file (relative to the directory containing `moltspay.services.json`) |
+| `alipay_public_key_path` | ✅ | Path to the Alipay public key file (verifies `Payment-Proof`) |
+| `gateway_url` | Optional | Defaults to `https://openapi.alipay.com/gateway.do`; sandbox uses `https://openapi.alipaydev.com/gateway.do` |
+| `sign_type` | Optional | Defaults to `RSA2`, currently the only supported value |
 
-> 🔒 **私钥安全**：必须用 `private_key_path` 文件路径，**禁止内联**到 JSON。`.gitignore` 加 `cert/`。服务启动时校验私钥可读 + RSA 格式合法，失败拒绝启动。
+> 🔒 **Private key security**: you must use the `private_key_path` file path — inlining the key into JSON is **forbidden**. Add `cert/` to `.gitignore`. On startup the service validates that the private key is readable and is valid RSA format, and refuses to start on failure.
 
-### 2.2 `chains` 数组加入 `"alipay"`
+### 2.2 Add `"alipay"` to the `chains` array
 
 ```json
 "chains": ["base", "polygon", "alipay"]
 ```
 
-1.7.0 起 chain id 引入 `type: "fiat-rail"`，与现有 `type: "evm"` / `type: "svm"` 并列。`chains` 数组**不破坏全集语义**——任何被启用的 rail 都在这里声明。
+As of 1.7.0, chain ids introduce `type: "fiat-rail"`, alongside the existing `type: "evm"` / `type: "svm"`. The `chains` array **does not break the full-set semantics** — any enabled rail is declared here.
 
 ### 2.3 `services[].alipay`
 
@@ -101,100 +101,100 @@ Alipay Rail 是 MoltsPay 1.7.0 引入的第 9 条 rail（继 Base / Polygon / So
 }]
 ```
 
-| 字段 | 必填 | 说明 |
+| Field | Required | Description |
 |---|---|---|
-| `service_id` | 可选 | 缺省用 `provider.alipay.service_id_default` |
-| `price_cny` | ✅ | CNY 价格，**字符串、单位元、≤ 2 位小数**。`"7.00"` = 7 元；`"100"` = **100 元**（不是分） |
-| `goods_name` | ✅ | 用户在支付宝 APP 看到的商品名 |
+| `service_id` | Optional | Falls back to `provider.alipay.service_id_default` |
+| `price_cny` | ✅ | CNY price, **string, unit yuan, ≤ 2 decimal places**. `"7.00"` = 7 yuan; `"100"` = **100 yuan** (not fen) |
+| `goods_name` | ✅ | Product name the user sees in the Alipay app |
 
-⚠️ **`price`（USDC）与 `price_cny`（CNY）是两套独立价格**，MoltsPay 不做汇率换算。你自己决定 USDC `0.99` 是否等价于 CNY `7.00`。
+⚠️ **`price` (USDC) and `price_cny` (CNY) are two independent prices** — MoltsPay does no exchange-rate conversion. You decide yourself whether USDC `0.99` is equivalent to CNY `7.00`.
 
-### 2.4 启动校验
+### 2.4 Startup validation
 
-`moltspay start` 启动时（检测到 `provider.alipay`）会执行：
+On `moltspay start` (when `provider.alipay` is detected), the server runs:
 
-- ✅ `private_key_path` / `alipay_public_key_path` 可读
-- ✅ 私钥是合法 RSA PEM 格式
-- ✅ 每个 `services[].alipay.price_cny` 正则匹配 `/^\d+(\.\d{1,2})?$/`
-- ✅ 每个 `services[].alipay.service_id`（或 fallback 默认）非空
+- ✅ `private_key_path` / `alipay_public_key_path` are readable
+- ✅ Private key is valid RSA PEM format
+- ✅ Every `services[].alipay.price_cny` matches the regex `/^\d+(\.\d{1,2})?$/`
+- ✅ Every `services[].alipay.service_id` (or the fallback default) is non-empty
 
-任一失败，服务拒绝启动并打印具体原因。
+On any failure, the service refuses to start and prints the specific reason.
 
-### 2.5 server 双 header 兼容
+### 2.5 Server dual-header compatibility
 
-server 在 402 响应里同时发：
-- `X-Payment-Required`（x402 标准，`accepts` 数组里加 `scheme: "alipay-aipay"` 一项）
-- `Payment-Needed`（支付宝标准，Base64URL 编码的嵌套 JSON）
+In the 402 response the server sends both:
+- `X-Payment-Required` (x402 standard; a `scheme: "alipay-aipay"` entry is added to the `accepts` array)
+- `Payment-Needed` (Alipay standard; Base64URL-encoded nested JSON)
 
-两个 header **互为镜像**，由 server 中间件统一生成。这样：
-- 新的 `moltspay` 客户端用 `X-Payment-Required` 走 alipay 路径
-- 老的 `alipay-bot` skill 只认 `Payment-Needed`，0 改动可工作
+The two headers **mirror each other** and are generated uniformly by server middleware. This way:
+- New `moltspay` clients use `X-Payment-Required` for the alipay path
+- The legacy `alipay-bot` skill only recognizes `Payment-Needed` and works with 0 changes
 
-请求侧用 `Accept-Payment-Rail` 声明能力，缺省时全发。
+On the request side, capabilities are declared via `Accept-Payment-Rail`; when absent, both headers are sent.
 
-## 3. CLI 客户端用法
+## 3. CLI client usage
 
-> 🌐 **Node-only**：CLI 客户端 wrap 了 `alipay-bot@0.3.15`，仅在 Node ≥ 22 上可用。浏览器（`moltspay/web`）直接 throw `UnsupportedChainError`。
+> 🌐 **Node-only**: the CLI client wraps `alipay-bot@0.3.15` and is only available on Node ≥ 22. The browser build (`moltspay/web`) throws `UnsupportedChainError` directly.
 
-### 3.1 前置：安装 `alipay-bot`
+### 3.1 Prerequisite: install `alipay-bot`
 
-**`npm install moltspay` 会自动安装**（commit `1e7c5ac` 起）。postinstall 调用已声明依赖 `@alipay/agent-payment` 的 `install-cli`，从支付宝官方 CDN 把 `alipay-bot` 下到本机。失败不阻塞 `npm install`；`MOLTSPAY_SKIP_CLI_INSTALL=1` 可跳过。
+**`npm install moltspay` installs it automatically** (since commit `1e7c5ac`). The postinstall invokes `install-cli` from the declared dependency `@alipay/agent-payment`, which downloads `alipay-bot` to the machine from Alipay's official CDN. Failure does not block `npm install`; `MOLTSPAY_SKIP_CLI_INSTALL=1` skips it.
 
-手动安装 / 修复（用了 `--ignore-scripts`，或安装时离线）：
+Manual install / repair (if you used `--ignore-scripts`, or were offline at install time):
 
 ```bash
 npx -y @alipay/agent-payment install-cli
-alipay-bot --version   # 预期 ≥ 0.3.15
+alipay-bot --version   # expect >= 0.3.15
 ```
 
-未安装时 MoltsPay 报 `ALIPAY_CLI_NOT_FOUND` 并提示上面这条命令；运行时 `ensureCli` 是真正的版本闸门（`MIN_CLI_VERSION = 0.3.15`）。
+When not installed, MoltsPay raises `ALIPAY_CLI_NOT_FOUND` and suggests the command above; at runtime `ensureCli` is the real version gate (`MIN_CLI_VERSION = 0.3.15`).
 
-> **依赖与发行（为什么 alipay-bot 不在 package.json）**
-> - `alipay-bot`（= `alipay-bot-cli` 运行时，`0.3.x`，当前 `0.3.15`）**不在 npm**、`license: UNLICENSED`，由支付宝自家 CDN 分发 → 既不能当 package.json 依赖，也不能 vendoring 打进发行包。
-> - 唯一进 package.json 的是 npm 上的安装器 **`@alipay/agent-payment`（`1.0.x`，当前 `^1.0.14`）**，只负责从 CDN 拉 CLI —— Puppeteer 下 Chromium 同款模型：**安装时下载、绝不替支付宝再分发**。
-> - 两套版本号不同线：`1.0.x`=安装器，`0.3.x`=CLI；CLI 版本由支付宝远端配置决定，不由安装器号静态绑定。
-> - License：skills 封装（`github.com/alipay/payment-skills`）= **Apache-2.0**；**CLI 本体无任何公开再分发授权**（其发布仓库私有、运行时 `UNLICENSED`）。
-> - 旧「不偷偷修改用户环境」原则已**针对「显式安装的轨依赖」更新**：用户 `npm install moltspay` 即已 opt-in。
-> - 部署/离线机细节见 server60 `docs/sdk-config-and-logging.md` §1a。
+> **Dependencies and distribution (why alipay-bot is not in package.json)**
+> - `alipay-bot` (= the `alipay-bot-cli` runtime, `0.3.x`, currently `0.3.15`) is **not on npm**, is `license: UNLICENSED`, and is distributed via Alipay's own CDN → it can neither be a package.json dependency nor be vendored into our distribution.
+> - The only thing that goes into package.json is the npm installer **`@alipay/agent-payment` (`1.0.x`, currently `^1.0.14`)**, whose sole job is pulling the CLI from the CDN — the same model as Puppeteer downloading Chromium: **download at install time, never redistribute on Alipay's behalf**.
+> - The two version lines are independent: `1.0.x` = installer, `0.3.x` = CLI; the CLI version is determined by Alipay's remote config, not statically pinned by the installer version.
+> - License: the skills wrapper (`github.com/alipay/payment-skills`) = **Apache-2.0**; **the CLI itself has no public redistribution license whatsoever** (its release repo is private, runtime is `UNLICENSED`).
+> - The old principle of "never silently modify the user's environment" has been **updated for "explicitly installed rail dependencies"**: by running `npm install moltspay` the user has already opted in.
+> - For deployment/offline-machine details see server60 `docs/sdk-config-and-logging.md` §1a.
 
-### 3.2 一次性：开通钱包
+### 3.2 One-time: wallet activation
 
 ```bash
-# 申请开通（返回授权链接，用户在支付宝 APP 扫码授权）
+# Apply for activation (returns an authorization link; the user scans and authorizes in the Alipay app)
 moltspay alipay apply
 
-# 授权完成后绑定
-moltspay alipay bind -c "<授权码>"
+# Bind after authorization completes
+moltspay alipay bind -c "<authorization code>"
 
-# 检查状态
+# Check status
 moltspay alipay check
 ```
 
-辅助子命令直透同名 `alipay-bot` 命令，主要为首次开通钱包用。
+The helper subcommands pass straight through to the same-named `alipay-bot` commands, mainly for first-time wallet activation.
 
-### 3.3 支付：402 协议
+### 3.3 Payment: the 402 protocol
 
 ```bash
 moltspay pay --rail alipay https://www.sr007.com/api/v1/videos/v_001 \
   --intent "购买产品演示视频"
 ```
 
-`--rail alipay` 与 `--chain base` 同位。命中后内部 8 步状态机：
+`--rail alipay` is the peer of `--chain base`. Once matched, the internal 8-step state machine runs:
 
 ```
-1. payment-intent       初始化会话
-2. check-wallet         钱包状态校验
-3. 保存 Payment-Needed  到 ~/.moltspay/alipay/402_<reqId>.txt
-4. 402-buyer-pay        发起支付，输出支付链接 + tradeNo
-5. 等用户扫码           回调 onPaymentPending 上抛
-6. 402-query-payment-status  3s 轮询直至成功/超时
-7. 透传资源 body 给调用方   ⚠️ 当前从 bot stdout 报告正则刮取、会进日志；bot 刻意不吐 Payment-Proof 故 SDK 无法自取，应改为读结构化 resourceResponse 字段 + 不转发进日志，详见 §9.3
-8. 402-buyer-fulfillment-ack  履约确认（异步 fire-and-forget）
+1. payment-intent       initialize session
+2. check-wallet         validate wallet status
+3. save Payment-Needed  to ~/.moltspay/alipay/402_<reqId>.txt
+4. 402-buyer-pay        initiate payment, output payment link + tradeNo
+5. wait for user scan   surfaced via onPaymentPending callback
+6. 402-query-payment-status  poll every 3s until success/timeout
+7. pass resource body through to the caller   ⚠️ currently regex-scraped from the bot's stdout report and it ends up in logs; the bot deliberately never emits Payment-Proof so the SDK cannot fetch it itself — should switch to reading the structured resourceResponse field + stop forwarding into logs, see §9.3
+8. 402-buyer-fulfillment-ack  fulfillment confirmation (async fire-and-forget)
 ```
 
-CLI 输出包括支付链接（含 RSA2 签名），**逐字符透传**，禁止任何 string manipulation。
+The CLI output includes the payment link (with RSA2 signature), passed through **character-for-character** — any string manipulation is forbidden.
 
-### 3.4 程序式 SDK
+### 3.4 Programmatic SDK
 
 ```ts
 import { MoltsPayClient } from "moltspay/client";
@@ -206,117 +206,117 @@ const out = await client.pay("https://www.sr007.com/api/v1/videos/v_001", {
   onPaymentPending: ({ paymentUrl, shortenUrl, tradeNo }) => {
     process.stdout.write(`请用支付宝扫码或访问：${shortenUrl}\n`);
   },
-  timeoutMs: 30 * 60_000,   // 默认 30 分钟 = pay_before
+  timeoutMs: 30 * 60_000,   // default 30 minutes = pay_before
 });
 
-console.log(out.body);              // 资源内容
-console.log(out.payment.tradeNo);   // 32 位 tradeNo
+console.log(out.body);              // resource content
+console.log(out.payment.tradeNo);   // 32-digit tradeNo
 ```
 
-### 3.5 多 rail 路由
+### 3.5 Multi-rail routing
 
-服务端同时支持 USDC + Alipay 时，客户端按下面顺序选 rail：
+When the server supports both USDC + Alipay, the client selects a rail in the following order:
 
 ```
-1. 显式 { rail: "alipay" } / --rail alipay
-2. client.railPreference 配置（ordered list）的首项
-3. 客户端实际可用能力：
-   - 有 EVM wallet 且充值过 USDC → 走 EVM
-   - 否则 alipay-bot 在线 + 钱包已开通 → 走 alipay
-4. 服务端 accepts[0]（兜底）
+1. Explicit { rail: "alipay" } / --rail alipay
+2. First entry of the client.railPreference config (ordered list)
+3. The client's actual capabilities:
+   - Has an EVM wallet funded with USDC → use EVM
+   - Otherwise alipay-bot online + wallet activated → use alipay
+4. Server-side accepts[0] (fallback)
 ```
 
-`railPreference` 是 client 级配置，不是全局 env——同一 Agent 可同时服务"中国用户偏好支付宝、海外用户偏好 USDC"两套调用方。
+`railPreference` is client-level config, not a global env var — the same Agent can simultaneously serve two caller populations, "Chinese users prefer Alipay, overseas users prefer USDC".
 
-## 4. 错误码表
+## 4. Error code table
 
-所有 alipay 相关错误都带稳定 `code` 字段，便于程序化处理：
+All alipay-related errors carry a stable `code` field for programmatic handling:
 
-| Code | 含义 | 建议处理 |
+| Code | Meaning | Suggested handling |
 |---|---|---|
-| `ALIPAY_CLI_NOT_FOUND` | `alipay-bot` 未安装 | 引导 `npx -y @alipay/agent-payment install-cli` |
-| `ALIPAY_CLI_VERSION` | `alipay-bot` 版本 < 0.3.15 | 引导 `npx -y @alipay/agent-payment@latest update` |
-| `ALIPAY_NEEDS_WALLET_SETUP` | 钱包未开通 / 已申请未授权 | 引导 `moltspay alipay apply` + `bind` |
-| `ALIPAY_PAYMENT_REJECTED` | 用户在支付宝 APP 取消 | 询问用户重试或换 rail |
-| `ALIPAY_PAYMENT_TIMEOUT` | 超过 `pay_before`（默认 30 分钟）未支付 | 重试或换 rail |
-| `ALIPAY_PROTOCOL` | 协议层错误（tradeNo 格式 / 签名 / parse） | 上报 issue，通常是 `alipay-bot` 升级或商户配置不一致 |
-| `UNSUPPORTED_RAIL` | 服务端不接受 alipay | 换 rail 或联系 service provider 开通 |
+| `ALIPAY_CLI_NOT_FOUND` | `alipay-bot` not installed | Guide to `npx -y @alipay/agent-payment install-cli` |
+| `ALIPAY_CLI_VERSION` | `alipay-bot` version < 0.3.15 | Guide to `npx -y @alipay/agent-payment@latest update` |
+| `ALIPAY_NEEDS_WALLET_SETUP` | Wallet not activated / applied but not authorized | Guide through `moltspay alipay apply` + `bind` |
+| `ALIPAY_PAYMENT_REJECTED` | User canceled in the Alipay app | Ask the user to retry or switch rails |
+| `ALIPAY_PAYMENT_TIMEOUT` | Not paid within `pay_before` (default 30 minutes) | Retry or switch rails |
+| `ALIPAY_PROTOCOL` | Protocol-layer error (tradeNo format / signature / parse) | File an issue; usually an `alipay-bot` upgrade or inconsistent merchant config |
+| `UNSUPPORTED_RAIL` | Server does not accept alipay | Switch rails or ask the service provider to enable it |
 
-## 5. 常见坑
+## 5. Common pitfalls
 
-### 5.1 `amount` 单位是**元**，不是分
+### 5.1 `amount` is in **yuan**, not fen
 
-支付宝 AI 收的 402 challenge 里 `amount` 单位是**元**的字符串：
+In the Alipay AI Pay 402 challenge, `amount` is a string denominated in **yuan**:
 
-- `"1.00"` = 1 元 ✅
-- `"100"` = **100 元**（不是 100 分）✅
-- 商户后台"服务单价"必须与 `services[].alipay.price_cny` 一致，否则 `SERVICE_PRICE_MISMATCH`
+- `"1.00"` = 1 yuan ✅
+- `"100"` = **100 yuan** (not 100 fen) ✅
+- The "service unit price" in the merchant backoffice must match `services[].alipay.price_cny`, otherwise `SERVICE_PRICE_MISMATCH`
 
-MoltsPay server 启动时正则 `/^\d+(\.\d{1,2})?$/` 校验，拒绝歧义值。
+The MoltsPay server validates with the regex `/^\d+(\.\d{1,2})?$/` at startup and rejects ambiguous values.
 
-### 5.2 `service_id` 前缀
+### 5.2 `service_id` prefix
 
-商户后台两个页面会显示 service_id：
-- "审核通过"页 —— 历史 ID
-- "推进开发"页 —— **当前生效** ID（可能形如 `API_xxx`）
+Two pages in the merchant backoffice show a service_id:
+- The "审核通过" (Review Approved) page — the historical ID
+- The "推进开发" (Promote Development) page — the **currently effective** ID (may look like `API_xxx`)
 
-`services[].alipay.service_id` 必须填**"推进开发"页**的 ID，否则报 `SERVICE_NOT_EXIST`。
+`services[].alipay.service_id` must be the ID from the **"推进开发" page**, otherwise you get `SERVICE_NOT_EXIST`.
 
-### 5.3 签名 8 字段，字典序拼接
+### 5.3 Signature covers 8 fields, concatenated in dictionary order
 
-RSA2 签名只覆盖 8 个字段，按 key 字典序排列：
+The RSA2 signature covers only 8 fields, sorted by key in dictionary order:
 
 ```
 amount / currency / goods_name / out_trade_no / pay_before / resource_id / seller_id / service_id
 ```
 
-不含 `protocol` / `method` 嵌套结构本身，不含 `seller_signature` / `seller_sign_type` 等元字段。`AlipayFacilitator.createPaymentRequirements()` 已经实现；手工调用需按这个集合签。
+It does not include the `protocol` / `method` nested structures themselves, nor meta fields like `seller_signature` / `seller_sign_type`. `AlipayFacilitator.createPaymentRequirements()` already implements this; manual callers must sign exactly this set.
 
-### 5.4 `Payment-Needed` 是 Base64URL（不是标准 Base64）
+### 5.4 `Payment-Needed` is Base64URL (not standard Base64)
 
-`Payment-Needed` header 用 **Base64URL** 编码（`-` 替 `+`，`_` 替 `/`，padding 可选）。
+The `Payment-Needed` header uses **Base64URL** encoding (`-` for `+`, `_` for `/`, padding optional).
 
-`curl -H` 转发 header 时注意 shell 解释 `=`；推荐用 Node.js 提取（见 `alipay-skill-integration-guide` Step 3）。MoltsPay 客户端已封装。
+When forwarding the header with `curl -H`, beware of the shell interpreting `=`; extracting with Node.js is recommended (see `alipay-skill-integration-guide` Step 3). The MoltsPay client already encapsulates this.
 
-### 5.5 `Payment-Proof` base64 padding 自动补齐
+### 5.5 `Payment-Proof` base64 padding is auto-completed
 
-某些 proxy 会去掉末尾 `=`。server 端 verify 自动补齐：
+Some proxies strip trailing `=`. Server-side verify pads it back automatically:
 
 ```ts
 const padded = proof + "=".repeat((4 - proof.length % 4) % 4);
 ```
 
-### 5.6 浏览器不支持 alipay
+### 5.6 Browsers do not support alipay
 
-1.7.0 在 `moltspay/web` 写死 `throw new UnsupportedChainError(...)`。原因：`alipay-bot` 是 Node CLI。
+1.7.0 hard-codes `throw new UnsupportedChainError(...)` in `moltspay/web`. Reason: `alipay-bot` is a Node CLI.
 
-浏览器路径走"收银台 URL"（用户跳到支付宝 APP，前端轮询 `tradeNo`）—— 这是 1.8.0 范围，不在 1.7.0。
+The browser path goes through a "cashier URL" (user jumps to the Alipay app, frontend polls `tradeNo`) — that is 1.8.0 scope, not 1.7.0.
 
-### 5.7 CLI 输出禁止修改
+### 5.7 CLI output must not be modified
 
-`moltspay pay --rail alipay` 输出的支付链接包含 RSA2 签名，任何修改（包括 ANSI 美化、行截断、加 emoji、改语序）都会让链接失效。MoltsPay SDK 内部用 `spawn` + stream API 行级原样转发；上层调用方在打印前**禁止** string manipulation。
+The payment link emitted by `moltspay pay --rail alipay` contains an RSA2 signature; any modification (including ANSI prettifying, line truncation, adding emoji, reordering) invalidates the link. Internally the MoltsPay SDK uses `spawn` + the stream API to forward lines verbatim; upstream callers **must not** do any string manipulation before printing.
 
-### 5.8 `tradeNo` 必须 32 位纯数字
+### 5.8 `tradeNo` must be 32 pure digits
 
-`alipay-bot 402-buyer-fulfillment-ack` 拒绝任何非 32 位纯数字的 `tradeNo`。SDK 层 `assertTradeNo` 在调用前先正则校验 `/^\d{32}$/`，校验失败直接抛 `ALIPAY_PROTOCOL`，不让调用 alipay-bot。
+`alipay-bot 402-buyer-fulfillment-ack` rejects any `tradeNo` that is not 32 pure digits. At the SDK layer, `assertTradeNo` regex-validates `/^\d{32}$/` before the call; on failure it throws `ALIPAY_PROTOCOL` directly and never invokes alipay-bot.
 
-## 6. 端到端示例
+## 6. End-to-end example
 
 ```bash
-# 1. 商户：启动 server（带 alipay 配置）
+# 1. Merchant: start the server (with alipay config)
 moltspay start ./my-skill --port 3000
 
-# 2. 客户：首次开通钱包
+# 2. Customer: first-time wallet activation
 moltspay alipay apply
 moltspay alipay bind -c "AUTH_xxxxx"
-moltspay alipay check         # 期望：code: 200, "已开启"
+moltspay alipay check         # expect: code: 200, "已开启"
 
-# 3. 客户：发起支付
+# 3. Customer: initiate payment
 moltspay pay --rail alipay http://merchant.local:3000/services/text-to-video \
   --intent "购买产品演示视频" \
   --data '{"prompt":"demo"}'
 
-# CLI 内部状态（透传给用户）：
+# Internal CLI states (passed through to the user):
 #   [1] payment-intent  initialized session
 #   [2] check-wallet    code: 200
 #   [3] saved Payment-Needed → ~/.moltspay/alipay/402_<uuid>.txt
@@ -328,121 +328,121 @@ moltspay pay --rail alipay http://merchant.local:3000/services/text-to-video \
 #   [8] 402-buyer-fulfillment-ack  confirmed (async)
 ```
 
-## 7. 与其它 rail 的对比
+## 7. Comparison with other rails
 
-| 维度 | x402 (USDC) | Alipay AI 收 |
+| Aspect | x402 (USDC) | Alipay AI Pay |
 |---|---|---|
-| 402 header | `X-Payment-Required`（JSON 数组） | `Payment-Needed`（Base64URL JSON） |
-| Challenge 结构 | 扁平 `accepts[]` | 嵌套 `{protocol, method}` |
-| 货币 | USDC（atomic units） | CNY（元，decimal string） |
-| 签名 | EIP-712 / EIP-3009 / Permit / SPL | RSA2 SHA256WithRSA |
-| 客户端付款 | 钱包签名 → 链上 settle | 用户支付宝 APP 确认 → trade_no |
+| 402 header | `X-Payment-Required` (JSON array) | `Payment-Needed` (Base64URL JSON) |
+| Challenge structure | Flat `accepts[]` | Nested `{protocol, method}` |
+| Currency | USDC (atomic units) | CNY (yuan, decimal string) |
+| Signature | EIP-712 / EIP-3009 / Permit / SPL | RSA2 SHA256WithRSA |
+| Client payment | Wallet signature → on-chain settle | User confirms in Alipay app → trade_no |
 | Proof header | `X-Payment` | `Payment-Proof` |
-| Verify | 链上 RPC | HTTP `alipay.aipay.agent.payment.verify` |
-| 浏览器 | ✅ 1.6.0 起支持 | ❌（CLI-only，1.8.0 起走收银台 URL） |
-| 合规 | 全球 | 仅中国大陆商户 |
+| Verify | On-chain RPC | HTTP `alipay.aipay.agent.payment.verify` |
+| Browser | ✅ Supported since 1.6.0 | ❌ (CLI-only; cashier URL from 1.8.0) |
+| Compliance | Global | China-mainland merchants only |
 
-## 8. 参考
+## 8. References
 
-- [`./ALIPAY-INTEGRATION-DESIGN.md`](./ALIPAY-INTEGRATION-DESIGN.md) — 完整架构设计 + 决策记录
-- [`./ALIPAY-INTEGRATION-PLAN.md`](./ALIPAY-INTEGRATION-PLAN.md) — 实现 checklist + 里程碑
-- 支付宝官方文档：https://ideservice.alipay.com/cms/site/0j7svz.md
-- `@alipay/agent-payment` npm 包：https://www.npmjs.com/package/@alipay/agent-payment
+- [`./ALIPAY-INTEGRATION-DESIGN.md`](./ALIPAY-INTEGRATION-DESIGN.md) — full architecture design + decision record
+- [`./ALIPAY-INTEGRATION-PLAN.md`](./ALIPAY-INTEGRATION-PLAN.md) — implementation checklist + milestones
+- Official Alipay docs: https://ideservice.alipay.com/cms/site/0j7svz.md
+- `@alipay/agent-payment` npm package: https://www.npmjs.com/package/@alipay/agent-payment
 
 ---
 
-## 9. 已知 Bug
+## 9. Known bugs
 
-### 9.1 结算轮询用 GET 取资源，与支付步骤（POST）不一致 → 支付成功后 `pay()` 永不 resolve
+### 9.1 Settlement polling fetches the resource with GET, inconsistent with the payment step (POST) → after a successful payment `pay()` never resolves
 
-**状态：** ✅ 已在源码修复（2026-06-05，moltspay@1.7.0 / alipay-bot 0.3.15）。
-**修复：** `src/client/alipay/poll.ts` — `PollOptions` 增加 `method`/`data`，`pollUntil` 在 `402-query-payment-status` 上补 `-m/-d`；`src/client/alipay/index.ts` — `pay402` 调 `pollUntil` 时透传 `opts.method`/`opts.data`。这样结算取资源与 `402-buyer-pay` 一致（POST `/execute`）。
-另：`src/client/alipay/poll.ts` 的 `parseStatus` 增加锚定标记 `"status":"fulfilled"`——因 alipay-bot 0.3.15 实际输出的是**人类 markdown 报告**（非注释所述的纯 JSON envelope），原 `parseStatus` 即便取资源成功也判 `unknown`；新标记取自服务端结算后的资源体，只在已结算时出现，安全。下为原始记录：
+**Status:** ✅ Fixed in source (2026-06-05, moltspay@1.7.0 / alipay-bot 0.3.15).
+**Fix:** `src/client/alipay/poll.ts` — `PollOptions` gains `method`/`data`, and `pollUntil` appends `-m/-d` to `402-query-payment-status`; `src/client/alipay/index.ts` — `pay402` passes `opts.method`/`opts.data` through when calling `pollUntil`. This makes the settlement resource fetch consistent with `402-buyer-pay` (POST `/execute`).
+Also: `parseStatus` in `src/client/alipay/poll.ts` gains the anchor marker `"status":"fulfilled"` — because alipay-bot 0.3.15 actually outputs a **human-readable markdown report** (not the pure JSON envelope the comments claimed), the original `parseStatus` judged `unknown` even when the resource fetch succeeded; the new marker is taken from the server-side post-settlement resource body and only appears once settled, so it is safe. The original record follows:
 
-**现象：**
-买家用 `MoltsPayClient.pay(serverUrl, service, params, { rail:'alipay' })` 付款。支付宝侧**已扣款成功**（alipay-bot 输出 `✓ 查询支付状态成功`），但 `pay()` **一直不 resolve**，`onPaymentPending` 之后再无进展，调用方（如 Discord bot）卡在二维码界面、不触发后续履约。
+**Symptom:**
+The buyer pays via `MoltsPayClient.pay(serverUrl, service, params, { rail:'alipay' })`. The Alipay side **has debited successfully** (alipay-bot outputs `✓ 查询支付状态成功`), but `pay()` **never resolves**; nothing progresses after `onPaymentPending`, and the caller (e.g. a Discord bot) is stuck on the QR screen and never triggers downstream fulfillment.
 
-**根因（client 内部前后方法不一致）：**
-`AlipayClient.pay402`（`dist/client/index.js`）两步用了不同的 HTTP 方法：
+**Root cause (inconsistent methods between the client's two internal steps):**
+`AlipayClient.pay402` (`dist/client/index.js`) uses different HTTP methods for the two steps:
 
-- **402-buyer-pay**（创建/支付）带 `-m POST -d <body>`：
+- **402-buyer-pay** (create/pay) carries `-m POST -d <body>`:
   ```js
   const payArgs = ["402-buyer-pay", "-f", challengeFile, "-r", resourceUrl, ...];
   if (opts.method) payArgs.push("-m", opts.method);   // POST
   if (opts.data)   payArgs.push("-d", opts.data);
   ```
-- **402-query-payment-status**（结算轮询）经 `pollUntil` 调用，**未透传 method/data**：
+- **402-query-payment-status** (settlement polling) goes through `pollUntil`, which **does not pass method/data through**:
   ```js
-  // pay402: 调 pollUntil 时未传 method/data
+  // pay402: method/data not passed when calling pollUntil
   const poll = await pollUntil(tradeNo, resourceUrl, { deadline, signal, onLine, runner, now });
-  // pollUntil: query-payment-status 无 -m → alipay-bot 默认 GET
+  // pollUntil: query-payment-status has no -m → alipay-bot defaults to GET
   await runner(["402-query-payment-status", "-t", tradeNo, "-r", resourceUrl], {...});
   ```
 
-而 `MoltsPayServer` 的资源端点 `/execute` **只接受 POST**（`server/index.ts`：`url.pathname === '/execute' && req.method === 'POST'`；GET 仅在 `/<serviceId>` 的 MPP 路径上支持）。于是结算轮询 **GET `/execute` → 404 `Not found`**，alipay-bot 进入错误分支输出中文 prose，client 的 `parseStatus` 只认 `TRADE_SUCCESS`/`{success:true}`/`{code:200}` → 判 `unknown` → 死循环直到 `pay_before` 超时。
+Meanwhile, `MoltsPayServer`'s resource endpoint `/execute` **only accepts POST** (`server/index.ts`: `url.pathname === '/execute' && req.method === 'POST'`; GET is only supported on the `/<serviceId>` MPP path). So the settlement poll does **GET `/execute` → 404 `Not found`**, alipay-bot enters its error branch and outputs Chinese prose, and the client's `parseStatus` only recognizes `TRADE_SUCCESS`/`{success:true}`/`{code:200}` → judges `unknown` → loops forever until the `pay_before` timeout.
 
-**判定：** client 自身「支付用 POST、查状态取资源用 GET」不一致；GET 又与 server 的 POST-only `/execute` 不一致。属 **SDK client bug**（`pollUntil` 未透传 buyer-pay 用的 method/data）。
+**Verdict:** the client itself is inconsistent ("POST for pay, GET for the status/resource fetch"); the GET is in turn inconsistent with the server's POST-only `/execute`. It is an **SDK client bug** (`pollUntil` fails to pass through the method/data used by buyer-pay).
 
-**影响范围：** 所有「resourceUrl 指向 POST-only `/execute`」的自托管/收银台型部署（service 未声明 GET 可达的 `endpoint` 时尤甚）。典型场景：bot 把支付宝当纯收银台（履约在 bot 侧）。
+**Blast radius:** all self-hosted/cashier-style deployments where "resourceUrl points at the POST-only `/execute`" (worst when the service declares no GET-reachable `endpoint`). Typical scenario: a bot using Alipay as a pure cashier (fulfillment happens on the bot side).
 
-**建议修复（client）：** `pay402` 把 `opts.method`/`opts.data` 透传进 `pollUntil`，`pollUntil` 在 `402-query-payment-status` 上补 `-m <method> -d <data>`，使取资源请求与 buyer-pay 一致（POST `/execute`），让 alipay-bot 走成功分支、`parseStatus` 正常判定。
+**Suggested fix (client):** `pay402` passes `opts.method`/`opts.data` through into `pollUntil`, and `pollUntil` appends `-m <method> -d <data>` to `402-query-payment-status`, making the resource fetch consistent with buyer-pay (POST `/execute`), so alipay-bot takes the success branch and `parseStatus` judges correctly.
 
-**规避（不改 SDK）：** 给 `services[].endpoint` 配一个 GET 可达的资源路径（如 `/<serviceId>`），使 client 的 resourceUrl 不落在 POST-only 的 `/execute` 上（需实测确认 `parseStatus` 在该路径输出下能判 paid）。
+**Workaround (no SDK change):** configure a GET-reachable resource path for `services[].endpoint` (e.g. `/<serviceId>`) so the client's resourceUrl does not land on the POST-only `/execute` (needs live testing to confirm `parseStatus` can judge paid on that path's output).
 
-### 9.2 `parsePaymentUrl` 吞掉 markdown 结尾 `)` → 收银台链接/二维码 404
+### 9.2 `parsePaymentUrl` swallows the trailing markdown `)` → cashier link/QR code 404s
 
-**状态：** ✅ 已在源码修复（2026-06-05）。`src/client/alipay/index.ts` 的 `parsePaymentUrl` 提取后 `.replace(/[)\]`>]+$/, '')` 去掉尾部 markdown 字符。
+**Status:** ✅ Fixed in source (2026-06-05). `parsePaymentUrl` in `src/client/alipay/index.ts` strips trailing markdown characters after extraction with `.replace(/[)\]`>]+$/, '')`.
 
-alipay-bot 把链接打印为 markdown `[点击此处](https://u.alipay.cn/xxx)`。`parsePaymentUrl` 的正则 `https?:\/\/\S+` 贪婪匹配会把结尾的 `)` 一并吞入 → 返回的 `paymentUrl` 变成 `https://u.alipay.cn/xxx)`（带尾括号）→ 打开/扫码 404。
+alipay-bot prints the link as markdown `[点击此处](https://u.alipay.cn/xxx)`. The greedy regex `https?:\/\/\S+` in `parsePaymentUrl` swallows the trailing `)` too → the returned `paymentUrl` becomes `https://u.alipay.cn/xxx)` (with a trailing parenthesis) → opening/scanning it 404s.
 
-**修复（client）：** 提取后 `.replace(/[)\]`>]+$/, '')` 去掉尾部 markdown 字符。**规避（调用方）：** 对 `onPaymentPending` 返回的 `paymentUrl`/`shortenUrl` 自行清洗尾部 `)]`> 等再用。
+**Fix (client):** strip trailing markdown characters after extraction with `.replace(/[)\]`>]+$/, '')`. **Workaround (caller):** sanitize trailing `)]`> etc. from the `paymentUrl`/`shortenUrl` returned by `onPaymentPending` before using them.
 
-### 9.3 alipay 路径未走 x402 重试，改刮 bot stdout 报告 → 交付物（如视频 base64）进日志
+### 9.3 The alipay path skips the x402 retry and scrapes the bot's stdout report instead → deliverables (e.g. video base64) end up in logs
 
-**状态：** 🟡 已定性 + 已核对 bot（2026-06-13）、修复未落地。最初由一条提议 `--output-dir` 的 issue 触发，该提议**已否决**。**关键结论**：理想 x402 形态（SDK 自己带 proof 重试取 HTTP 响应体）**实测不可行**——alipay-bot 刻意不输出 `Payment-Proof`；CLI 不可改下能做的是「读 bot 的结构化 `resourceResponse` 字段 + 不转发进日志」，见下。
+**Status:** 🟡 Characterized + verified against the bot (2026-06-13); fix not yet landed. Originally triggered by an issue proposing `--output-dir`, which has been **rejected**. **Key conclusion**: the ideal x402 shape (SDK retries the HTTP request itself carrying the proof to get the response body) is **empirically infeasible** — alipay-bot deliberately never outputs `Payment-Proof`; with the CLI unmodifiable, what can be done is "read the bot's structured `resourceResponse` field + stop forwarding into logs", see below.
 
-**需求（2026-06-13 用户确认）：**
-1. 交付物**不得**出现在 stdout / 日志；
-2. 交付物应**经资源 URL 的 HTTP 响应体**获取——即标准 x402「带凭证头重试原请求 → 200 + body」，而非从 CLI stdout 文本里刮；
-3. `--output-dir`（让 bot 把交付物落盘）**不是**解法，不采纳为修复方向。
+**Requirements (confirmed by the user 2026-06-13):**
+1. Deliverables **must not** appear in stdout / logs;
+2. Deliverables should be obtained **via the HTTP response body of the resource URL** — i.e. the standard x402 "retry the original request with the proof header → 200 + body", not scraped from CLI stdout text;
+3. `--output-dir` (having the bot write deliverables to disk) is **not** the solution and is not adopted as a fix direction.
 
-> 原以为这两半需求是同一件事（按 x402 SDK 自取即可同时满足）。实测后修正：bot 不吐 proof，SDK 无法自取；只能分别满足——「不进日志」可达（不转发 bot 输出），「SDK 自己经 HTTP 取」不可达（需 bot 侧改动）。
+> These two halves were originally assumed to be one requirement (a proper x402 SDK self-fetch would satisfy both). Corrected after testing: the bot never emits the proof, so the SDK cannot self-fetch; they can only be satisfied separately — "keep out of logs" is achievable (do not forward bot output), "SDK fetches via HTTP itself" is not (requires bot-side changes).
 
-**服务端本来就是 x402（设计正确）：**
-买家付款后，**带 `Payment-Proof` 头重新请求 `/execute`** → 服务器经 facilitator 验证 → 运行 skill → 返回 **200 + 资源在 HTTP 响应体**。证据：
-- `src/server/index.ts:688-700`：`handleExecute` 收到 `Payment-Proof` 头即走 `handleAlipayExecute` → 验证 + 执行 + 200。
-- `test/server/alipay-payment-proof.test.ts:1-12`：明确「付款后 re-request 带 `Payment-Proof` 头，服务器必须返 200，不是再来一个 402」。
-- EVM 路径就是这么做的（`src/client/node/index.ts:447-462`）：本地构造 proof → 带 `X-Payment` 头重试原请求 → body 直接取自 HTTP 响应（`paidRes`），**全程不碰任何 stdout**。
+**The server side was already x402 (design is correct):**
+After the buyer pays, **re-request `/execute` with the `Payment-Proof` header** → server verifies via the facilitator → runs the skill → returns **200 + resource in the HTTP response body**. Evidence:
+- `src/server/index.ts:688-700`: `handleExecute` routes to `handleAlipayExecute` on receiving a `Payment-Proof` header → verify + execute + 200.
+- `test/server/alipay-payment-proof.test.ts:1-12`: explicitly "after paying, the re-request carries the `Payment-Proof` header and the server must return 200, not another 402".
+- The EVM path does exactly this (`src/client/node/index.ts:447-462`): construct the proof locally → retry the original request with the `X-Payment` header → body comes straight from the HTTP response (`paidRes`), **never touching stdout at any point**.
 
-**Bug：alipay 客户端路径跳过了「SDK 自己带凭证重试」这一步。**
-现状链路（错误实现）：
-1. 结算后 `pollUntil` 调 `402-query-payment-status -t <tradeNo> -r <resourceUrl> -m -d`，让 **bot 在内部** re-request 资源（bot 自己持有 proof，见 `server/index.ts:60-62`），再把 HTTP 响应**渲染成人类 markdown 报告**，资源体嵌在 `资源响应体：` 标签后——`src/client/alipay/poll.ts:233-235`。
-2. 这份报告整段经 `onLine` 流进**日志**，同时作为 `poll.lines` 返回。
-3. SDK 在 Step 7 `const body = extractBody(poll.lines)`——`src/client/alipay/index.ts:466-467`——内部 `extractResourceFromReport`（`index.ts:177`）对报告做花括号配对、抠出嵌入 JSON 的 `.result`。
+**Bug: the alipay client path skips the "SDK retries with the proof itself" step.**
+Current (incorrect) pipeline:
+1. After settlement, `pollUntil` calls `402-query-payment-status -t <tradeNo> -r <resourceUrl> -m -d`, letting **the bot internally** re-request the resource (the bot holds the proof itself, see `server/index.ts:60-62`), then **render the HTTP response into a human-readable markdown report**, with the resource body embedded after the `资源响应体：` label — `src/client/alipay/poll.ts:233-235`.
+2. This whole report streams through `onLine` into the **logs**, and is also returned as `poll.lines`.
+3. At Step 7 the SDK does `const body = extractBody(poll.lines)` — `src/client/alipay/index.ts:466-467` — internally `extractResourceFromReport` (`index.ts:177`) does brace-matching over the report and digs out the embedded JSON's `.result`.
 
-对视频这种大 payload，base64 整段被塞进报告 → 进 stdout/日志 → 再被字符串扫描。资源**本来就是某个 HTTP 200 响应体**（bot 那次 re-request 的响应），只是被 bot 中转、污染进了报告/日志。
+For large payloads like video, the entire base64 blob gets stuffed into the report → into stdout/logs → then string-scanned. The resource **was already the body of some HTTP 200 response** (the bot's re-request response); it just got relayed by the bot and leaked into the report/logs.
 
-**判定：** 属 **SDK client 架构 bug**——alipay 路径没有像 EVM 路径那样让 SDK 自己发 x402 重试，而是退化成「让 bot 代取 + 刮报告」。`extractResourceFromReport` / 报告刮取整条都是这个错误实现的产物。
+**Verdict:** an **SDK client architecture bug** — the alipay path does not let the SDK issue the x402 retry itself like the EVM path does; it degenerated into "let the bot fetch on our behalf + scrape the report". `extractResourceFromReport` / the whole report-scraping chain are artifacts of this incorrect implementation.
 
-**理想的 x402 形态（对齐 EVM 路径）—— 但经实测受阻，见下：**
-理论上应让 alipay 路径与 EVM 路径对称：alipay-bot 只产出 `Payment-Proof`，由 **SDK 自己**发 `fetch(executeUrl, { method, headers:{ 'Payment-Proof': <proof> }, body })` → 200 + 资源取自 HTTP 响应体（镜像 `node/index.ts:455-462`）。proof 结构见 `src/facilitators/alipay.ts:469-493`：base64url `{protocol:{payment_proof,trade_no}, method:{client_session}}`。
+**The ideal x402 shape (aligned with the EVM path) — but blocked by testing, see below:**
+In theory the alipay path should be symmetric with the EVM path: alipay-bot only produces the `Payment-Proof`, and the **SDK itself** does `fetch(executeUrl, { method, headers:{ 'Payment-Proof': <proof> }, body })` → 200 + resource taken from the HTTP response body (mirroring `node/index.ts:455-462`). Proof structure in `src/facilitators/alipay.ts:469-493`: base64url `{protocol:{payment_proof,trade_no}, method:{client_session}}`.
 
-**实测结论（2026-06-13，核对真 bot CLI）：alipay-bot 刻意不输出 `Payment-Proof`，故纯 SDK 重试不可行。**
-核对 `~/.local/share/alipay-bot-cli/runtime/dist/cli.js`（v1.0.14，混淆）中全部 8 处 `paymentProof`/`Payment-Proof`，分两类、**无一打到 stdout**：
-1. **内部 re-request 用**：`{resourceUrl, paymentProof, tradeNo, token, …}` → 组 `{'Payment-Proof': base64url({protocol:{payment_proof,trade_no},method:{client_session}})}` 头 → `fetch(resourceUrl,{headers})`。即 **bot 自己就是那个 x402 客户端**，已用 proof 做了鉴权重请求（正是 `server/index.ts:60-62` 所述）。
-2. **输出渲染层刻意剥离 proof**：`const { paymentProof:_, ...rest } = result; return { content: JSON.stringify(rest), … }`。内部结果对象本是 `{success, tradeNo, paymentProof, paymentType, payScheme, shortenUrl, needPolling, goodsInfo, resourceResponse, …}`——渲染时 **`paymentProof` 被删、`resourceResponse`（资源体）被保留**。
+**Empirical conclusion (2026-06-13, verified against the real bot CLI): alipay-bot deliberately never outputs `Payment-Proof`, so a pure SDK retry is infeasible.**
+Audited all 8 occurrences of `paymentProof`/`Payment-Proof` in `~/.local/share/alipay-bot-cli/runtime/dist/cli.js` (v1.0.14, obfuscated); they fall into two categories, **none of which reach stdout**:
+1. **Used for the internal re-request**: `{resourceUrl, paymentProof, tradeNo, token, …}` → builds the `{'Payment-Proof': base64url({protocol:{payment_proof,trade_no},method:{client_session}})}` header → `fetch(resourceUrl,{headers})`. That is, **the bot itself is the x402 client** and already makes the authenticated re-request with the proof (exactly what `server/index.ts:60-62` describes).
+2. **The output rendering layer deliberately strips the proof**: `const { paymentProof:_, ...rest } = result; return { content: JSON.stringify(rest), … }`. The internal result object is `{success, tradeNo, paymentProof, paymentType, payScheme, shortenUrl, needPolling, goodsInfo, resourceResponse, …}` — at render time **`paymentProof` is deleted, `resourceResponse` (the resource body) is kept**.
 
-这解释了现状:SDK 能从 stdout 刮到资源、却永远拿不到 proof——bot 故意如此(proof 是可重放 bearer 凭证,不外泄给调用方)。**因此「SDK 自己带 proof 重试」在 CLI 不可改的前提下不可达。**
+This explains the status quo: the SDK can scrape the resource from stdout but can never get the proof — the bot does this on purpose (the proof is a replayable bearer credential and is not leaked to callers). **Therefore "SDK retries with the proof itself" is unreachable while the CLI cannot be modified.**
 
-**CLI 不可改下能落地的 SDK 改动（满足「不进日志」、改善取法）：**
-- 交付物来源从「正则刮 `资源响应体：` 文本报告」改为「读 bot 输出里的**结构化 `resourceResponse` 字段**」——更稳、不靠脆弱文本匹配（替代 `extractResourceFromReport`，`index.ts:177`）；
-- bot 这段输出**不再转发给 `onLine`/logger**，交付物只经类型化返回值 `{body}` 出去（`index.ts:466-467`）——**保证不进我们的日志**。
-- 局限:交付物仍经 bot 自己的 stdout 管道(CLI 黑盒决定);真正「SDK 发 HTTP 请求取响应体」需 bot 侧暴露 proof,或 bot 自身不把资源塞进可被日志捕获的输出——**回归 bot 团队**(参见 §5.7)。
+**SDK changes that can land with the CLI unmodifiable (satisfy "keep out of logs", improve the fetch):**
+- Change the deliverable's source from "regex-scraping the `资源响应体：` text report" to "reading the **structured `resourceResponse` field** in the bot's output" — more robust, no brittle text matching (replaces `extractResourceFromReport`, `index.ts:177`);
+- This portion of the bot's output is **no longer forwarded to `onLine`/logger**; the deliverable leaves only via the typed return value `{body}` (`index.ts:466-467`) — **guaranteeing it never enters our logs**.
+- Limitation: the deliverable still transits the bot's own stdout pipe (a black-box CLI decision); a true "SDK issues the HTTP request and takes the response body" needs the bot to expose the proof, or the bot itself to stop stuffing the resource into log-capturable output — **goes back to the bot team** (see §5.7).
 
-> 注:bot 其实**已经**用 proof 做了一次 HTTP 鉴权重请求并把响应放进 `resourceResponse`，所以交付物本质上已来自一次 HTTP 响应体，只是经 bot stdout 中转。
+> Note: the bot **already** makes one authenticated HTTP re-request with the proof and puts the response into `resourceResponse`, so the deliverable does in essence already come from an HTTP response body — it is merely relayed through the bot's stdout.
 
-**与 §9.1 的关系：** §9.1 给 `402-query-payment-status` 补 `-m/-d` 让 bot 的内部 re-fetch 跑通——治标但路径正确（bot 本就该做这次鉴权重请求）。本条要改的是**SDK 如何消费 bot 的结果**（读结构化字段、不入日志），而非再依赖文本报告刮取。
+**Relationship to §9.1:** §9.1 adds `-m/-d` to `402-query-payment-status` so the bot's internal re-fetch works — a symptomatic fix but on the correct path (the bot was always supposed to make this authenticated re-request). This item changes **how the SDK consumes the bot's result** (read the structured field, keep it out of logs), instead of continuing to rely on text-report scraping.
 
 ---
 
-*文档版本：v1（rc.1 实现中）| 创建：2026-05-29 | 目标版本：`moltspay@1.7.0`*
+*Document version: v1 (rc.1 in progress) | Created: 2026-05-29 | Target version: `moltspay@1.7.0`*

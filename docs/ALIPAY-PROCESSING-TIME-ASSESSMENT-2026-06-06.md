@@ -1,109 +1,109 @@
-# 支付宝支付整体处理时长评估报告
+# Alipay Payment Overall Processing-Time Assessment Report
 
-**项目**：moltspay Discord bot 支付宝 `/buy` 时延
-**日期**：2026-06-06
-**方法**：SDK 结构化时序日志 + 观测-only CLI 剖析器（`scripts/cli-profile-hook.cjs`，拆 child_process / undici(fetch) / 事件循环停顿三桶）+ 真实生产支付流采集
-**关联文档**：[ALIPAY-SLOWNESS-REPORT](./ALIPAY-SLOWNESS-REPORT-2026-06-06.md)、[ALIPAY-BOT-CLI-PERF-REQUEST](./ALIPAY-BOT-CLI-PERF-REQUEST-2026-06-06.md)
-
----
-
-## 0. 结论速览
-
-1. **出码前系统处理时长**：冷启动 **77.4s** → 暖流程（缓存命中）**48.4s**（−37%，已上线缓存验证生效）。
-2. 暖流程下，**48.4s 几乎 100% 是单条 `402-buyer-pay` 命令**——SDK 侧能砍的（payment-intent / check-wallet / 轮询）已砍完。
-3. `402-buyer-pay` 的 ~40s 中 **81% 是 alipay-bot CLI 每进程本地计算**（设备指纹 + 原生风控 + 二维码渲染），只有 **16%** 是真支付宝网关。
-4. **这部分本地计算对机器配置/负载高度敏感**：当前 bot 跑在 **2 核、负载 9-16（超售 5-7 倍）** 的机器上；实测同一命令负载 9→16 时耗时 +67%，放大的全是本地计算，网络不变。
-5. 进一步压缩只剩两条路：**(a) 换更强/更空闲的机器**（减负载排队放大）、**(b) vendor 提供 CLI 常驻/daemon 模式**（减每进程冷初始化 ~15-19s）。
+**Project**: moltspay Discord bot Alipay `/buy` latency
+**Date**: 2026-06-06
+**Method**: SDK structured timing logs + observation-only CLI profiler (`scripts/cli-profile-hook.cjs`, splitting into three buckets: child_process / undici(fetch) / event-loop stalls) + real production payment-flow capture
+**Related documents**: [ALIPAY-SLOWNESS-REPORT](./ALIPAY-SLOWNESS-REPORT-2026-06-06.md), [ALIPAY-BOT-CLI-PERF-REQUEST](./ALIPAY-BOT-CLI-PERF-REQUEST-2026-06-06.md)
 
 ---
 
-## 1. 端到端时长（真实验证流，2026-06-06）
+## 0. Conclusions at a Glance
 
-| 阶段 | 冷流程 `discord-808ade4e` | 暖流程 `discord-99fdfab4` |
+1. **System processing time before the QR code**: cold **77.4s** → warm flow (cache hits) **48.4s** (−37%; the deployed caches are verified effective).
+2. In the warm flow, **the 48.4s is almost 100% the single `402-buyer-pay` command** — everything the SDK side can cut (payment-intent / check-wallet / polling) has been cut.
+3. Of `402-buyer-pay`'s ~40s, **81% is alipay-bot CLI per-process local computation** (device fingerprinting + native risk control + QR-code rendering); only **16%** is the real Alipay gateway.
+4. **This local computation is highly sensitive to machine configuration/load**: the bot currently runs on a **2-core machine at load 9–16 (5–7× oversubscribed)**; measured, the same command at load 9→16 takes +67% longer, and all of the amplification is in local computation — network unchanged.
+5. Only two paths remain for further compression: **(a) a stronger/less-loaded machine** (reduce load-queuing amplification), **(b) a vendor-provided CLI resident/daemon mode** (remove ~15–19s per-process cold initialization).
+
+---
+
+## 1. End-to-End Duration (real verification flows, 2026-06-06)
+
+| Phase | Cold flow `discord-808ade4e` | Warm flow `discord-99fdfab4` |
 |---|---|---|
-| payment-intent | 9.9s（跑，写缓存）| **0（跳过 ✅）** |
-| check-wallet | 23.0s（跑，写缓存）| **0（跳过 ✅）** |
+| payment-intent | 9.9s (ran, wrote cache) | **0 (skipped ✅)** |
+| check-wallet | 23.0s (ran, wrote cache) | **0 (skipped ✅)** |
 | 402-buyer-pay | 39.1s | 48.3s |
-| **出码 pre-QR 合计** | **77.4s** | **48.4s** |
-| 之后 | 买家扫码+支付（人工，不计系统时延）→ 履约回执 ack（暖流程实测端到端结算成功）| |
+| **Pre-QR total** | **77.4s** | **48.4s** |
+| Afterwards | Buyer scans + pays (human, not counted as system latency) → fulfillment ack (warm flow verified settling successfully end-to-end) | |
 
-> 两笔均返回有效 32 位 tradeNo，暖流程跑到"✓ 发送买家履约回执成功"——**缓存跳过未破坏支付**。
-> 暖流程 402-buyer-pay（48.3s）反而比冷流程（39.1s）慢 ~9s，是负载抖动（见 §3），吃掉了部分缓存收益；净 pre-QR 仍降 29s。
+> Both payments returned a valid 32-digit tradeNo, and the warm flow reached "✓ 发送买家履约回执成功" ("buyer fulfillment receipt sent successfully") — **the cache skips did not break payments**.
+> The warm flow's 402-buyer-pay (48.3s) was actually ~9s slower than the cold flow's (39.1s) due to load jitter (see §3), eating into part of the cache gain; net pre-QR still dropped by 29s.
 
 ---
 
-## 2. `402-buyer-pay` 的 ~40s 拆解（干净捕获 pid551984，40.3s）
+## 2. Breakdown of `402-buyer-pay`'s ~40s (clean capture pid551984, 40.3s)
 
-| 桶 | 时长 | 占比 | 性质 |
+| Bucket | Duration | Share | Nature |
 |---|---|---|---|
-| C 原生风控冷初始化（t=0.6→15s 一整块）| ~14s | 35% | 本地，仅常驻可省 |
-| C 原生 per-payment（交易签名 + resvg 二维码渲染）| ~13s | 33% | 本地，每笔必算 |
-| A 设备指纹 `general_external_id.js` | ~5s | 13% | 本地，每 spawn 必算 |
-| B 网关网络（4 请求）| ~6s | 16% | 真外部 |
+| C native risk-control cold initialization (one solid block t=0.6→15s) | ~14s | 35% | Local; only a resident process can save it |
+| C native per-payment (transaction signing + resvg QR rendering) | ~13s | 33% | Local; must be computed per payment |
+| A device fingerprinting `general_external_id.js` | ~5s | 13% | Local; must be computed per spawn |
+| B gateway network (4 requests) | ~6s | 16% | Truly external |
 
-网络 4 请求：`aigw.alipay.com`(2.2s)、`myip.ipip.net`(IP定位)、`aicashier.alipay.com`(2.9s)、`gw.alipayobjects.com/font`(1.1s,每笔下载字体)。fetch 直到 t=20s 才首发——前 20s 全本地。
+The 4 network requests: `aigw.alipay.com` (2.2s), `myip.ipip.net` (IP geolocation), `aicashier.alipay.com` (2.9s), `gw.alipayobjects.com/font` (1.1s, font downloaded on every payment). fetch does not fire until t=20s — the first 20s are entirely local.
 
 ---
 
-## 3. 系统配置 / 负载对时长的影响（本次新增评估）
+## 3. Impact of System Configuration / Load on Duration (new assessment this round)
 
-### 3.1 机器配置
+### 3.1 Machine Configuration
 
-| 指标 | 值 |
+| Metric | Value |
 |---|---|
-| CPU | **2 核** Intel Xeon @ 2.20GHz |
-| 负载均值 (1/5/15min) | **9.5 / 11.7 / 14.9** —— 2 核满载=2.0，**超售 5-7 倍** |
-| 内存 | 15 GiB，空闲 ~10 GiB，无 swap（非瓶颈）|
-| 同机其它负载 | 多个 node + python 进程各占 23-29% CPU |
+| CPU | **2 cores** Intel Xeon @ 2.20GHz |
+| Load averages (1/5/15min) | **9.5 / 11.7 / 14.9** — full utilization of 2 cores = 2.0, so **5–7× oversubscribed** |
+| Memory | 15 GiB, ~10 GiB free, no swap (not a bottleneck) |
+| Other workloads on the same machine | Multiple node + python processes at 23–29% CPU each |
 
-### 3.2 为什么负载直接放大时长
+### 3.2 Why Load Directly Amplifies Duration
 
-`402-buyer-pay` 的 81% 是 **CPU 密集本地计算 + spawn 几十个 `node __internal-*` worker**。在 2 核、负载 10-15 的机器上，每个计算和每次 spawn 都要**排队等 CPU 时间片**，负载越高排队越久，本地计算耗时被成比例放大。
+81% of `402-buyer-pay` is **CPU-intensive local computation + spawning dozens of `node __internal-*` workers**. On a 2-core machine at load 10–15, every computation and every spawn must **queue for CPU time slices**; the higher the load, the longer the queuing, and local-computation time is amplified proportionally.
 
-### 3.3 实测证据：同一命令，负载越高越慢，且只慢在本地计算
+### 3.3 Measured Evidence: Same Command, Slower at Higher Load, and Only in Local Computation
 
-`alipay-bot check-wallet`（只读、不扣款）背靠背两次：
+`alipay-bot check-wallet` (read-only, no charge), two back-to-back runs:
 
-| 运行 | 当时负载 | wall | 指纹(A) | 原生(C) | 网络(B) |
+| Run | Load at the time | wall | Fingerprinting (A) | Native (C) | Network (B) |
 |---|---|---|---|---|---|
 | run1 | ~9 | 14.7s | 3.6s | 7.9s | 2.5s |
 | run2 | ~16 | **24.5s** | 5.2s | **14.8s** | **2.1s** |
 
-负载 9→16，同一命令 **+67%**，放大几乎全在原生计算（7.9→14.8s **翻倍**）；**网络稳定在 ~2-2.5s 不受影响**。另对照更早一次较空闲时的 check-wallet 仅 **11.8s** —— 同命令在 11.8 / 14.7 / 24.5s 之间摆动，2 倍+ 波动全来自本地计算桶。
+Load 9→16, same command **+67%**; the amplification is almost entirely in native computation (7.9→14.8s, **doubled**); **network stays stable at ~2–2.5s, unaffected**. A further comparison with an earlier, quieter run of check-wallet at just **11.8s** — the same command swings between 11.8 / 14.7 / 24.5s, and the 2×+ variance comes entirely from the local-computation buckets.
 
-### 3.4 含义
+### 3.4 Implications
 
-- **当前时长被这台 2 核重度过载机器显著放大**，且这放大叠加在 vendor CLI 的固有冷计算之上。
-- 我们的缓存优化（−29s）的真实收益部分被负载噪声掩盖（如暖流程 402 反涨 9s）。
-- **换核数更多、负载 <1/核 的专用机，预计可明显压缩 402 的 ~32s 本地计算部分**（消除排队放大 + 并行加速）；但网络 ~6s 与配置无关，且单线程原生算法在 2.2GHz 单核下仍有固有地板。
+- **Current durations are significantly amplified by this heavily overloaded 2-core machine**, and this amplification stacks on top of the vendor CLI's inherent cold computation.
+- Part of the real gain from our caching optimizations (−29s) is masked by load noise (e.g. the warm flow's 402 going up by 9s).
+- **Moving to a dedicated machine with more cores and load <1/core should visibly compress the ~32s local-computation portion of 402** (removing queuing amplification + parallel speedup); but the ~6s of network is configuration-independent, and the single-threaded native algorithms still have an inherent floor on a 2.2GHz single core.
 
 ---
 
-## 4. 已完成优化（已上线 + 已验证）
+## 4. Completed Optimizations (live + verified)
 
-| 措施 | 状态 | 收益 |
+| Measure | Status | Gain |
 |---|---|---|
-| check-wallet 跨流程缓存 | ✅ 上线+双流验证 | 暖流程省整步 ~23s |
-| payment-intent 握手跳过缓存 | ✅ 上线+真实双买验证（支付端到端成功）| 暖流程省 ~5-10s |
-| 重叠状态轮询 | ✅ 上线 | 降支付后检测延迟 |
-| ensure-cli 冷启动缓存 | ✅ | 进程内省一次冷启动 |
+| check-wallet cross-flow cache | ✅ live + verified over two flows | Warm flow saves the whole step, ~23s |
+| payment-intent handshake-skip cache | ✅ live + verified with two real purchases (payments succeeded end-to-end) | Warm flow saves ~5–10s |
+| Overlapping status polling | ✅ live | Reduces post-payment detection latency |
+| ensure-cli cold-start cache | ✅ | Saves one cold start in-process |
 
-提交：`248973a` `7e8066e` `9ffa97d` `b929b1c` `438d86a` `0473911`（分支 `feature/alipay`）。
+Commits: `248973a` `7e8066e` `9ffa97d` `b929b1c` `438d86a` `0473911` (branch `feature/alipay`).
 
 ---
 
-## 5. 剩余杠杆（按影响）
+## 5. Remaining Levers (by impact)
 
-1. **运行环境**（我们可控，立即可做）：把 bot 迁到 ≥4 核、低负载专用机；或降同机其它负载。预计削减 402 本地计算的"排队放大"部分。
-2. **vendor CLI 常驻/daemon 模式**（最高单点影响，需 alipay-bot 团队）：消除每进程 ~15-19s 冷初始化。已备数据齐全的需求文档（[ALIPAY-BOT-CLI-PERF-REQUEST](./ALIPAY-BOT-CLI-PERF-REQUEST-2026-06-06.md)）。
-3. **per-payment 原生（~13s 签名+渲染）+ 网关（~6s）**：硬地板，常驻也省不掉；仅随单核性能提升而略降。
+1. **Runtime environment** (within our control, actionable now): migrate the bot to a ≥4-core, low-load dedicated machine; or reduce other workloads on the same machine. Expected to shave the "queuing amplification" portion of 402's local computation.
+2. **Vendor CLI resident/daemon mode** (highest single-point impact; requires the alipay-bot team): remove the ~15–19s per-process cold initialization. A requirements document with full supporting data is ready ([ALIPAY-BOT-CLI-PERF-REQUEST](./ALIPAY-BOT-CLI-PERF-REQUEST-2026-06-06.md)).
+3. **Per-payment native (~13s signing + rendering) + gateway (~6s)**: a hard floor that even a resident process cannot remove; only shrinks marginally with better single-core performance.
 
-### 现实预期（暖流程 pre-QR）
+### Realistic Expectations (warm-flow pre-QR)
 
-| 场景 | 预估 pre-QR |
+| Scenario | Estimated pre-QR |
 |---|---|
-| 当前（2核 / 负载10-15）| ~48s |
-| + 专用机（≥4核 / 低负载）| 本地计算排队放大消除，估 ~25-35s（待实测）|
-| + vendor 常驻模式 | 再去 ~15-19s 冷初始化，估 ~15-21s |
+| Current (2 cores / load 10–15) | ~48s |
+| + dedicated machine (≥4 cores / low load) | Local-computation queuing amplification removed, est. ~25–35s (to be measured) |
+| + vendor resident mode | Another ~15–19s of cold initialization removed, est. ~15–21s |
 
-> 数字含估算成分，§3.3 的负载-时延关系已实测；专用机与常驻模式的确切收益需各自一组对照实测确认。
+> The numbers contain estimated components; the load-latency relationship in §3.3 is measured; the exact gains of the dedicated machine and resident mode each need their own set of controlled measurements to confirm.

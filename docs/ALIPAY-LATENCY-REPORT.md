@@ -1,133 +1,133 @@
-# 支付宝 `/buy` 延迟调查报告
+# Alipay `/buy` Latency Investigation Report
 
-**日期：** 2026-06-05
-**范围：** moltspay Discord bot 支付宝 `/buy` 出二维码慢（pre-QR ~74–84s）
-**代码：** SDK `payment-agent`（`moltspay`，分支 `feature/alipay`）· Bot `moltspay-discordbot`
-**底层：** `alipay-bot` CLI v0.3.15（`~/.local/share/alipay-bot-cli/runtime/dist/cli.js`）
-
----
-
-## 1. 结论摘要（TL;DR）
-
-1. **支付宝链路 = 一串 `alipay-bot <子命令>` 子进程 spawn。** 一笔完整支付有 **8 次 spawn**：`ensure-cli` → `payment-intent` → `check-wallet` → `402-buyer-pay`（到此出码）→ `query-payment-status` ×N（轮询）→ `402-buyer-fulfillment-ack`。
-
-2. **每个命令都是「一次性长阻塞」，不是多次网关往返。** 逐行计时探针证明：每个 spawn 的**首字节时间 ≈ 总时长**，CLI 全程零输出，最后一瞬间把全部结果一次性吐出后退出（排空仅 0.5–1.2s）。`402-buyer-pay` 的全部输出在 **41578ms 处一次性出现**，中间没有任何进度行。
-
-3. **出码前 74s 的构成：`402-buyer-pay` 58% + `check-wallet` 31%。** 其余（payment-intent、ensure-cli、本地步骤）合计约 11%。
-
-4. **`402-buyer-pay` 的 ~42s 是 CLI/网关内部固有阻塞**（建单 + 生成二维码），Node 侧无法再细分、也改不动；其中只有 ~6s 是冷启动，可随常驻进程消除。
-
-5. **`check-wallet` 的 ~23s 是纯开销**——钱包授权状态在两笔之间不变，已确认开通就不必每笔重跑。**跨流缓存即省 ~23s，是当前最高 ROI 的改动。**
-
-6. **轮询节奏被 CLI 自身拖垮：** `query-payment-status` 每次 spawn 自身就阻塞 25–36s。名义间隔 3s 形同虚设，**用户付完款后最长 ~36s 才被检测到**，拉长了 settle 体感。→ **已由 Rec #3 重叠轮询缓解（见 §5.1）。**
+**Date:** 2026-06-05
+**Scope:** moltspay Discord bot Alipay `/buy` slow to show the QR code (pre-QR ~74–84s)
+**Code:** SDK `payment-agent` (`moltspay`, branch `feature/alipay`) · Bot `moltspay-discordbot`
+**Underlying:** `alipay-bot` CLI v0.3.15 (`~/.local/share/alipay-bot-cli/runtime/dist/cli.js`)
 
 ---
 
-## 2. 测量方法（探针）
+## 1. Summary of Conclusions (TL;DR)
 
-在 `src/client/alipay/log.ts` 的结构化日志设施基础上，于 `src/client/alipay/cli.ts` 的 `runCli` 增加 **debug 级逐行/逐块计时**，全部基于真实流的被动观察，**不改动真实扣款的 `402-buyer-pay` 调用本身**：
+1. **The Alipay rail = a chain of `alipay-bot <subcommand>` subprocess spawns.** One complete payment has **8 spawns**: `ensure-cli` → `payment-intent` → `check-wallet` → `402-buyer-pay` (QR code appears here) → `query-payment-status` ×N (polling) → `402-buyer-fulfillment-ack`.
 
-| 事件 | 含义 |
+2. **Every command is "one long stall", not multiple gateway round trips.** The line-by-line timing probe proves it: for each spawn, **time to first byte ≈ total duration**, the CLI emits nothing the whole time, then dumps all results at once at the last instant and exits (drain takes only 0.5–1.2s). All output of `402-buyer-pay` appears at once **at 41578ms**, with no progress lines in between.
+
+3. **Composition of the 74s before the QR code: `402-buyer-pay` 58% + `check-wallet` 31%.** Everything else (payment-intent, ensure-cli, local steps) totals about 11%.
+
+4. **The ~42s of `402-buyer-pay` is inherent blocking inside the CLI/gateway** (order creation + QR generation); the Node side can neither subdivide it further nor change it; only ~6s of it is cold start, removable with a resident process.
+
+5. **The ~23s of `check-wallet` is pure overhead** — wallet authorization state doesn't change between payments; once confirmed enabled, it need not be rerun per payment. **A cross-flow cache saves ~23s outright — the highest-ROI change right now.**
+
+6. **The polling cadence is dragged down by the CLI itself:** each `query-payment-status` spawn blocks 25–36s on its own. The nominal 3s interval is meaningless — **after the user pays, detection can take up to ~36s**, stretching the perceived settle time. → **Mitigated by Rec #3 overlapping polling (see §5.1).**
+
+---
+
+## 2. Measurement Method (Probes)
+
+On top of the structured-logging facility in `src/client/alipay/log.ts`, added **debug-level line/chunk timing** in `runCli` in `src/client/alipay/cli.ts` — all passive observation of real flows, **without touching the `402-buyer-pay` call itself, which really charges money**:
+
+| Event | Meaning |
 |---|---|
-| `cli.firstbyte` | 该 spawn 首字节到达时间（≈ 冷启动 + 第一次网关往返） |
-| `cli.line` | 每行 stdout/stderr 的偏移 ms + 120 字预览 |
-| `cli.chunk` | 原始 chunk 到达（含 `\r` 进度条/缓冲输出，逐行切分会漏掉的） |
-| `flow.pending` | 出码前总时长（`flow.start` → 二维码可显示） |
-| `flow.settled` | 出码到付款确认的时长（含用户扫码） |
+| `cli.firstbyte` | Time of the spawn's first byte (≈ cold start + first gateway round trip) |
+| `cli.line` | Offset ms of each stdout/stderr line + 120-char preview |
+| `cli.chunk` | Raw chunk arrival (including `\r` progress bars/buffered output that line splitting would miss) |
+| `flow.pending` | Total duration before the QR code (`flow.start` → QR code displayable) |
+| `flow.settled` | Duration from QR code to payment confirmation (includes user scanning) |
 
-启用：`MOLTSPAY_ALIPAY_LOG=debug bash restart.sh`。已有的 `ensure-cli` 缓存（per-process memo `--version` 门控）也在生效中。
+Enable with: `MOLTSPAY_ALIPAY_LOG=debug bash restart.sh`. The existing `ensure-cli` cache (per-process memo of the `--version` gate) is also in effect.
 
-环境限制：本机无 `strace`/`ltrace`/`/usr/bin/time`，CLI 内部进一步拆分需 CLI 自身埋点或抓网络。
+Environment limitation: this machine has no `strace`/`ltrace`/`/usr/bin/time`; further decomposition inside the CLI requires the CLI's own instrumentation or network capture.
 
 ---
 
-## 3. 实测数据（一笔真实支付，flow `discord-ecf318d0…`，2026-06-05 14:53–14:57）
+## 3. Measured Data (one real payment, flow `discord-ecf318d0…`, 2026-06-05 14:53–14:57)
 
-### 3.1 出码前（pre-QR）逐步
+### 3.1 Pre-QR, step by step
 
-| 步骤 | 首字节 | 退出 | 沉默时长 | 排空 | 占 pre-QR |
+| Step | First byte | Exit | Silent duration | Drain | Share of pre-QR |
 |---|---|---|---|---|---|
-| discover-services（本地） | — | 28ms | — | — | <0.1% |
-| challenge-402（本地） | — | 31ms | — | — | <0.1% |
-| ensure-cli | — | 2588ms | (冷启动) | — | 3.5% |
+| discover-services (local) | — | 28ms | — | — | <0.1% |
+| challenge-402 (local) | — | 31ms | — | — | <0.1% |
+| ensure-cli | — | 2588ms | (cold start) | — | 3.5% |
 | payment-intent | 5298ms | 5799ms | 5.3s | 0.5s | 8% |
 | **check-wallet** | **21953ms** | **22837ms** | **22s** | 0.9s | **31%** |
 | **402-buyer-pay** | **41578ms** | **42807ms** | **41.6s** | 1.2s | **58%** |
-| **出码前合计 `flow.pending`** | | **74066ms** | | | 100% |
+| **Pre-QR total `flow.pending`** | | **74066ms** | | | 100% |
 
 ```
 402-buyer-pay   42.8s  ████████████████████████  58%
 check-wallet    22.8s  █████████████             31%
 payment-intent   5.8s  ███                        8%
 ensure-cli       2.6s  █                          3.5%
-本地步骤         0.06s                            <0.1%
+local steps      0.06s                            <0.1%
 ```
 
-### 3.2 出码后（轮询 + 收尾）
+### 3.2 After the QR code (polling + wrap-up)
 
-| 步骤 | 单次 spawn 时长 | 备注 |
+| Step | Per-spawn duration | Notes |
 |---|---|---|
 | query-payment-status tick1 | 28.8s | status=pending |
 | query-payment-status tick2 | 25.7s | status=pending |
 | query-payment-status tick3 | 25.0s | status=pending |
 | query-payment-status tick4 | 36.5s | **status=paid** ✓ |
-| `flow.settled` | **125035ms** | 含用户扫码 + 付款 + 检测延迟 |
-| 402-buyer-fulfillment-ack | 28.6s | fire-and-forget，不挡用户 |
+| `flow.settled` | **125035ms** | Includes user scanning + paying + detection latency |
+| 402-buyer-fulfillment-ack | 28.6s | Fire-and-forget, doesn't block the user |
 
-**轮询发现：** 每次 `query-payment-status` 自身阻塞 25–36s（首字节≈总时长，同样是一次性长阻塞）。名义 3s 间隔失效，付款检测粒度实际为 ~25–36s。
+**Polling finding:** each `query-payment-status` blocks 25–36s on its own (first byte ≈ total duration — the same one-shot long stall). The nominal 3s interval is ineffective; the actual payment-detection granularity is ~25–36s.
 
-### 3.3 与历史两笔的对比（出码前总时长）
+### 3.3 Comparison with the two historical payments (total pre-QR duration)
 
-| 笔 | ensure-cli | payment-intent | check-wallet | 402-buyer-pay | pre-QR |
+| Payment | ensure-cli | payment-intent | check-wallet | 402-buyer-pay | pre-QR |
 |---|---|---|---|---|---|
-| 历史 flow1 | 5943ms (冷) | 9546ms | 25567ms | 42126ms | 83210ms |
-| 历史 flow2 | 0ms (缓存命中) | 7053ms | 24781ms | 46479ms | 78336ms |
-| 本次 | 2588ms | 5799ms | 22837ms | 42807ms | 74066ms |
+| Historical flow1 | 5943ms (cold) | 9546ms | 25567ms | 42126ms | 83210ms |
+| Historical flow2 | 0ms (cache hit) | 7053ms | 24781ms | 46479ms | 78336ms |
+| This run | 2588ms | 5799ms | 22837ms | 42807ms | 74066ms |
 
-`check-wallet`（~23–26s）与 `402-buyer-pay`（~42–46s）三笔高度稳定，是结构性成本；`ensure-cli` 缓存命中只省一次冷启动，对 pre-QR 总量影响有限。
-
----
-
-## 4. 分析
-
-- **"那 40s"已定性：** `402-buyer-pay` 是 CLI 内部一段单一的、零输出的阻塞（建单 + 网关生成二维码），不是多次往返。逐行探针的价值正在于**排除了"多次网关往返"假设**。≈ 6s 冷启动 + ~35s 网关固有阻塞，后者在 CLI/网关内部。
-
-- **冷启动 vs 网关：** 用 `ensure-cli`/`--version`（纯冷启动、零网络）作基线（本机 ~2.5–6s），小命令（payment-intent）几乎全是冷启动；两个大命令（check-wallet、402-buyer-pay）的主体是命令内部的网关/等待，**不是冷启动**。这修正了早期"瓶颈全是指纹冷启动"的判断。
-
-- **冷启动来源（早期 profiling）：** CLI 每次冷调用跑设备指纹/遥测子进程链（`general_external_id.js` ~5.8s + `ps` + macOS `system_profiler`（Linux 上快速失败）+ `__internal-refresh-claw-info-cache` / `__internal-log-worker`），零网络、~1.15s CPU，其余为阻塞等待。0.3.15 无 `serve`/`daemon` 子命令。
-
-- **每笔 8 次 spawn**，每次各背一份冷启动；常驻进程可一次性消除全部冷启动开销。
+`check-wallet` (~23–26s) and `402-buyer-pay` (~42–46s) are highly stable across all three payments — structural costs; the `ensure-cli` cache hit only saves one cold start and has limited impact on the pre-QR total.
 
 ---
 
-## 5. 建议（ROI 从高到低）
+## 4. Analysis
 
-| # | 改动 | 预期收益 | 风险/成本 |
+- **"That 40s" is now characterized:** `402-buyer-pay` is a single, zero-output stall inside the CLI (order creation + gateway QR generation), not multiple round trips. The value of the line-by-line probe is precisely that it **ruled out the "multiple gateway round trips" hypothesis**. ≈ 6s cold start + ~35s inherent gateway stall, the latter inside the CLI/gateway.
+
+- **Cold start vs gateway:** using `ensure-cli`/`--version` (pure cold start, zero network) as the baseline (~2.5–6s on this machine), the small command (payment-intent) is almost entirely cold start; the bulk of the two big commands (check-wallet, 402-buyer-pay) is in-command gateway/waiting, **not cold start**. This corrects the earlier judgment that "the bottleneck is all fingerprinting cold start".
+
+- **Cold-start source (earlier profiling):** on every cold invocation the CLI runs a device-fingerprinting/telemetry subprocess chain (`general_external_id.js` ~5.8s + `ps` + macOS `system_profiler` (fails fast on Linux) + `__internal-refresh-claw-info-cache` / `__internal-log-worker`), zero network, ~1.15s CPU, the rest blocking wait. 0.3.15 has no `serve`/`daemon` subcommand.
+
+- **8 spawns per payment**, each carrying its own cold start; a resident process could eliminate all cold-start overhead at once.
+
+---
+
+## 5. Recommendations (ROI, highest to lowest)
+
+| # | Change | Expected gain | Risk/cost |
 |---|---|---|---|
-| **1** | ✅ **已实现** `check-wallet` 跨流缓存/跳过（commit 248973a） | **每笔省 ~23s（pre-QR 的 31%）** | 低；纯开销、可控、改动小 |
-| 2 | **常驻/预热 CLI 进程**，消除每次 spawn 的 ~2.5–6s 冷启动（本笔 8 次） | pre-QR 省 ~10–15s，整体更多 | 中；CLI 无 daemon 子命令，需自建常驻 host 或预热 claw-info 缓存 |
-| 3 | ✅ **已实现** 重叠/非阻塞轮询（见 §5.1） | 付款检测延迟从 ~(2×spawn+gap)≈50–60s 降到 ~(cadence+1×spawn) | 中；并发查询，安全性见 §5.1 |
-| 4 | `402-buyer-pay` 的 ~35s 网关固有阻塞 | — | 高/不可控；除非 alipay-bot 提供更快建单路径 |
+| **1** | ✅ **Implemented** `check-wallet` cross-flow cache/skip (commit 248973a) | **Saves ~23s per payment (31% of pre-QR)** | Low; pure overhead, controlled, small change |
+| 2 | **Resident/pre-warmed CLI process**, eliminating the ~2.5–6s cold start per spawn (8 in this payment) | Pre-QR saves ~10–15s, more overall | Medium; CLI has no daemon subcommand — requires building our own resident host or pre-warming the claw-info cache |
+| 3 | ✅ **Implemented** overlapping/non-blocking polling (see §5.1) | Payment-detection latency drops from ~(2×spawn+gap)≈50–60s to ~(cadence+1×spawn) | Medium; concurrent queries — see §5.1 for safety |
+| 4 | The ~35s inherent gateway stall of `402-buyer-pay` | — | High/uncontrollable, unless alipay-bot provides a faster order-creation path |
 
-**下一步：#2（常驻/预热 CLI）。** #1、#3 已落地，剩下消除冷启动需自建常驻 host。
+**Next step: #2 (resident/pre-warmed CLI).** #1 and #3 have landed; what remains for eliminating cold starts is building our own resident host.
 
-### 5.1 Rec #3 实现：重叠轮询（`src/client/alipay/poll.ts`）
+### 5.1 Rec #3 Implementation: Overlapping Polling (`src/client/alipay/poll.ts`)
 
-由于单次 `402-query-payment-status` spawn 自身阻塞 25–36s（首字节≈总时长，非服务端长轮询），Node 侧无法压缩单次调用，但可**按固定节奏发起重叠轮询**，不等上一次返回：
+Because a single `402-query-payment-status` spawn blocks 25–36s on its own (first byte ≈ total duration, not server-side long polling), the Node side cannot shorten a single call — but it can **launch overlapping polls on a fixed cadence** without waiting for the previous one to return:
 
-- **机制：** 最多 `POLL_MAX_INFLIGHT`（默认 2）个并发 in-flight 查询，按 `POLL_INTERVAL_MS`（默认 3s）的发起节奏补满空槽；第一个观察到 `paid` 的获胜并立即 `internal.abort()` 取消其余兄弟 spawn。
-- **效果：** 付款后检测延迟从「两次 spawn + 间隔」(~50–60s) 降到「发起节奏 + 一次 spawn」。
-- **可调：** `maxInflight` / `launchIntervalMs`（PollOptions），或环境变量 `MOLTSPAY_ALIPAY_POLL_MAX_INFLIGHT` / `MOLTSPAY_ALIPAY_POLL_LAUNCH_MS`；设 `maxInflight=1` 退回严格顺序（旧行为）。
-- **安全性：** 并发查询每次会以 read-only verify 复核履约（POST `/execute`），安全因为 (a) moltspay 收银台 `/execute` handler 是 no-op `{ok:true}`，(b) 真正履约（如 Discord 角色）解耦到卖家单次 `onPaid`，仅在本函数 resolve 时触发一次——绝不 per-poll。重复/并发查询既不双重扣款也不重复发货。
-- **超时语义：** 仅当无任何 in-flight 时才判超时（已发起的 poll 可能恰在 deadline 后返回 paid，与旧循环「仅在 spawn 前检查 deadline」一致）。
-- **测试：** `test/client/alipay/poll.test.ts` 14 通过，含 gate-runner 验证真实并发上限、首个 paid 获胜、`maxInflight=1` 严格顺序。
+- **Mechanism:** at most `POLL_MAX_INFLIGHT` (default 2) concurrent in-flight queries, refilling empty slots on the `POLL_INTERVAL_MS` (default 3s) launch cadence; the first to observe `paid` wins and immediately `internal.abort()`s the remaining sibling spawns.
+- **Effect:** post-payment detection latency drops from "two spawns + gap" (~50–60s) to "launch cadence + one spawn".
+- **Tunable:** `maxInflight` / `launchIntervalMs` (PollOptions), or env vars `MOLTSPAY_ALIPAY_POLL_MAX_INFLIGHT` / `MOLTSPAY_ALIPAY_POLL_LAUNCH_MS`; set `maxInflight=1` to fall back to strict sequential (old behavior).
+- **Safety:** each concurrent query re-verifies fulfillment with a read-only verify (POST `/execute`); this is safe because (a) the moltspay checkout `/execute` handler is a no-op `{ok:true}`, and (b) actual fulfillment (e.g. the Discord role) is decoupled into the seller's single `onPaid`, which fires only once when this function resolves — never per-poll. Repeated/concurrent queries neither double-charge nor double-deliver.
+- **Timeout semantics:** timeout is only declared when nothing is in-flight (an already-launched poll may return paid just after the deadline — consistent with the old loop's "check deadline only before spawning").
+- **Tests:** `test/client/alipay/poll.test.ts`, 14 passing, including gate-runner verification of the real concurrency cap, first-paid-wins, and strict sequencing with `maxInflight=1`.
 
 ---
 
-## 6. 复现与运维
+## 6. Reproduction and Operations
 
-- **启用计时：** `MOLTSPAY_ALIPAY_LOG=debug bash restart.sh`（debug 会刷 `cli.line`；验证完降回 `info`）。
-- **构建+部署：** `cd payment-agent && npm run build`，然后 `rsync -a --delete payment-agent/dist/ moltspay-discordbot/node_modules/moltspay/dist/`（⚠️ 临时；bot `npm install` 会覆盖，持久化需 publish / workspace link）。bot 需重启加载。
-- **延迟探针脚本：** `scripts/probe-alipay-cli.sh [runs]`（只测 `--version`/`--help`/`check-wallet`/`payment-intent`，**绝不**跑 `402-buyer-pay` = 真实扣款）。
-- **测试：** 204 个测试通过（含 `cli.test.ts`）。
-- **陷阱：** 勿 inline `pkill -f "…dist…"`，会自杀当前 shell；用 `restart.sh`（内部 `fuser -k 3402/tcp`）。
+- **Enable timing:** `MOLTSPAY_ALIPAY_LOG=debug bash restart.sh` (debug floods `cli.line`; drop back to `info` after verifying).
+- **Build + deploy:** `cd payment-agent && npm run build`, then `rsync -a --delete payment-agent/dist/ moltspay-discordbot/node_modules/moltspay/dist/` (⚠️ temporary; a bot `npm install` overwrites it — durability requires publish / workspace link). The bot must be restarted to load it.
+- **Latency probe script:** `scripts/probe-alipay-cli.sh [runs]` (only tests `--version`/`--help`/`check-wallet`/`payment-intent`; **never** runs `402-buyer-pay` = a real charge).
+- **Tests:** 204 tests passing (including `cli.test.ts`).
+- **Pitfall:** do not inline `pkill -f "…dist…"` — it kills the current shell; use `restart.sh` (which uses `fuser -k 3402/tcp` internally).

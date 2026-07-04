@@ -1,132 +1,132 @@
-# MoltsPay × 支付宝 AI 收 集成执行计划
+# MoltsPay × Alipay AI Pay (支付宝 AI 收) Integration Execution Plan
 
-> **状态**：v1 · §0 决策全部 settled（2026-05-29），rc.1 可启动
-> **创建日期**：2026-05-29
-> **决策日期**：2026-05-29
-> **目标版本**：`moltspay@1.7.0`
-> **关联文档**：
-> - `./ALIPAY-INTEGRATION-DESIGN.md` — 完整设计（架构决策、配置 schema、文件清单）
-> - `~/clawd/docs/alipay-aipay-402-protocol.md` — 服务端 402 协议参考实现（sr007.com）
-> - `~/clawd/docs/alipay-skill-integration-guide.md` — 客户端 CLI 接入流程（`alipay-bot` 官方）
+> **Status**: v1 · All §0 decisions settled (2026-05-29), rc.1 may start
+> **Created**: 2026-05-29
+> **Decided**: 2026-05-29
+> **Target version**: `moltspay@1.7.0`
+> **Related docs**:
+> - `./ALIPAY-INTEGRATION-DESIGN.md` — full design (architecture decisions, config schema, file inventory)
+> - `~/clawd/docs/alipay-aipay-402-protocol.md` — server-side 402 protocol reference implementation (sr007.com)
+> - `~/clawd/docs/alipay-skill-integration-guide.md` — client CLI onboarding flow (official `alipay-bot`)
 
-本文档是 design doc 的可执行 checklist。每一项都对应一个可勾选状态；rc.1 启动前必须解掉 §0 全部 5 个决策。
-
----
-
-## §0 启动前决策（已 settled，2026-05-29）
-
-来自 design doc §九。全部按推荐项 A 落定。
-
-- [x] **决策 1：商户身份 → A（复用 sr007.com / 上海超响应）**
-  - 已有 Python 端到端跑通、6 个坑都踩完，移植成本可控
-  - 取消选项：新建 MoltsPay 自有沙箱商户（入驻周期阻塞 rc.1）
-  - **执行影响**：rc.1 沙箱阶段直接用 sr007 沙箱密钥；§3 生产 3 单也在 sr007；商户入驻费用/账号管理推迟到 1.8.x
-- [x] **决策 2：CLI 子命令命名 → A（`moltspay pay --rail alipay <url>`）**
-  - 与 `--chain base` 同位语义，rail 是"运输通道"
-  - 取消选项：`moltspay alipay pay <url>` 子命令形态
-  - **执行影响**：`src/cli/index.ts` 在 `pay` 命令下加 `--rail` 选项，不新增 `moltspay alipay` 子命令树；但 `moltspay alipay check / apply / bind` 仍作为**辅助子命令**保留（首次开通钱包用，直透 `alipay-bot`）
-- [x] **决策 3：rail 在 schema 中的位置 → A（复用 `provider.chains: ["alipay", ...]`）**
-  - 不破坏现有 schema 全集语义；文档讲清楚 chain id 现在可以是 fiat-rail 即可
-  - 取消选项：新增 `provider.rails` 字段
-  - **执行影响**：`schemas/moltspay.services.schema.json` 不加 `provider.rails`；`src/chains/index.ts` 给 `"alipay"` 标注 `type: "fiat-rail"`；README 加一句"chains 数组现在也可以含法币 rail"
-- [x] **决策 4：1.7.0 范围 → A（仅 402，收银台放 1.7.1）**
-  - 收银台与 server SDK 关系不大，主要是 MCP 直透 `alipay-bot submit-payment`，没必要拖 1.7.0
-  - 取消选项：1.7.0 同时覆盖两种
-  - **执行影响**：MCP tool `alipay_pay_cashier` **从 §3 1.7.0 GA 移到 §5 1.7.1**；CHANGELOG Known Limitations 写明"1.7.0 仅 402；收银台 1.7.1"
-- [x] **决策 5：文档落地位置 → A（单独 `docs/ALIPAY-RAIL.md` + README 5 行 callout）**
-  - README 已 33 KB，再塞会爆
-  - 取消选项：直接塞 README
-  - **执行影响**：§3 文档清单调整 —— 新建 `docs/ALIPAY-RAIL.md`（用户视角接入指南），README 加一段 callout 指向它
+This document is the executable checklist for the design doc. Every item maps to a checkable state; all 5 decisions in §0 must be resolved before rc.1 starts.
 
 ---
 
-## §1 里程碑 1：1.7.0-rc.1（server 端基础 + 沙箱 E2E）
+## §0 Pre-start decisions (settled, 2026-05-29)
 
-**预估**：2 周
-**退出标准**：沙箱通过；老 `alipay-bot` 客户端回归通过
+From design doc §9. All settled on recommended option A.
 
-### 新增文件
-
-- [x] `src/facilitators/alipay.ts` — `AlipayFacilitator` 类，4 个方法全部实现（createPaymentRequirements / verify / settle / healthCheck）2026-05-29，组合 56 单测
-- [x] `src/facilitators/alipay/openapi.ts` — `alipayOpenApiCall()` 通用调用器（2026-05-29 实现 + 16 单测，含 fetch mock）
-- [x] `src/facilitators/alipay/rsa2.ts` — `rsa2Sign` / `rsa2Verify`，Node `crypto` 内置（2026-05-29 实现 + 14 单测）
-- [x] `src/facilitators/alipay/encoding.ts` — `base64url` / `decodeBase64UrlWithPadFix`（2026-05-29 实现 + 17 单测）
-
-### 改动文件
-
-- [x] `src/facilitators/registry.ts` — 注册 `"alipay"` network → `AlipayFacilitator`（已实现，registry.ts:85）
-- [x] `src/facilitators/index.ts` — export（已实现）
-- [x] `src/server/index.ts` — 402 中间件**双发** `X-Payment-Required` + `Payment-Needed`（2026-05-31 修复 `/execute` 漏发，HTTP 回归测试 6 项）
-- [x] `src/server/index.ts` — `/execute` 与 MPP service 端点在收到 `Payment-Proof` header 时分发到 `AlipayFacilitator.verify`（**2026-05-31 真单暴露：原本只在 CORS 白名单提了 Payment-Proof，从不读取 → 已付款买家陷入 402 循环**；现读 header → verify → 履约 → 200，server 测试 2 项 + 真单验证）
-- [x] `src/chains/index.ts` — 注册 `"alipay"` chain id（`ALIPAY_RAIL` 元数据 + `isAlipayChainId` 守卫；不动 `ChainName`/`EvmChainName` union 避免触动 20+ caller，2026-05-29，18 单测含 cross-module 一致性检查）
-
-### Schema 扩展
-
-- [x] `src/server/types.ts` — `ServiceConfig.alipay?: ServiceAlipayConfig` + `ServiceAlipayConfig` 接口（2026-05-29；PLAN 原称 `src/types/services.ts`，实际项目里 service types 在 `src/server/types.ts`）
-- [x] `src/server/types.ts` — `ProviderConfig.alipay?: ProviderAlipayConfig` + `ProviderAlipayConfig` 接口（2026-05-29）
-- [x] `schemas/moltspay.services.schema.json` — JSON Schema 同步，含 `provider.alipay` / `services[].alipay` / chains enum 加 `"alipay"` / 完整 alipay 示例（2026-05-29）
-- [x] `src/facilitators/interface.ts` — `X402PaymentRequirements.extra` 加 per-scheme JSDoc 约定（PLAN 原称 `src/types/x402.ts`，实际在 `src/facilitators/interface.ts`；2026-05-29）
-- [ ] `scripts/validate-config.ts` 跟上新字段校验 —— 文件**尚不存在**于仓库，需要时单独建
-
-### 启动校验
-
-- [ ] `provider.chains` 含 `"alipay"` 时，启动校验 `provider.alipay.private_key_path` 可读且 RSA 私钥合法
-- [ ] `provider.alipay` 缺省时不发 `Payment-Needed` header，行为等同 1.6.0
-
-### 单元测试（vitest）100% 覆盖 `src/facilitators/alipay/*`
-
-- [x] RSA2 sign/verify（2026-05-29 用 runtime 生成的 2048-bit 双密钥对验证 sign/verify 正确性 + cross-key 拒绝 + 错误鲁棒性，14 单测；真支付宝沙箱密钥对端到端留给 rc.1 沙箱集成阶段）
-- [x] Base64URL padding fix（覆盖 `==` / `=` / 无 padding 三种 + URL-safe/标准字母表 + UTF-8 + round-trip，2026-05-29）
-- [x] 签名 8 字段字典序：`amount`/`currency`/`goods_name`/`out_trade_no`/`pay_before`/`resource_id`/`seller_id`/`service_id`（2026-05-29，real `rsa2Verify` round-trip + tamper detection）
-- [x] Challenge JSON 嵌套结构 `{protocol: {...}, method: {...}}`（2026-05-29，protocol 8 keys + method 6 keys 精确断言 + UTF-8 fidelity）
-- [x] `pay_before` ISO 8601 +30 分钟（2026-05-29，UTC `Z` 形式，无 fractional seconds）
-- [x] `amount` 正则校验 `/^\d+(\.\d{1,2})?$/`（2026-05-29，15 个 `it.each` 用例覆盖接受/拒绝；`"100"` 由 regex 接受，"元/分含糊"由文档 + types 防范）
-
-### 沙箱集成
-
-- [ ] 支付宝沙箱商户走一次完整 402 challenge → mock proof → verify → fulfill
-
-### 回归
-
-- [ ] 现有 8 链每条 1 单 E2E，确保双发 header 不破坏 1.6.0
-- [ ] **CLI 兼容性**：用未升级的 `@alipay/agent-payment@1.0.9` skill 直接 hit MoltsPayServer，必须完成支付
+- [x] **Decision 1: Merchant identity → A (reuse sr007.com / 上海超响应)**
+  - Python end-to-end already runs, all 6 pitfalls already hit; porting cost is manageable
+  - Rejected option: create a MoltsPay-owned sandbox merchant (onboarding lead time blocks rc.1)
+  - **Execution impact**: rc.1 sandbox phase uses sr007 sandbox keys directly; the 3 production orders in §3 also run on sr007; merchant onboarding fees/account management deferred to 1.8.x
+- [x] **Decision 2: CLI subcommand naming → A (`moltspay pay --rail alipay <url>`)**
+  - Parallel semantics with `--chain base`; a rail is a "transport channel"
+  - Rejected option: `moltspay alipay pay <url>` subcommand form
+  - **Execution impact**: `src/cli/index.ts` adds a `--rail` option under the `pay` command, no new `moltspay alipay` subcommand tree; however `moltspay alipay check / apply / bind` remain as **auxiliary subcommands** (for first-time wallet setup, passthrough to `alipay-bot`)
+- [x] **Decision 3: Where the rail lives in the schema → A (reuse `provider.chains: ["alipay", ...]`)**
+  - Does not break the existing whole-schema semantics; the docs just need to explain that a chain id may now be a fiat rail
+  - Rejected option: add a `provider.rails` field
+  - **Execution impact**: `schemas/moltspay.services.schema.json` does not add `provider.rails`; `src/chains/index.ts` annotates `"alipay"` with `type: "fiat-rail"`; README gains one line — "the chains array may now also contain fiat rails"
+- [x] **Decision 4: 1.7.0 scope → A (402 only, cashier goes to 1.7.1)**
+  - Cashier has little to do with the server SDK; it's mostly MCP passthrough to `alipay-bot submit-payment`, no reason to drag out 1.7.0
+  - Rejected option: 1.7.0 covers both
+  - **Execution impact**: MCP tool `alipay_pay_cashier` **moves from §3 1.7.0 GA to §5 1.7.1**; CHANGELOG Known Limitations states "1.7.0 is 402 only; cashier in 1.7.1"
+- [x] **Decision 5: Documentation location → A (standalone `docs/ALIPAY-RAIL.md` + 5-line README callout)**
+  - README is already 33 KB; stuffing more in would blow it up
+  - Rejected option: put it directly in the README
+  - **Execution impact**: §3 documentation list adjusted — create `docs/ALIPAY-RAIL.md` (user-facing onboarding guide), README gains a callout pointing to it
 
 ---
 
-## §2 里程碑 2：1.7.0-rc.2（客户端 CLI wrapper + 状态机）
+## §1 Milestone 1: 1.7.0-rc.1 (server-side foundation + sandbox E2E)
 
-**预估**：1 周
-**退出标准**：内部 1 元真单端到端通过
+**Estimate**: 2 weeks
+**Exit criteria**: sandbox passes; legacy `alipay-bot` client regression passes
 
-### 新增文件
+### New files
 
-- [x] `src/client/alipay/index.ts` — `AlipayClient` + `pay402()` 8 步状态机（2026-05-31，runner/getVersion/now 全可注入 DI，11 单测含全 8 步顺序断言）
-- [x] `src/client/alipay/cli.ts` — `spawn` 包装、stdout/stderr 流式回调、env 白名单、`bin` 可注入（2026-05-31，5 单测用真实 node spawn 验证行分割 + abort + env 白名单）
-- [x] `src/client/alipay/poll.ts` — `pollUntil(tradeNo, signal)`，3s 间隔，`pay_before` 截止，`AbortSignal` 中断（2026-05-31，7 单测，runner/sleep/now 注入）
-- [x] `src/client/alipay/install.ts` — `ensureCli()` 版本校验 ≥ 0.3.15（2026-05-31，内联 semverLt 避免新依赖，8 单测）
-- [x] `src/client/alipay/router.ts` — `selectRail(serverAccepts, userPref, availability)`（2026-05-31，纯函数，12 单测覆盖 4 级决策树）
-- [x] `src/client/alipay/errors.ts` — 7 个 error class，每个带稳定 `code` 字段（2026-05-31，扩展 `core/errors.ts` 的 `MoltsPayError`）
+- [x] `src/facilitators/alipay.ts` — `AlipayFacilitator` class, all 4 methods implemented (createPaymentRequirements / verify / settle / healthCheck) 2026-05-29, 56 unit tests combined
+- [x] `src/facilitators/alipay/openapi.ts` — `alipayOpenApiCall()` generic invoker (implemented 2026-05-29 + 16 unit tests, incl. fetch mock)
+- [x] `src/facilitators/alipay/rsa2.ts` — `rsa2Sign` / `rsa2Verify`, built on Node's built-in `crypto` (implemented 2026-05-29 + 14 unit tests)
+- [x] `src/facilitators/alipay/encoding.ts` — `base64url` / `decodeBase64UrlWithPadFix` (implemented 2026-05-29 + 17 unit tests)
 
-### 改动文件
+### Changed files
 
-- [x] `src/client/index.ts`（实为 `node/index.ts`）— `pay()` 在 `options.rail === 'alipay'` 时**先于 EVM 钱包校验**分发到 `payViaAlipay()` → `selectRail()` 确认 server 提供 alipay → `AlipayClient.pay402()`（2026-05-31。注：非显式 rail 时的跨 rail 偏好自动路由（railPreference 在 server 同时给 crypto+alipay 时）留作 rc.2 后续，`selectRail` 已实现+单测）
-- [x] `src/client/web/index.ts` — `AlipayWebClient` 桩（独立 `web/alipay.ts`，**不**引 `../alipay/*` 以免 Node 模块进浏览器 bundle），throw `UnsupportedChainError`；verify:web 通过（2026-05-31）
-- [x] `src/cli/index.ts` — `moltspay pay --rail alipay` 子命令（alipay 时跳过 EVM 钱包校验 + 流式透传 + onPaymentPending 打印支付链接，2026-05-31）
-- [x] `src/cli/index.ts` — `moltspay alipay check / apply / bind` 直透 CLI（`stdio:'inherit'` + env 白名单，ENOENT 友好引导，2026-05-31）
+- [x] `src/facilitators/registry.ts` — register `"alipay"` network → `AlipayFacilitator` (implemented, registry.ts:85)
+- [x] `src/facilitators/index.ts` — export (implemented)
+- [x] `src/server/index.ts` — 402 middleware **dual-emits** `X-Payment-Required` + `Payment-Needed` (2026-05-31 fixed the missing emit on `/execute`, 6 HTTP regression tests)
+- [x] `src/server/index.ts` — `/execute` and MPP service endpoints dispatch to `AlipayFacilitator.verify` when a `Payment-Proof` header is received (**exposed by a real order on 2026-05-31: Payment-Proof was only listed in the CORS allowlist and never read → buyers who had already paid were stuck in a 402 loop**; now reads header → verify → fulfill → 200, 2 server tests + real-order verification)
+- [x] `src/chains/index.ts` — register `"alipay"` chain id (`ALIPAY_RAIL` metadata + `isAlipayChainId` guard; the `ChainName`/`EvmChainName` unions untouched to avoid disturbing 20+ callers, 2026-05-29, 18 unit tests incl. cross-module consistency check)
 
-### Skill guide 硬约束（SDK 层实现，不依赖 CLI）
+### Schema extensions
 
-- [x] **CLI 输出逐字符透传**：`spawn` + 行级 stream API，不用 `exec`（2026-05-31，`makeLineSplitter` 缓冲到换行才上抛）
-- [x] **环境变量白名单**：仅 `AIPAY_OUTPUT_CHANNEL` / `AIPAY_SESSION_ID` / `AIPAY_FRAMEWORK` / `AIPAY_MODEL` / `AIPAY_OS` + 最小生存集（`PATH`/`HOME`）（2026-05-31，`ALLOWED_ENV` + 单测精确断言集合）
-- [x] **8 步严禁跳过**：状态机强约束步骤顺序，每步对应一次 spawn（2026-05-31，单测断言 `payment-intent → check-wallet → 402-buyer-pay → query → ack` 调用序列）
-- [x] **sessionId**：`opts.sessionId ?? AIPAY_SESSION_ID ?? crypto.randomUUID()`（不"编造" 假 UUID）（2026-05-31，`resolveSessionId`）
-- [x] **tradeNo 32 位纯数字**：SDK 层 `assertTradeNo` 正则校验，不依赖 CLI（2026-05-31，`/^\d{32}$/`）
-- [x] **MEDIA: 行**：行级检测、提取图片路径、剥离后上抛（2026-05-31，`extractMedia` + onLine 包装剥离）
-- [x] **禁止 npm 自动安装**：缺失时报 `AlipayCliNotFoundError`，引导用户手动装（2026-05-31）
+- [x] `src/server/types.ts` — `ServiceConfig.alipay?: ServiceAlipayConfig` + `ServiceAlipayConfig` interface (2026-05-29; the PLAN originally said `src/types/services.ts`, but service types actually live in `src/server/types.ts`)
+- [x] `src/server/types.ts` — `ProviderConfig.alipay?: ProviderAlipayConfig` + `ProviderAlipayConfig` interface (2026-05-29)
+- [x] `schemas/moltspay.services.schema.json` — JSON Schema synced, incl. `provider.alipay` / `services[].alipay` / `"alipay"` added to the chains enum / a complete alipay example (2026-05-29)
+- [x] `src/facilitators/interface.ts` — `X402PaymentRequirements.extra` gains per-scheme JSDoc convention (the PLAN originally said `src/types/x402.ts`, actually in `src/facilitators/interface.ts`; 2026-05-29)
+- [ ] `scripts/validate-config.ts` keeps up with new field validation — the file **does not yet exist** in the repo; create it separately when needed
 
-### Error codes（稳定 API）
+### Startup validation
 
-- [x] `ALIPAY_CLI_NOT_FOUND`（2026-05-31，7 个全部实现于 `client/alipay/errors.ts`）
+- [ ] When `provider.chains` contains `"alipay"`, startup validates that `provider.alipay.private_key_path` is readable and the RSA private key is valid
+- [ ] When `provider.alipay` is absent, the `Payment-Needed` header is not emitted; behavior identical to 1.6.0
+
+### Unit tests (vitest) 100% coverage of `src/facilitators/alipay/*`
+
+- [x] RSA2 sign/verify (2026-05-29, verified sign/verify correctness with runtime-generated 2048-bit key pairs + cross-key rejection + error robustness, 14 unit tests; end-to-end with real Alipay sandbox keys deferred to the rc.1 sandbox integration phase)
+- [x] Base64URL padding fix (covers `==` / `=` / no-padding cases + URL-safe/standard alphabets + UTF-8 + round-trip, 2026-05-29)
+- [x] Signature over 8 fields in dictionary order: `amount`/`currency`/`goods_name`/`out_trade_no`/`pay_before`/`resource_id`/`seller_id`/`service_id` (2026-05-29, real `rsa2Verify` round-trip + tamper detection)
+- [x] Challenge JSON nested structure `{protocol: {...}, method: {...}}` (2026-05-29, exact assertions on 8 protocol keys + 6 method keys + UTF-8 fidelity)
+- [x] `pay_before` ISO 8601 +30 minutes (2026-05-29, UTC `Z` form, no fractional seconds)
+- [x] `amount` regex validation `/^\d+(\.\d{1,2})?$/` (2026-05-29, 15 `it.each` cases covering accept/reject; `"100"` accepted by the regex, the "yuan-vs-fen ambiguity" guarded by docs + types)
+
+### Sandbox integration
+
+- [ ] Run one complete 402 challenge → mock proof → verify → fulfill against the Alipay sandbox merchant
+
+### Regression
+
+- [ ] 1 E2E order on each of the existing 8 chains, confirming the dual-emitted header does not break 1.6.0
+- [ ] **CLI compatibility**: hit MoltsPayServer directly with the un-upgraded `@alipay/agent-payment@1.0.9` skill; the payment must complete
+
+---
+
+## §2 Milestone 2: 1.7.0-rc.2 (client CLI wrapper + state machine)
+
+**Estimate**: 1 week
+**Exit criteria**: internal 1-yuan real-money order passes end-to-end
+
+### New files
+
+- [x] `src/client/alipay/index.ts` — `AlipayClient` + `pay402()` 8-step state machine (2026-05-31, runner/getVersion/now all injectable via DI, 11 unit tests incl. full 8-step ordering assertions)
+- [x] `src/client/alipay/cli.ts` — `spawn` wrapper, stdout/stderr streaming callbacks, env allowlist, injectable `bin` (2026-05-31, 5 unit tests using real node spawn to verify line splitting + abort + env allowlist)
+- [x] `src/client/alipay/poll.ts` — `pollUntil(tradeNo, signal)`, 3s interval, `pay_before` deadline, `AbortSignal` interruption (2026-05-31, 7 unit tests, runner/sleep/now injected)
+- [x] `src/client/alipay/install.ts` — `ensureCli()` version check ≥ 0.3.15 (2026-05-31, inlined semverLt to avoid a new dependency, 8 unit tests)
+- [x] `src/client/alipay/router.ts` — `selectRail(serverAccepts, userPref, availability)` (2026-05-31, pure function, 12 unit tests covering the 4-level decision tree)
+- [x] `src/client/alipay/errors.ts` — 7 error classes, each with a stable `code` field (2026-05-31, extends `MoltsPayError` from `core/errors.ts`)
+
+### Changed files
+
+- [x] `src/client/index.ts` (actually `node/index.ts`) — when `options.rail === 'alipay'`, `pay()` dispatches to `payViaAlipay()` **before EVM wallet validation** → `selectRail()` confirms the server offers alipay → `AlipayClient.pay402()` (2026-05-31. Note: automatic cross-rail preference routing when no rail is explicit (railPreference when the server offers both crypto+alipay) is deferred to post-rc.2; `selectRail` is implemented + unit-tested)
+- [x] `src/client/web/index.ts` — `AlipayWebClient` stub (standalone `web/alipay.ts`, does **not** import `../alipay/*` to keep Node modules out of the browser bundle), throws `UnsupportedChainError`; verify:web passes (2026-05-31)
+- [x] `src/cli/index.ts` — `moltspay pay --rail alipay` subcommand (skips EVM wallet validation for alipay + streaming passthrough + onPaymentPending prints the payment link, 2026-05-31)
+- [x] `src/cli/index.ts` — `moltspay alipay check / apply / bind` CLI passthrough (`stdio:'inherit'` + env allowlist, friendly ENOENT guidance, 2026-05-31)
+
+### Skill guide hard constraints (implemented at the SDK layer, not dependent on the CLI)
+
+- [x] **CLI output passed through character-for-character**: `spawn` + line-level stream API, no `exec` (2026-05-31, `makeLineSplitter` buffers until newline before surfacing)
+- [x] **Environment variable allowlist**: only `AIPAY_OUTPUT_CHANNEL` / `AIPAY_SESSION_ID` / `AIPAY_FRAMEWORK` / `AIPAY_MODEL` / `AIPAY_OS` + minimal survival set (`PATH`/`HOME`) (2026-05-31, `ALLOWED_ENV` + unit test asserting the exact set)
+- [x] **8 steps must never be skipped**: state machine strictly enforces step order, one spawn per step (2026-05-31, unit test asserts the `payment-intent → check-wallet → 402-buyer-pay → query → ack` call sequence)
+- [x] **sessionId**: `opts.sessionId ?? AIPAY_SESSION_ID ?? crypto.randomUUID()` (never "fabricate" a fake UUID) (2026-05-31, `resolveSessionId`)
+- [x] **tradeNo is 32 digits, numeric only**: SDK-layer `assertTradeNo` regex validation, not dependent on the CLI (2026-05-31, `/^\d{32}$/`)
+- [x] **MEDIA: lines**: line-level detection, extract the image path, strip and surface (2026-05-31, `extractMedia` + onLine wrapper stripping)
+- [x] **No automatic npm install**: on missing CLI, raise `AlipayCliNotFoundError` and guide the user to install manually (2026-05-31)
+
+### Error codes (stable API)
+
+- [x] `ALIPAY_CLI_NOT_FOUND` (2026-05-31, all 7 implemented in `client/alipay/errors.ts`)
 - [x] `ALIPAY_CLI_VERSION`
 - [x] `ALIPAY_NEEDS_WALLET_SETUP`
 - [x] `ALIPAY_PAYMENT_REJECTED`
@@ -134,92 +134,92 @@
 - [x] `ALIPAY_PROTOCOL`
 - [x] `UNSUPPORTED_RAIL`
 
-### 真实端到端（强制）—— ✅ 2026-05-31 通过
+### Real end-to-end (mandatory) — ✅ passed 2026-05-31
 
-- [x] 1 单 1 元 CNY 真实支付：`moltspay pay --rail alipay http://127.0.0.1/execute video-demo`，真实「AI付」钱包扫码付款 → server 读 `Payment-Proof` → `alipay.aipay.agent.payment.verify`（**生产网关** openapi.alipay.com）verified → skill 执行 → `alipay.aipay.agent.fulfillment.confirm` → 资源 200 交付（tradeNo `20260531008281180847110000015839`）
-- [x] 真机暴露并修复 4 个 bug：(1) `check-wallet` 未开通时 exit 0 返回 `{code:500}`（不能靠退出码）；(2) `payment-intent` 的 `-i/--intent-summary` 必需；(3) 直透子命令真名 `apply-wallet`/`bind-wallet`；(4) `parseStatus` 误把 `{"success":false}` 的 `success` 键当成 paid（UNPAID 假成功）
-- [x] **环境关键发现**：买家用**生产** AI付 钱包,seller 必须配**生产网关** `openapi.alipay.com`(沙箱 alipaydev.com 已 502 且环境不互通)
-- alipay-bot 安装：`npx -y @alipay/agent-payment install-cli`（装 alipay-bot-cli ≥0.3.15 到 `~/.local/bin`）
-- ⏭️ 录屏归档进 `~/moltspay-qa-notes/`（QA 留痕，待补）
+- [x] One real 1-yuan (元) CNY payment: `moltspay pay --rail alipay http://127.0.0.1/execute video-demo`, real "AI Pay" (AI付) wallet QR-scan payment → server reads `Payment-Proof` → `alipay.aipay.agent.payment.verify` (**production gateway** openapi.alipay.com) verified → skill executes → `alipay.aipay.agent.fulfillment.confirm` → resource delivered with 200 (tradeNo `20260531008281180847110000015839`)
+- [x] Real-device testing exposed and fixed 4 bugs: (1) `check-wallet` exits 0 with `{code:500}` when the wallet is not set up (cannot rely on exit code); (2) `payment-intent` requires `-i/--intent-summary`; (3) passthrough subcommands' real names are `apply-wallet`/`bind-wallet`; (4) `parseStatus` mistook the `success` key of `{"success":false}` for paid (UNPAID false positive)
+- [x] **Key environment finding**: the buyer uses a **production** AI Pay wallet, so the seller must configure the **production gateway** `openapi.alipay.com` (the sandbox alipaydev.com already 502s and the environments do not interoperate)
+- alipay-bot install: `npx -y @alipay/agent-payment install-cli` (installs alipay-bot-cli ≥0.3.15 into `~/.local/bin`)
+- ⏭️ Archive screen recording into `~/moltspay-qa-notes/` (QA record, pending)
 
 ---
 
-## §3 里程碑 3：1.7.0 GA（MCP + 文档）
+## §3 Milestone 3: 1.7.0 GA (MCP + docs)
 
-**预估**：0.5 周
-**退出标准**：sr007.com 联调 **3 单**生产，全部 fulfillment.confirm 成功
+**Estimate**: 0.5 week
+**Exit criteria**: **3 production orders** end-to-end with sr007.com, all fulfillment.confirm successful
 
-### 新增文件
+### New files
 
-- [ ] `src/mcp/tools/alipay.ts` — MCP tool 注册
+- [ ] `src/mcp/tools/alipay.ts` — MCP tool registration
   - [ ] `alipay_check_wallet`
-  - [ ] `alipay_pay_402(url, intent_summary)` — 8 步完整跑完
-  - ~~`alipay_pay_cashier`~~ —— 按决策 4，移到 §5 1.7.1
-- [x] `docs/ALIPAY-RAIL.md` —— 用户视角接入指南（按决策 5，2026-05-29 v1 草稿落地）
+  - [ ] `alipay_pay_402(url, intent_summary)` — runs all 8 steps to completion
+  - ~~`alipay_pay_cashier`~~ — per Decision 4, moved to §5 1.7.1
+- [x] `docs/ALIPAY-RAIL.md` — user-facing onboarding guide (per Decision 5, v1 draft landed 2026-05-29)
 
-### 文档
+### Documentation
 
-- [x] `docs/ALIPAY-RAIL.md` 内容覆盖：商户入驻前置、`provider.alipay` 配置、`services[].alipay` 配置、`moltspay pay --rail alipay` 用法、错误码表（7 个 `ALIPAY_*` code）、常见坑（amount 元/分、service_id 前缀、签名 8 字段）+ 端到端示例 + x402 对比
-- [x] README 加 callout 行，链接到 `docs/ALIPAY-RAIL.md`（Features 列表，1 行紧凑形式）
-- [ ] CHANGELOG（GitHub Release notes，CHANGELOG.md 仍 gitignore）
-  - [ ] Known Limitations：浏览器**写死不支持** alipay（不是"未测试"）
-  - [ ] Known Limitations：仅中国大陆商户（需 ICP + 营业执照）
-  - [ ] Known Limitations：收银台模式覆盖度（按决策 4 写）
+- [x] `docs/ALIPAY-RAIL.md` covers: merchant onboarding prerequisites, `provider.alipay` config, `services[].alipay` config, `moltspay pay --rail alipay` usage, error code table (7 `ALIPAY_*` codes), common pitfalls (amount yuan vs fen (分), service_id prefix, 8-field signature) + end-to-end example + x402 comparison
+- [x] README gains a callout line linking to `docs/ALIPAY-RAIL.md` (Features list, 1-line compact form)
+- [ ] CHANGELOG (GitHub Release notes; CHANGELOG.md remains gitignored)
+  - [ ] Known Limitations: browser support for alipay is **hard-coded unsupported** (not "untested")
+  - [ ] Known Limitations: mainland-China merchants only (requires ICP + business license)
+  - [ ] Known Limitations: cashier-mode coverage (worded per Decision 4)
 
-### 生产验收
+### Production acceptance
 
-- [ ] sr007.com 1 单 1 CNY，fulfillment.confirm `code: 10000`
-- [ ] sr007.com 1 单 ≥10 CNY，fulfillment.confirm `code: 10000`
-- [ ] sr007.com POST 请求 1 单（验证 `-m POST -d` 路径），fulfillment.confirm `code: 10000`
+- [ ] sr007.com 1 order at 1 CNY, fulfillment.confirm `code: 10000`
+- [ ] sr007.com 1 order at ≥10 CNY, fulfillment.confirm `code: 10000`
+- [ ] sr007.com 1 POST-request order (validates the `-m POST -d` path), fulfillment.confirm `code: 10000`
 
 ---
 
-## §4 横切验收（任何 milestone 完成都不放过）
+## §4 Cross-cutting acceptance (never skipped at any milestone completion)
 
-### 兼容性 checklist（design doc §十）
+### Compatibility checklist (design doc §10)
 
-- [ ] `Payment-Needed` 是 **Base64URL**（不是标准 Base64）
-- [ ] 嵌套 `{protocol: {...}, method: {...}}` 结构
-- [ ] `amount` 单位是**元**的字符串（`"1.00"`），不是分
-- [ ] 签名仅覆盖 8 字段，字典序拼接，不含 `protocol` / `method` 自身
-- [ ] `pay_before` ISO 8601 +30 分钟
-- [ ] `Access-Control-Expose-Headers` 浏览器 CORS 暴露 `Payment-Needed` 和 `Payment-Proof`（即便 1.7.0 不让浏览器付 alipay，header 也得暴露给读 challenge 的页面）
-- [ ] `Payment-Proof` 解码前自动补齐 base64 padding
-- [ ] verify 时传 `client_session`（从 `method.client_session` 取）
-- [ ] 履约确认 `alipay.aipay.agent.fulfillment.confirm` 在资源返回后**异步**调用，**不阻塞**用户拿资源
+- [ ] `Payment-Needed` is **Base64URL** (not standard Base64)
+- [ ] Nested `{protocol: {...}, method: {...}}` structure
+- [ ] `amount` is a string denominated in **yuan** (`"1.00"`), not fen
+- [ ] Signature covers only the 8 fields, concatenated in dictionary order, excluding `protocol` / `method` themselves
+- [ ] `pay_before` ISO 8601 +30 minutes
+- [ ] `Access-Control-Expose-Headers` exposes `Payment-Needed` and `Payment-Proof` for browser CORS (even though 1.7.0 does not let browsers pay via alipay, the headers must still be exposed to pages that read the challenge)
+- [ ] `Payment-Proof` base64 padding auto-completed before decoding
+- [ ] `client_session` passed at verify time (taken from `method.client_session`)
+- [ ] Fulfillment confirmation `alipay.aipay.agent.fulfillment.confirm` is called **asynchronously** after the resource is returned, **never blocking** the user from receiving the resource
 
-### 风险登记（design doc §七，监控直到 1.7.0 GA）
+### Risk register (design doc §7, monitored until 1.7.0 GA)
 
-| 风险 | 级别 | 缓解状态 |
+| Risk | Level | Mitigation status |
 |---|---|---|
-| 商户资质门槛（中国 ICP + 营业执照） | 高 | [ ] 文档明确 + CLI 检测 `provider.alipay` 缺失跳过 |
-| `alipay-bot` CLI 升级 break wrapper | 中 | [ ] `ensureCli()` 锁 ≥ 0.3.15；major 锁定，minor 接受 |
-| 私钥泄漏（RSA2 商户私钥） | 高 | [ ] 文件路径配置，禁止内联；日志脱敏；schema lint 禁 `BEGIN RSA PRIVATE KEY` |
-| amount 单位（元 vs 分） | 中 | [ ] 强类型 `priceCny: string` + 正则校验 |
-| 履约失败退款语义 | 中 | [ ] fulfillment.confirm 失败不当作成功 |
-| Payment-Proof base64 padding | 低 | [ ] 单测覆盖 |
-| 现有 `alipay-bot` 用户被破坏 | 高 | [ ] 双发 header；老 1.0.9 skill 回归通过 |
+| Merchant qualification threshold (China ICP + business license) | High | [ ] Explicit in docs + CLI detects missing `provider.alipay` and skips |
+| `alipay-bot` CLI upgrade breaks the wrapper | Medium | [ ] `ensureCli()` pins ≥ 0.3.15; major locked, minor accepted |
+| Private key leakage (RSA2 merchant private key) | High | [ ] File-path config, inline forbidden; log redaction; schema lint bans `BEGIN RSA PRIVATE KEY` |
+| amount unit (yuan vs fen) | Medium | [ ] Strong typing `priceCny: string` + regex validation |
+| Refund semantics on fulfillment failure | Medium | [ ] fulfillment.confirm failure is not treated as success |
+| Payment-Proof base64 padding | Low | [ ] Unit test coverage |
+| Existing `alipay-bot` users broken | High | [ ] Dual-emitted headers; legacy 1.0.9 skill regression passes |
 
 ---
 
-## §5 1.7.0 之后（参考，不在本期 scope）
+## §5 After 1.7.0 (reference, out of scope for this cycle)
 
-- **1.7.1**（按决策 4 落定的范围）：
-  - `alipay_pay_cashier(cashier_url, intent_summary)` MCP tool（直透 `alipay-bot submit-payment`）
-  - `moltspay alipay pay-cashier <url>` CLI 子命令
-  - `apply` / `bind` / `check` 兜底回调（钱包未开通时的引导流）
-- **1.8.0**：TS 原生客户端（去 `alipay-bot` 依赖），浏览器收银台 URL 回退；触发条件 = 1.7.x 真实用量数据
-- **1.8.x / 之后**：MoltsPay 自有沙箱商户入驻（决策 1 推迟项），降低对 sr007.com 的耦合
+- **1.7.1** (scope settled per Decision 4):
+  - `alipay_pay_cashier(cashier_url, intent_summary)` MCP tool (passthrough to `alipay-bot submit-payment`)
+  - `moltspay alipay pay-cashier <url>` CLI subcommand
+  - `apply` / `bind` / `check` fallback callbacks (guided flow when the wallet is not yet set up)
+- **1.8.0**: native TS client (drop the `alipay-bot` dependency), browser cashier-URL fallback; trigger condition = real 1.7.x usage data
+- **1.8.x / later**: MoltsPay-owned sandbox merchant onboarding (deferred item from Decision 1), reducing coupling to sr007.com
 
 ---
 
-## 附：自检入口
+## Appendix: self-check entry point
 
-任一时刻，回到这份文档，检查：
+At any moment, return to this document and check:
 
-1. §0 五个决策是否都解了？没解就不许碰 §1
-2. §1 / §2 / §3 当前 milestone 的全部 checkbox 是否都打了勾？没打满不许进下一个 milestone
-3. §4 兼容性 checklist 是否每个 milestone 重跑一次？因为任何 server 改动都可能破坏 1.6.0 老客户端兼容
-4. §4 风险登记中"高"级项是否都有缓解措施已落地？未落地不许发 latest tag
+1. Are all five §0 decisions resolved? If not, §1 must not be touched
+2. Are all checkboxes of the current §1 / §2 / §3 milestone ticked? Do not advance to the next milestone until they all are
+3. Is the §4 compatibility checklist re-run at every milestone? Because any server change may break 1.6.0 legacy client compatibility
+4. Do all "High" items in the §4 risk register have mitigations landed? No latest tag may ship until they do
 
-*本文档随 1.7.0 实现推进同步更新。每个 PR merge 后回来打 checkbox。1.7.0 GA 时归档为 v1 final。*
+*This document is updated in lockstep with the 1.7.0 implementation. Come back and tick checkboxes after each PR merge. Archived as v1 final at 1.7.0 GA.*

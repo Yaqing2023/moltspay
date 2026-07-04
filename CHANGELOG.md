@@ -1,5 +1,31 @@
 # Changelog
 
+## [2.2.0] - Unreleased
+
+Third payment mode: a **custodial balance rail (password-free payments / 免密支付)**, alongside per-transaction crypto signing and the Alipay/WeChat scan-to-pay fiat rails. A buyer tops up once and subsequent purchases are deducted server-side — no signature, no QR, no password per transaction.
+
+**No breaking changes.** Every existing rail behaves identically; the balance rail is strictly opt-in via configuration. Enabling it requires **Node.js >= 22.5** (the ledger uses the built-in `node:sqlite` — zero new dependencies); servers that don't enable it keep the package's `node >= 18` floor.
+
+### Added
+- **Custodial balance rail** — a new `BalanceFacilitator` (scheme/network `balance`) backed by a SQLite ledger (`src/facilitators/balance/ledger.ts`).
+  - Amounts are integer cents; check-and-deduct runs in a single `BEGIN IMMEDIATE` transaction, so a balance can never go negative under concurrency.
+  - Triple idempotency, each enforced by a unique index: deducts replay on the client's `request_id`, top-ups replay on the external settlement reference (`tx_hash` / trade number), refunds replay per deduct. No retry path can double-charge, double-credit, or double-refund.
+  - Server-side hard limits per buyer: per-transaction (default `5.00`) and daily (default `10.00`), configurable.
+  - `createPaymentRequirements` is **pure** — a 402 challenge mints nothing, so the order-per-challenge class of bug is structurally impossible on this rail.
+- **HTTP server integration** — opt-in via `provider.balance` (`db_path`, optional `currency` / `single_limit` / `daily_limit`) and per-service `services[].balance` (`price`, defaults to the service's USD price). 402 responses append a `balance` `accepts[]` entry.
+  - `/execute` dispatch order is **inverted** relative to the QR rails: atomic deduct **before** the skill runs, automatic refund if the skill fails. (QR rails: verify paid → run → confirm.)
+  - Balance management endpoints: `GET /balance`, `POST /balance/topup`, `POST /balance/refund`, `GET /balance/transactions`.
+- **Top-ups reuse the existing rails** — `POST /balance/topup` verifies the reported settlement per rail and credits the ledger: `crypto` verifies the `tx_hash` on-chain (receipt + USDC/USDT transfer to the provider wallet + amount); `wechat` queries the order by `out_trade_no` (must be `SUCCESS`); `alipay` is operator-trusted in this MVP (AI-Pay verification requires the buyer-side `payment_proof`) — protect the endpoint accordingly. All rails are idempotent on the external reference.
+- **Buyer identity** — an opaque `buyer_id` with bearer semantics, carried in the X-Payment payload together with a client-generated `request_id` UUID. Channel runtimes map their own session ids to `buyer_id` at the application layer.
+- **SDK client APIs** — `pay(..., { rail: 'balance', buyerId })`, `getBuyerBalance()`, `topupBalance()`, `listBalanceTransactions()`, `setBuyerId()` (persisted in `config.json`). No EVM wallet required.
+- **CLI** — `moltspay balance query|topup|transactions|set-buyer` and `moltspay pay --rail balance`.
+- **Docs** — `docs/BALANCE-RAIL-DESIGN.md` (design + SDK integration).
+
+### Migration from 2.1.0
+1. No code changes required — fully backward compatible.
+2. Optional: add `provider.balance` + `services[].balance` to your services JSON to enable password-free payments (requires Node >= 22.5 on the server).
+3. Buyers top up once (`moltspay balance topup`), then pay with `moltspay pay --rail balance` — no per-transaction signing or scanning.
+
 ## [2.1.0] - 2026-06-27
 
 Second **fiat rail: WeChat Pay v3 Native (微信支付 / 扫码付)**, settling in CNY alongside USDC and Alipay.

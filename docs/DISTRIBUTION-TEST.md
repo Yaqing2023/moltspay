@@ -1,142 +1,142 @@
-# 分发测试流程（未发布到 npmjs 的测试版）
+# Distribution Test Procedure (pre-release builds not yet published to npmjs)
 
-在把 `moltspay` 发布到 npmjs **之前**，如何把测试版分发到其它机器并验证安装。
-开发仓库里跑 `npm test` **验证不了分发行为**——postinstall 自动 provision、`files` 白名单、tarball 内容只在「打包 → 干净环境安装」时才生效，所以必须走 pack → 传输 → clean install 这条路。
+How to distribute a test build of `moltspay` to other machines and verify installation **before** publishing to npmjs.
+Running `npm test` in the dev repo **cannot validate distribution behavior** — the postinstall auto-provision, the `files` allowlist, and the tarball contents only take effect on a "pack → clean-environment install" path, so you must go pack → transfer → clean install.
 
-适用版本：`moltspay@1.7.0`（分支 `feature/alipay`）。
+Applicable version: `moltspay@1.7.0` (branch `feature/alipay`).
 
 ---
 
-## 总览
+## Overview
 
 ```
-开发机                                    目标机（如 openclaw 部署）
+Dev machine                               Target machine (e.g. openclaw deploy)
 ┌──────────────────────┐                 ┌──────────────────────────┐
 │ npm run build        │                 │ npm install <tgz>        │
 │ npm pack  ─► .tgz    │ ── scp/rsync ─► │  └ postinstall:          │
-│ (校验 tarball 内容)  │                 │     provision alipay-bot │
-└──────────────────────┘                 │ 烟测 / 真实链路           │
+│ (verify tarball)     │                 │     provision alipay-bot │
+└──────────────────────┘                 │ smoke test / real path   │
                                          └──────────────────────────┘
 ```
 
 ---
 
-## 1. 构建 + 打包
+## 1. Build + pack
 
 ```bash
 cd ~/clawd/projects/payment-agent
-npm run build          # tsup；prebuild 会先 rm -rf dist
-npm pack               # 产出 moltspay-<version>.tgz，遵守 package.json 的 files 白名单
+npm run build          # tsup; prebuild runs rm -rf dist first
+npm pack               # produces moltspay-<version>.tgz, honoring the files allowlist in package.json
 ```
 
-> `npm pack` **不会**跑 `prepublishOnly`（typecheck + build + verify:web）——那只在 `npm publish` 时触发。
-> 要完整模拟发布，先手动：`npm run typecheck && npm run verify:web`。
+> `npm pack` does **not** run `prepublishOnly` (typecheck + build + verify:web) — that only triggers on `npm publish`.
+> To fully simulate a release, run manually first: `npm run typecheck && npm run verify:web`.
 
-**核对 tarball 内容**（关键产物必须在）：
+**Verify the tarball contents** (key artifacts must be present):
 
 ```bash
 npm pack --dry-run 2>&1 | grep -iE "postinstall|dist/|schemas|README|LICENSE|total files"
 ```
 
-期望包含：`scripts/postinstall.js`、`dist/`、`schemas/`、`.env.example`、`README.md`、`LICENSE`
-（1.7.0 实测：77 个文件 / 包体 ~1.4MB / 解包 ~5.9MB）。
-`scripts/postinstall.js` 必须在列——这是 `d99e760` 修复保证的，缺了就没有自动 provision。
+Expected to include: `scripts/postinstall.js`, `dist/`, `schemas/`, `.env.example`, `README.md`, `LICENSE`
+(1.7.0 measured: 77 files / package ~1.4MB / unpacked ~5.9MB).
+`scripts/postinstall.js` must be on the list — this is what the `d99e760` fix guarantees; without it there is no auto-provision.
 
 ---
 
-## 2. 分发到目标机
+## 2. Distribute to the target machine
 
-打包产物等价于 `npm publish` 上传的内容，所以直接传 `.tgz` 即可：
+The pack artifact is equivalent to what `npm publish` uploads, so just transfer the `.tgz`:
 
 ```bash
 # scp
 scp -i ~/.ssh/<key>.pem moltspay-1.7.0.tgz <user>@<host>:~/moltspay/
 
-# 或 rsync（带校验、增量）
+# or rsync (checksummed, incremental)
 rsync -avh -e "ssh -i ~/.ssh/<key>.pem" \
   moltspay-1.7.0.tgz <user>@<host>:~/moltspay/
 ```
 
-传完**核对完整性**（两端 sha1 应一致）：
+After transfer, **verify integrity** (sha1 should match on both ends):
 
 ```bash
-# 本机
+# local machine
 sha1sum moltspay-1.7.0.tgz
-# 目标机
+# target machine
 ssh -i ~/.ssh/<key>.pem <user>@<host> "sha1sum ~/moltspay/moltspay-1.7.0.tgz"
 ```
 
-> 已验证的一次：`ubuntu@ec2-44-220-151-119.compute-1.amazonaws.com`（pem `~/.ssh/zen7.pem`），
-> 两端 sha1 = `02d95f2dc8e92cbbe73e069487e0c422ca2edc35`。
-> 注意 EC2 用户名：该机是 `ubuntu`（非 `ec2-user`）；pem 权限须 `chmod 600`，否则 SSH 拒绝。
+> One verified run: `ubuntu@ec2-44-220-151-119.compute-1.amazonaws.com` (pem `~/.ssh/zen7.pem`),
+> sha1 on both ends = `02d95f2dc8e92cbbe73e069487e0c422ca2edc35`.
+> Note the EC2 username: this machine is `ubuntu` (not `ec2-user`); the pem must be `chmod 600` or SSH refuses.
 
-**其它分发方式**（按场景）：
-- **Git 安装** `npm i git+https://…#feature/alipay`——⚠️ 当前仓库**无 `prepare` 脚本**且 `dist/` 未进 git，装上拿不到构建产物，**不可用**（除非先加 `prepare`）。另外 `origin` remote 内嵌明文 PAT，勿在命令里带。
-- **私有 registry（Verdaccio）** `npx verdaccio` → `npm publish --registry http://host:4873` → 目标机 `npm i moltspay --registry …`。适合多机/CI 反复拉取、需要测 `moltspay@version` 版本解析时。一次性测试不必。
-- **npm link** 只能同机本地软链，跨机不可用。
+**Other distribution methods** (by scenario):
+- **Git install** `npm i git+https://…#feature/alipay` — ⚠️ the repo currently has **no `prepare` script** and `dist/` is not in git, so an install gets no build artifacts; **unusable** (unless `prepare` is added first). Also, the `origin` remote embeds a plaintext PAT; never include it in commands.
+- **Private registry (Verdaccio)** `npx verdaccio` → `npm publish --registry http://host:4873` → on the target `npm i moltspay --registry …`. Suited to multi-machine/CI repeated pulls, or when you need to test `moltspay@version` version resolution. Unnecessary for a one-off test.
+- **npm link** is a local same-machine symlink only; unusable across machines.
 
 ---
 
-## 3. 在目标机安装并验证 postinstall
+## 3. Install on the target machine and verify postinstall
 
-干净目录里装 tarball：
+Install the tarball in a clean directory:
 
 ```bash
 mkdir ~/molt-test && cd ~/molt-test && npm init -y
 npm install ~/moltspay/moltspay-1.7.0.tgz
 ```
 
-（全局安装见 [`../INSTALL-OPENCLAW.md`](../INSTALL-OPENCLAW.md)——npm prefix 为 `/usr/local` 时需 `sudo`。）
+(For global install see [`../INSTALL-OPENCLAW.md`](../INSTALL-OPENCLAW.md) — `sudo` required when the npm prefix is `/usr/local`.)
 
-**postinstall 三条路径都要验**：
+**All three postinstall paths must be verified**:
 
-| 场景 | 命令 | 期望 |
+| Scenario | Command | Expected |
 |---|---|---|
-| 在线正常 | `npm install <tgz>` | 打 banner → 从 `*.alipay.com` CDN 装 alipay-bot → 「安装完成」 |
-| 离线 / CDN 不可达 | （断网下）`npm install <tgz>` | **不阻塞** `npm install`，仅打印手动命令 `npx -y @alipay/agent-payment install-cli` |
-| 主动跳过 | `MOLTSPAY_SKIP_CLI_INSTALL=1 npm install <tgz>` | 跳过自动安装，提示手动命令（CI/sandbox 用） |
+| Online, normal | `npm install <tgz>` | Prints banner → installs alipay-bot from the `*.alipay.com` CDN → "安装完成" (install complete) |
+| Offline / CDN unreachable | (with network down) `npm install <tgz>` | Does **not block** `npm install`; only prints the manual command `npx -y @alipay/agent-payment install-cli` |
+| Explicit skip | `MOLTSPAY_SKIP_CLI_INSTALL=1 npm install <tgz>` | Skips auto-install, prompts the manual command (for CI/sandbox) |
 
-> alipay-bot（`0.3.x`）不在 npm、license `UNLICENSED`，由支付宝 CDN 分发；进 package.json 的只有安装器 `@alipay/agent-payment`（Puppeteer 下 Chromium 同款模型：安装时下载、绝不再分发）。
+> alipay-bot (`0.3.x`) is not on npm, license `UNLICENSED`, distributed via the Alipay CDN; the only thing that goes into package.json is the installer `@alipay/agent-payment` (same model as Chromium under Puppeteer: downloaded at install time, never redistributed).
 
 ---
 
-## 4. 烟测（不花真钱）
+## 4. Smoke test (no real money)
 
 ```bash
-node -e "require('moltspay'); console.log('require ok')"   # 入口可用
+node -e "require('moltspay'); console.log('require ok')"   # entry point usable
 npx moltspay --help
-npx moltspay --version                                     # 期望 1.7.0
+npx moltspay --version                                     # expect 1.7.0
 ```
 
-Alipay 轨还需 `alipay-bot` 在 PATH（通常 `~/.local/bin`，不在默认 PATH）：
+The Alipay rail additionally needs `alipay-bot` on the PATH (usually `~/.local/bin`, not on the default PATH):
 
 ```bash
 export PATH=$HOME/.local/bin:$PATH
-alipay-bot --version        # 期望 0.3.x
+alipay-bot --version        # expect 0.3.x
 ```
 
-**支付逻辑离线验证**（开发机仓库内，无网络、无扣款）：
+**Offline verification of payment logic** (inside the dev repo, no network, no charges):
 
 ```bash
-npm run verify:alipay:offline   # 离线 E2E：密钥/签名/验签
+npm run verify:alipay:offline   # offline E2E: keys/signing/signature verification
 npm run verify:alipay:http      # HTTP 402 dual-emit
 ```
 
-### 线上测试端点
+### Live test endpoint
 
-线上参考 provider（实际在用，**非** README 示例域名 `moltspay.com/a/zen7`）：
+Live reference provider (actually in use, **not** the README example domain `moltspay.com/a/zen7`):
 
 ```
 https://juai8.com/zen7
 ```
 
-不花钱先确认服务在线（应返回 `status: healthy`，`facilitators.alipay.healthy=true`）：
+Confirm the service is up without spending (should return `status: healthy`, `facilitators.alipay.healthy=true`):
 
 ```bash
-curl -s https://juai8.com/zen7/health | jq .   # 5 条轨 cdp/tempo/bnb/solana/alipay 均 healthy
+curl -s https://juai8.com/zen7/health | jq .   # all 5 rails cdp/tempo/bnb/solana/alipay healthy
 ```
 
-打到 Alipay 轨（真实小额扣款，确认配置无误后再执行）：
+Hit the Alipay rail (real small-amount charge; run only after confirming the config is correct):
 
 ```bash
 PATH=$HOME/.local/bin:$PATH \
@@ -144,38 +144,38 @@ PATH=$HOME/.local/bin:$PATH \
   --prompt "a happy cat" --config-dir ~/.moltspay
 ```
 
-> 网络 Base mainnet（`eip155:8453`）；`/execute` 从 body 读 `service`/`prompt`，缺参返回 `400`。
+> Network is Base mainnet (`eip155:8453`); `/execute` reads `service`/`prompt` from the body and returns `400` when parameters are missing.
 
-真实 `/pay` 链路会真扣款，仅在配置确认无误后执行。计时日志（排查延迟）须**内联**设 `MOLTSPAY_ALIPAY_LOG=debug`（放 `~/.moltspay/.env` 无效，因为模块加载早于读 env）。
-
----
-
-## 5. 架构注意 / 已知问题
-
-- **linux-arm64（aarch64）无 AgentPayGuard 预编译件**：Alipay 原生风控插件 `apguard`/`blueshield` 随包只带 `linux-x64` / `darwin-arm64` / `darwin-x64` / `win32-x64` 四个平台，**`linux-arm64` 缺失**（x64 本机实测确认）。所以在 aarch64 目标机上 AgentPayGuard **init 必失败**（`AGENT_PAY_GUARD_INIT_FAILED`，非致命，**支付仍成功**），但每次冷调用都向 `~/.alipay-bot-cli/monitor-queue/` 写 `code:"999"` 失败遥测且从不上传（曾见 86k 文件 / 346MB）。可安全清理 `rm -rf ~/.alipay-bot-cli/monitor-queue/*`，建议加 TTL/cron。长期解法需支付宝补 linux-arm64 预编译件。
-  > ⚠️ **分发测试关键**：本机 x64 装测正常 ≠ ARM 目标机正常——AgentPayGuard 这条只在 linux-arm64 上暴露，务必在真实 aarch64 机器上验。
-- **sudo 全局安装**可能把 alipay-bot 装进 root 家目录，导致以普通用户运行的服务找不到 CLI。建议拆成「全局装 SDK」+「以运行用户单独 `npx -y @alipay/agent-payment install-cli`」两步。
-- 出网防火墙只需放行 `*.alipay.com`（含 CDN）。
+The real `/pay` path charges real money; run only after the config is confirmed correct. Timing logs (for latency troubleshooting) must be set **inline** as `MOLTSPAY_ALIPAY_LOG=debug` (putting it in `~/.moltspay/.env` has no effect, because module loading happens before env is read).
 
 ---
 
-## 6. 升级 / 重新分发
+## 5. Architecture notes / known issues
+
+- **No AgentPayGuard prebuilt binaries for linux-arm64 (aarch64)**: the Alipay native risk-control plugins `apguard`/`blueshield` ship only four platforms — `linux-x64` / `darwin-arm64` / `darwin-x64` / `win32-x64` — **`linux-arm64` is missing** (confirmed empirically on an x64 machine). So on an aarch64 target AgentPayGuard **init always fails** (`AGENT_PAY_GUARD_INIT_FAILED`, non-fatal, **payment still succeeds**), but every cold invocation writes `code:"999"` failure telemetry into `~/.alipay-bot-cli/monitor-queue/` that is never uploaded (86k files / 346MB observed once). Safe to clean with `rm -rf ~/.alipay-bot-cli/monitor-queue/*`; a TTL/cron is recommended. The long-term fix requires Alipay to ship a linux-arm64 prebuilt.
+  > ⚠️ **Critical for distribution testing**: a clean install-and-test on a local x64 machine ≠ a working ARM target — the AgentPayGuard issue only surfaces on linux-arm64, so be sure to verify on a real aarch64 machine.
+- **A sudo global install** may put alipay-bot into root's home directory, so a service running as a regular user cannot find the CLI. Recommended to split into two steps: "install the SDK globally" + "run `npx -y @alipay/agent-payment install-cli` separately as the runtime user".
+- The egress firewall only needs to allow `*.alipay.com` (incl. the CDN).
+
+---
+
+## 6. Upgrade / redistribute
 
 ```bash
-# 开发机：改版本号后重新打包
+# dev machine: repack after bumping the version
 npm run build && npm pack
 
-# 同步覆盖目标机
+# sync-overwrite the target machine
 rsync -avh -e "ssh -i ~/.ssh/<key>.pem" moltspay-<ver>.tgz <user>@<host>:~/moltspay/
 
-# 目标机：重装 + 重启消费方（openclaw / bot）
+# target machine: reinstall + restart consumers (openclaw / bot)
 npm install ~/moltspay/moltspay-<ver>.tgz
 ```
 
 ---
 
-## 相关文档
+## Related docs
 
-- [`../INSTALL-OPENCLAW.md`](../INSTALL-OPENCLAW.md) — openclaw 部署机的完整安装步骤
-- [`ALIPAY-RAIL.md`](./ALIPAY-RAIL.md) — Alipay 支付轨 / alipay-bot 依赖与许可模型
-- [`../CHANGELOG.md`](../CHANGELOG.md) — 2.0.0 发布说明（配置示例与测试脚本）
+- [`../INSTALL-OPENCLAW.md`](../INSTALL-OPENCLAW.md) — full install steps for the openclaw deployment machine
+- [`ALIPAY-RAIL.md`](./ALIPAY-RAIL.md) — the Alipay payment rail / alipay-bot dependency and license model
+- [`../CHANGELOG.md`](../CHANGELOG.md) — 2.0.0 release notes (config examples and test scripts)
