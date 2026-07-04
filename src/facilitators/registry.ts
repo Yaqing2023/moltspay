@@ -20,6 +20,7 @@ import { BNBFacilitator } from './bnb.js';
 import { SolanaFacilitator, SolanaFacilitatorConfig } from './solana.js';
 import { AlipayFacilitator, AlipayFacilitatorConfig } from './alipay.js';
 import { WechatFacilitator, WechatFacilitatorConfig } from './wechat.js';
+import { BalanceFacilitator, BalanceFacilitatorConfig } from './balance.js';
 import { Keypair } from '@solana/web3.js';
 import bs58 from 'bs58';
 
@@ -85,8 +86,9 @@ export class FacilitatorRegistry {
     });
     this.registerFactory('alipay', (config) => new AlipayFacilitator(config as unknown as AlipayFacilitatorConfig));
     this.registerFactory('wechat', (config) => new WechatFacilitator(config as unknown as WechatFacilitatorConfig));
+    this.registerFactory('balance', (config) => new BalanceFacilitator(config as unknown as BalanceFacilitatorConfig));
 
-    // Default selection — alipay/wechat are opt-in (require provider config), kept out of fallback list
+    // Default selection — alipay/wechat/balance are opt-in (require provider config), kept out of fallback list
     this.selection = selection || { primary: 'cdp', fallback: ['tempo', 'bnb', 'solana'], strategy: 'failover' };
   }
   

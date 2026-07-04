@@ -85,6 +85,25 @@ export {
   WECHAT_AMOUNT_REGEX,
 } from './wechat.js';
 
+// Custodial Balance Facilitator (password-free rail, 2.2.0)
+export {
+  BalanceFacilitator,
+  BalanceFacilitatorConfig,
+  BalancePaymentPayload,
+  extractBalancePayload,
+  BALANCE_NETWORK,
+  BALANCE_SCHEME,
+  toSat,
+  fromSat,
+} from './balance.js';
+export {
+  BalanceLedger,
+  BuyerRow,
+  LedgerTxRow,
+  DeductResult,
+  RefundResult,
+} from './balance/ledger.js';
+
 // Registry
 export {
   FacilitatorRegistry,

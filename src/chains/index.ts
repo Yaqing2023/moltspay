@@ -292,6 +292,46 @@ export function isWechatChainId(id: string): id is typeof WECHAT_CHAIN_ID {
   return id === WECHAT_CHAIN_ID;
 }
 
+// ============ Custodial Balance Rail (2.2.0+) ============
+
+/**
+ * Chain-id string for the custodial balance ("password-free" / 免密支付) rail.
+ * Used in `provider.chains: ["balance", ...]` to opt the provider into
+ * deducting from server-custodied buyer balances instead of a per-transaction
+ * signature or scan-to-pay.
+ */
+export const BALANCE_CHAIN_ID = 'balance' as const;
+
+/**
+ * Rail metadata for the custodial balance rail (2.2.0+).
+ *
+ * Like {@link ALIPAY_RAIL} / {@link WECHAT_RAIL}, kept outside the EVM-only
+ * {@link CHAINS} Record; the ledger is local SQLite, so there is no rpc /
+ * tokens / chainId. Server dispatch detects it via {@link isBalanceChainId}.
+ */
+export const BALANCE_RAIL = {
+  /** Chain-id string used in user manifests + routing. */
+  id: BALANCE_CHAIN_ID,
+  /** Rail family — a server-side ledger, neither 'evm' | 'svm' nor a fiat gateway. */
+  type: 'balance-rail' as const,
+  /** Quote currency of the ledger. */
+  currency: 'USD' as const,
+  /** Decimal places for the `amount` field (dollars with up to 2 decimals). */
+  decimals: 2 as const,
+  /** x402 `scheme` string — matches `BALANCE_SCHEME` in src/facilitators/balance.ts. */
+  facilitator: 'balance' as const,
+} as const;
+
+/**
+ * Runtime type guard: is this chain-id string the custodial balance rail?
+ *
+ * Used by the server layer to route a payment to {@link BalanceFacilitator}
+ * instead of an EVM/SVM verifier or a fiat gateway.
+ */
+export function isBalanceChainId(id: string): id is typeof BALANCE_CHAIN_ID {
+  return id === BALANCE_CHAIN_ID;
+}
+
 /**
  * ERC20 ABI (minimal, only required methods)
  */
