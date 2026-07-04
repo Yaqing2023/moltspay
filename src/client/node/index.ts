@@ -12,6 +12,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, chmodSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
+import { randomUUID } from 'node:crypto';
 import { Wallet, ethers } from 'ethers';
 import { getChain, type ChainName, type EvmChainName, type TokenSymbol, type ChainConfig } from '../../chains/index.js';
 import { SOLANA_CHAINS, type SolanaChainName } from '../../chains/solana.js';
@@ -40,7 +41,7 @@ import { NodeSigner } from './signer.js';
 import { AlipayClient } from '../alipay/index.js';
 import { WechatClient, type WechatPaymentSession } from '../wechat/index.js';
 import { timeStep } from '../alipay/log.js';
-import { selectRail, ALIPAY_RAIL, WECHAT_RAIL } from '../alipay/router.js';
+import { selectRail, ALIPAY_RAIL, WECHAT_RAIL, BALANCE_RAIL } from '../alipay/router.js';
 
 export * from '../types.js';
 
@@ -59,6 +60,11 @@ export interface PayOptions {
    * alipay-bot-backed {@link AlipayClient} and needs no EVM wallet.
    */
   rail?: string;
+  /**
+   * Balance rail (2.2.0): buyer identity for password-free payment.
+   * Falls back to the persisted `config.buyerId`. Bearer semantics.
+   */
+  buyerId?: string;
   /** Alipay: surfaced once the payment URL + tradeNo are known. */
   onPaymentPending?: (info: { paymentUrl: string; shortenUrl?: string; tradeNo: string }) => void;
   /** Alipay: forward CLI output to the user verbatim (line by line). */
@@ -217,6 +223,12 @@ export class MoltsPayClient {
     // wallet check — the buyer scans a QR, no crypto wallet is needed.
     if (options.rail === WECHAT_RAIL) {
       return this.payViaWechat(serverUrl, service, params, options);
+    }
+
+    // Custodial balance rail (2.2.0): password-free, needs a buyer id but no
+    // EVM wallet — dispatch before the wallet check.
+    if (options.rail === BALANCE_RAIL) {
+      return this.payViaBalance(serverUrl, service, params, options);
     }
 
     if (!this.wallet || !this.walletData) {
@@ -615,6 +627,130 @@ export class MoltsPayClient {
     } catch {
       return { body: result.resultBody ?? '' };
     }
+  }
+
+  /** The buyer id for the balance rail: explicit option > persisted config. */
+  private resolveBuyerId(explicit?: string): string {
+    const buyerId = explicit ?? this.config.buyerId;
+    if (!buyerId) {
+      throw new Error(
+        'Balance rail needs a buyer id. Pass { buyerId } or persist one with setBuyerId().'
+      );
+    }
+    return buyerId;
+  }
+
+  /**
+   * Pay via the custodial balance rail (2.2.0, password-free / 免密支付).
+   *
+   * No wallet, no QR: the request carries `{buyer_id, request_id}` in the
+   * X-Payment payload and the server deducts the prepaid balance atomically
+   * before running the skill. The client-generated `request_id` makes the
+   * charge idempotent — a network retry can never double-deduct.
+   */
+  private async payViaBalance(
+    serverUrl: string,
+    service: string,
+    params: Record<string, any>,
+    options: PayOptions,
+  ): Promise<Record<string, any>> {
+    const buyerId = this.resolveBuyerId(options.buyerId);
+
+    // Discover the resource endpoint (same as the other rails).
+    let executeUrl = `${serverUrl}/execute`;
+    try {
+      const services = await this.getServices(serverUrl);
+      const svc = services.services?.find((s: any) => s.id === service);
+      if (svc?.endpoint) executeUrl = `${serverUrl}${svc.endpoint}`;
+    } catch {
+      // Fall back to /execute.
+    }
+
+    const requestBody: any = options.rawData ? { service, ...params } : { service, params };
+    const xPayment = Buffer.from(JSON.stringify({
+      x402Version: 2,
+      scheme: BALANCE_RAIL,
+      network: BALANCE_RAIL,
+      payload: { buyer_id: buyerId, request_id: randomUUID() },
+    })).toString('base64');
+
+    const res = await fetch(executeUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Payment': xPayment },
+      body: JSON.stringify(requestBody),
+      signal: options.signal,
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || `Balance payment failed with HTTP ${res.status}`);
+    }
+    return data.result ?? data;
+  }
+
+  /** Persist the buyer id used by the balance rail (bearer semantics). */
+  setBuyerId(buyerId: string): void {
+    this.config.buyerId = buyerId;
+    this.saveConfig();
+  }
+
+  /** GET /balance — custodial balance, limits, and today's spend for a buyer. */
+  async getBuyerBalance(serverUrl: string, buyerId?: string): Promise<Record<string, any>> {
+    const id = this.resolveBuyerId(buyerId);
+    const res = await fetch(`${serverUrl}/balance?buyer_id=${encodeURIComponent(id)}`);
+    const data: any = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Balance query failed with HTTP ${res.status}`);
+    return data;
+  }
+
+  /**
+   * POST /balance/topup — report an externally settled payment (on-chain
+   * tx hash / Alipay trade_no / WeChat out_trade_no) so the server verifies
+   * and credits the ledger. Idempotent per reference.
+   */
+  async topupBalance(
+    serverUrl: string,
+    opts: {
+      rail: 'crypto' | 'alipay' | 'wechat';
+      amount: string;
+      buyerId?: string;
+      txHash?: string;
+      chain?: string;
+      tradeNo?: string;
+      outTradeNo?: string;
+    }
+  ): Promise<Record<string, any>> {
+    const id = this.resolveBuyerId(opts.buyerId);
+    const res = await fetch(`${serverUrl}/balance/topup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        buyer_id: id,
+        rail: opts.rail,
+        amount: opts.amount,
+        tx_hash: opts.txHash,
+        chain: opts.chain,
+        trade_no: opts.tradeNo,
+        out_trade_no: opts.outTradeNo,
+      }),
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Top-up failed with HTTP ${res.status}`);
+    return data;
+  }
+
+  /** GET /balance/transactions — ledger history for a buyer, newest first. */
+  async listBalanceTransactions(
+    serverUrl: string,
+    opts: { buyerId?: string; limit?: number; offset?: number } = {}
+  ): Promise<Record<string, any>> {
+    const id = this.resolveBuyerId(opts.buyerId);
+    const qs = new URLSearchParams({ buyer_id: id });
+    if (opts.limit) qs.set('limit', String(opts.limit));
+    if (opts.offset) qs.set('offset', String(opts.offset));
+    const res = await fetch(`${serverUrl}/balance/transactions?${qs}`);
+    const data: any = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Transaction query failed with HTTP ${res.status}`);
+    return data;
   }
 
   /**

@@ -17,6 +17,8 @@ import { UnsupportedRailError } from './errors.js';
 export const ALIPAY_RAIL = 'alipay';
 /** WeChat Pay Native fiat rail (2.1.0). Like Alipay, settled off-chain (CNY). */
 export const WECHAT_RAIL = 'wechat';
+/** Custodial balance rail (2.2.0). Password-free: server deducts a prepaid balance. */
+export const BALANCE_RAIL = 'balance';
 
 export interface RailAvailability {
   /** Caller has an EVM wallet able to pay (e.g. funded USDC). */
@@ -48,6 +50,7 @@ export interface RailSelection {
 export function railOf(req: X402PaymentRequirements): string {
   if (req.scheme === 'alipay-aipay' || req.network === ALIPAY_RAIL) return ALIPAY_RAIL;
   if (req.scheme === 'wechatpay-native' || req.network === WECHAT_RAIL) return WECHAT_RAIL;
+  if (req.scheme === BALANCE_RAIL || req.network === BALANCE_RAIL) return BALANCE_RAIL;
   return networkToChainName(req.network) ?? req.network;
 }
 

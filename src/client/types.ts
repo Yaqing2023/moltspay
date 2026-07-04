@@ -16,6 +16,12 @@ export interface ClientConfig {
    * accepts wins. e.g. `["base", "alipay"]`.
    */
   railPreference?: string[];
+  /**
+   * Buyer identity for the custodial balance rail (2.2.0). When set and the
+   * server's 402 offers `balance`, the client can pay password-free by
+   * carrying this id in the X-Payment payload. Treat it like a bearer token.
+   */
+  buyerId?: string;
 }
 
 // Wallet data (stored in ~/.moltspay/wallet.json)

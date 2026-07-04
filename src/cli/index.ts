@@ -1683,16 +1683,19 @@ program
   .option('--data <json>', 'Raw JSON data to send (for custom input formats)')
   .option('--token <token>', 'Token to pay with (USDC or USDT)', 'USDC')
   .option('--chain <chain>', 'Chain to pay on (base, polygon, base_sepolia, tempo_moderato, solana, or solana_devnet).')
-  .option('--rail <rail>', 'Payment rail: a chain name, "alipay" (CNY via alipay-bot), or "wechat" (CNY via WeChat Native, scan to pay)')
+  .option('--rail <rail>', 'Payment rail: a chain name, "alipay" (CNY via alipay-bot), "wechat" (CNY via WeChat Native, scan to pay), or "balance" (password-free, prepaid custodial balance)')
+  .option('--buyer <id>', 'Buyer id for --rail balance (defaults to the persisted one)')
   .option('--config-dir <dir>', 'Config directory with wallet.json', DEFAULT_CONFIG_DIR)
   .option('--json', 'Output raw JSON only')
   .action(async (server, service, paramsJson, options) => {
     const client = new MoltsPayClient({ configDir: options.configDir });
     const useAlipay = options.rail?.toLowerCase() === 'alipay';
     const useWechat = options.rail?.toLowerCase() === 'wechat';
+    const useBalance = options.rail?.toLowerCase() === 'balance';
 
-    // The fiat rails (Alipay/WeChat) are scan-to-pay and need no EVM wallet.
-    if (!useAlipay && !useWechat && !client.isInitialized) {
+    // The fiat rails (Alipay/WeChat) are scan-to-pay and the balance rail is
+    // prepaid — none of them need an EVM wallet.
+    if (!useAlipay && !useWechat && !useBalance && !client.isInitialized) {
       console.error('❌ Wallet not initialized. Run: npx moltspay init');
       process.exit(1);
     }
@@ -1755,7 +1758,7 @@ program
     const token = (options.token || 'USDC').toUpperCase();
 
     // USDT requires gas - check native balance (EVM rails only)
-    if (!useAlipay && !useWechat && token === 'USDT') {
+    if (!useAlipay && !useWechat && !useBalance && token === 'USDT') {
       const balance = await client.getBalance();
       if (balance.native < 0.0001) {
         console.log('\n⚠️  USDT requires a small amount of ETH for gas (~$0.01)');
@@ -1782,6 +1785,8 @@ program
         console.log(`   Rail: alipay (CNY via alipay-bot)`);
       } else if (useWechat) {
         console.log(`   Rail: wechat (CNY via WeChat Native, scan to pay)`);
+      } else if (useBalance) {
+        console.log(`   Rail: balance (password-free, prepaid custodial balance)`);
       } else {
         console.log(`   Chain: ${chain || '(auto)'}`);  // Will be determined by server
         console.log(`   Token: ${token}`);
@@ -1822,6 +1827,10 @@ program
             );
           }
         },
+      } : useBalance ? {
+        rail: 'balance',
+        rawData: useRawData,
+        buyerId: options.buyer,
       } : {
         token: token as 'USDC' | 'USDT',
         chain,
@@ -2042,6 +2051,127 @@ wechatCommand
       else console.error(`❌ Error: ${err.message}`);
       process.exit(1);
     }
+  });
+
+/**
+ * npx moltspay balance <query|topup|transactions|set-buyer>
+ *
+ * Custodial balance rail (2.2.0, password-free / 免密支付) management.
+ * After a one-time top-up, `pay --rail balance` charges the prepaid
+ * balance with no signature or QR per transaction.
+ */
+const balanceCommand = program
+  .command('balance')
+  .description('Manage the custodial balance rail (password-free payments)');
+
+balanceCommand
+  .command('query <server>')
+  .description('Show balance, limits, and today\'s spend')
+  .option('--buyer <id>', 'Buyer id (defaults to the persisted one)')
+  .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
+  .option('--json', 'Output raw JSON only')
+  .action(async (server, options) => {
+    try {
+      const client = new MoltsPayClient({ configDir: options.configDir });
+      const info = await client.getBuyerBalance(server, options.buyer);
+      if (options.json) {
+        console.log(JSON.stringify(info, null, 2));
+      } else {
+        console.log(`\n💰 Balance for ${info.buyer_id}\n`);
+        console.log(`   Balance:      ${info.balance} ${info.currency}`);
+        if (info.exists) {
+          console.log(`   Today spent:  ${info.today_spent}`);
+          console.log(`   Limits:       ${info.single_limit}/tx, ${info.daily_limit}/day`);
+          console.log(`   Status:       ${info.status}\n`);
+        } else {
+          console.log('   (no account yet — top up to create one)\n');
+        }
+      }
+    } catch (err: any) {
+      if (options.json) console.log(JSON.stringify({ error: err.message }));
+      else console.error(`❌ Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+balanceCommand
+  .command('topup <server> <amount>')
+  .description('Credit the balance from an externally settled payment')
+  .requiredOption('--rail <rail>', 'Settlement rail: crypto | alipay | wechat')
+  .option('--buyer <id>', 'Buyer id (defaults to the persisted one)')
+  .option('--tx-hash <hash>', 'On-chain tx hash (rail crypto)')
+  .option('--chain <chain>', 'Chain of the tx (rail crypto, default base)')
+  .option('--trade-no <no>', 'Alipay trade number (rail alipay)')
+  .option('--out-trade-no <no>', 'WeChat out_trade_no (rail wechat)')
+  .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
+  .option('--json', 'Output raw JSON only')
+  .action(async (server, amount, options) => {
+    try {
+      const client = new MoltsPayClient({ configDir: options.configDir });
+      const result = await client.topupBalance(server, {
+        rail: options.rail,
+        amount,
+        buyerId: options.buyer,
+        txHash: options.txHash,
+        chain: options.chain,
+        tradeNo: options.tradeNo,
+        outTradeNo: options.outTradeNo,
+      });
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else if (result.replayed) {
+        console.log(`\n✅ Already credited (replay). Balance: ${result.balance}\n`);
+      } else {
+        console.log(`\n✅ Topped up. Balance: ${result.balance} (tx ${result.tx_id})\n`);
+      }
+    } catch (err: any) {
+      if (options.json) console.log(JSON.stringify({ error: err.message }));
+      else console.error(`❌ Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+balanceCommand
+  .command('transactions <server>')
+  .description('List ledger transactions, newest first')
+  .option('--buyer <id>', 'Buyer id (defaults to the persisted one)')
+  .option('--limit <n>', 'Page size', '20')
+  .option('--offset <n>', 'Page offset', '0')
+  .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
+  .option('--json', 'Output raw JSON only')
+  .action(async (server, options) => {
+    try {
+      const client = new MoltsPayClient({ configDir: options.configDir });
+      const data = await client.listBalanceTransactions(server, {
+        buyerId: options.buyer,
+        limit: parseInt(options.limit, 10),
+        offset: parseInt(options.offset, 10),
+      });
+      if (options.json) {
+        console.log(JSON.stringify(data, null, 2));
+      } else {
+        console.log(`\nTransactions for ${data.buyer_id}\n`);
+        for (const t of data.transactions) {
+          console.log(`   ${t.created_at}  ${t.type.padEnd(6)} ${t.amount.padStart(8)}  ${t.status.padEnd(9)} ${t.service ?? t.description ?? ''}`);
+        }
+        if (data.transactions.length === 0) console.log('   (none)');
+        console.log('');
+      }
+    } catch (err: any) {
+      if (options.json) console.log(JSON.stringify({ error: err.message }));
+      else console.error(`❌ Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+balanceCommand
+  .command('set-buyer <id>')
+  .description('Persist the buyer id used by pay --rail balance')
+  .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
+  .action((id, options) => {
+    const client = new MoltsPayClient({ configDir: options.configDir });
+    client.setBuyerId(id);
+    console.log(`✅ Buyer id saved: ${id}`);
   });
 
 /**
