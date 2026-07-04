@@ -21,6 +21,9 @@ Third payment mode: a **custodial balance rail (password-free payments / 免密�
 - **CLI** — `moltspay balance query|topup|transactions|set-buyer` and `moltspay pay --rail balance`.
 - **Docs** — `docs/BALANCE-RAIL-DESIGN.md` (design + SDK integration).
 
+### Fixed
+- **WeChat 402 double-charge** — every 402 emit used to place a fresh Native order, so a client that received two challenges could surface two live QRs and a buyer could pay both (confirmed ¥0.07×2 real double charge, 2026-07-02). The server now caches the unpaid order per service id and reuses it for every 402 within the order's `time_expire` window (refreshing 30s before expiry so served QRs always have usable life); the entry is dropped the moment the order verifies as paid (Native is one-code-one-payment), concurrent 402 builds share one in-flight order create, and build failures are never cached. In-memory by design: a server restart at worst leaves one extra *unpaid* order to expire server-side — never a double charge.
+
 ### Migration from 2.1.0
 1. No code changes required — fully backward compatible.
 2. Optional: add `provider.balance` + `services[].balance` to your services JSON to enable password-free payments (requires Node >= 22.5 on the server).

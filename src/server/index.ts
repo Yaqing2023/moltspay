@@ -33,6 +33,7 @@ import {
   WechatFacilitatorConfig,
   WECHAT_NETWORK,
   WECHAT_SCHEME,
+  WECHAT_TIME_EXPIRE_MS,
   BalanceFacilitator,
   BalanceFacilitatorConfig,
   BALANCE_SCHEME,
@@ -252,6 +253,24 @@ export class MoltsPayServer {
   private wechatFacilitator: WechatFacilitator | null = null;
   /** Custodial balance facilitator instance, set when `provider.balance` is configured (2.2.0). */
   private balanceFacilitator: BalanceFacilitator | null = null;
+  /**
+   * Pending WeChat Native order per service — the double-charge fix.
+   *
+   * Every `buildWechatChallenge` used to place a NEW Native order, so a client
+   * that received two 402s (e.g. initial challenge + one poll re-request that
+   * raced ahead of payment) could surface two live QRs and a buyer could pay
+   * both (confirmed ¥0.07×2 on 2026-07-02). Now the unpaid order is cached per
+   * service id and reused until it is paid or its `time_expire` window nears
+   * expiry, so any number of 402 emits within the window share ONE order.
+   * Storing the in-flight promise also dedupes concurrent 402 builds.
+   * In-memory by design: on restart the worst case is one extra unpaid order,
+   * which expires server-side per `time_expire` — never a double charge.
+   */
+  private wechatPendingChallenges: Map<string, {
+    promise: Promise<{ accepts: X402PaymentRequirements; outTradeNo: string } | null>;
+    expiresAtMs: number;
+    outTradeNo?: string;
+  }> = new Map();
 
   constructor(servicesPath: string, options: MoltsPayServerOptionsExtended = {}) {
     // Load env files FIRST (before reading USE_MAINNET)
@@ -1136,6 +1155,12 @@ export class MoltsPayServer {
     }
     console.log(`[MoltsPay] WeChat payment verified by ${verifyResult.facilitator}`);
 
+    // The order is consumed (Native: one code, one payment) — drop it from the
+    // pending-challenge cache so the next 402 mints a fresh order.
+    if (outTradeNo) {
+      this.invalidateWechatChallenge(outTradeNo);
+    }
+
     // Execute skill (same timeout contract as the EVM path).
     const timeoutSeconds = parseInt(process.env.SKILL_TIMEOUT_SECONDS || '1200');
     console.log(`[MoltsPay] Executing skill: ${skill.id} (timeout: ${timeoutSeconds}s)`);
@@ -1195,23 +1220,78 @@ export class MoltsPayServer {
    * x402 `accepts[]` entry carries both in `extra` so the client can render
    * the QR and later echo `out_trade_no` back for verification.
    *
-   * NOTE: each 402 emit creates one pending WeChat order (inherent to Native);
-   * unpaid orders expire per `time_expire`. A build failure degrades
-   * gracefully (the other rails' accepts[] still ship).
+   * DOUBLE-CHARGE FIX: the unpaid order is cached per service id (see
+   * `wechatPendingChallenges`), so repeated 402 emits within the order's
+   * `time_expire` window return the SAME `code_url`/`out_trade_no` instead of
+   * minting a new payable order each time. The entry is dropped once the
+   * order is paid (`invalidateWechatChallenge`) or shortly before it expires
+   * (refresh margin, so clients never receive a nearly-dead QR). A build
+   * failure is not cached and degrades gracefully (the other rails'
+   * accepts[] still ship).
    */
   private async buildWechatChallenge(
     config: ServiceConfig
   ): Promise<{ accepts: X402PaymentRequirements } | null> {
     if (!this.wechatFacilitator || !config.wechat) return null;
-    try {
-      const req = await this.wechatFacilitator.createPaymentRequirements({
-        priceCny: config.wechat.price_cny,
-        description: config.wechat.description,
-      });
-      return { accepts: req.x402Accepts };
-    } catch (err: any) {
-      console.error(`[MoltsPay] WeChat challenge build failed for ${config.id}: ${err.message}`);
-      return null;
+
+    const now = Date.now();
+    const cached = this.wechatPendingChallenges.get(config.id);
+    if (cached) {
+      if (now < cached.expiresAtMs) {
+        const hit = await cached.promise;
+        if (hit) {
+          console.log(`[MoltsPay] Reusing pending WeChat order ${hit.outTradeNo} for ${config.id}`);
+          return { accepts: hit.accepts };
+        }
+        // Build failed after we joined it — fall through to a fresh attempt.
+      }
+      this.wechatPendingChallenges.delete(config.id);
+    }
+
+    // Refresh 30s before the real order expiry so a just-served QR always has
+    // usable life left (never less than half the window, for tiny expiries).
+    const orderTtlMs = WECHAT_TIME_EXPIRE_MS;
+    const cacheTtlMs = Math.max(orderTtlMs - 30_000, Math.floor(orderTtlMs / 2));
+
+    const entry: {
+      promise: Promise<{ accepts: X402PaymentRequirements; outTradeNo: string } | null>;
+      expiresAtMs: number;
+      outTradeNo?: string;
+    } = {
+      expiresAtMs: now + cacheTtlMs,
+      promise: Promise.resolve(null),
+    };
+    entry.promise = (async () => {
+      try {
+        const req = await this.wechatFacilitator!.createPaymentRequirements({
+          priceCny: config.wechat!.price_cny,
+          description: config.wechat!.description,
+        });
+        entry.outTradeNo = req.outTradeNo;
+        return { accepts: req.x402Accepts, outTradeNo: req.outTradeNo };
+      } catch (err: any) {
+        console.error(`[MoltsPay] WeChat challenge build failed for ${config.id}: ${err.message}`);
+        // Never cache a failure — the next 402 retries.
+        this.wechatPendingChallenges.delete(config.id);
+        return null;
+      }
+    })();
+    this.wechatPendingChallenges.set(config.id, entry);
+
+    const result = await entry.promise;
+    return result ? { accepts: result.accepts } : null;
+  }
+
+  /**
+   * Drop the cached pending WeChat order that matches a paid `out_trade_no`,
+   * so the next 402 mints a fresh order instead of re-serving a consumed one
+   * (Native is one-code-one-payment).
+   */
+  private invalidateWechatChallenge(outTradeNo: string): void {
+    for (const [serviceId, entry] of this.wechatPendingChallenges) {
+      if (entry.outTradeNo === outTradeNo) {
+        this.wechatPendingChallenges.delete(serviceId);
+      }
     }
   }
 
