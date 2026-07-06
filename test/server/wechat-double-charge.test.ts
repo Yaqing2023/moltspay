@@ -107,11 +107,11 @@ describe('WeChat 402 double-charge fix — pending-order idempotency cache', () 
     await new Promise<void>((r) => b.http.close(() => r()));
   });
 
-  async function get402Wx(): Promise<{ out_trade_no: string; code_url: string }> {
+  async function get402Wx(params: Record<string, any> = {}): Promise<{ out_trade_no: string; code_url: string }> {
     const res = await realFetch(`http://127.0.0.1:${b.port}/execute`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ service: 'video-demo', params: {} }),
+      body: JSON.stringify({ service: 'video-demo', params }),
     });
     expect(res.status).toBe(402);
     const body = await res.json() as any;
@@ -190,5 +190,36 @@ describe('WeChat 402 double-charge fix — pending-order idempotency cache', () 
     // Next 402 retries the order create and succeeds.
     const recovered = await get402Wx();
     expect(recovered.out_trade_no).toBeTruthy();
+  });
+
+  it('different params get DIFFERENT orders — one buyer cannot pay for another request', async () => {
+    orderCreateCalls = 0;
+    const catVideo = await get402Wx({ prompt: 'a cat dancing' });
+    const dogVideo = await get402Wx({ prompt: 'a dog surfing' });
+    expect(dogVideo.out_trade_no).not.toBe(catVideo.out_trade_no);
+    expect(orderCreateCalls).toBe(2);
+    // Each params-variant still reuses ITS OWN pending order.
+    const catAgain = await get402Wx({ prompt: 'a cat dancing' });
+    expect(catAgain.out_trade_no).toBe(catVideo.out_trade_no);
+    expect(orderCreateCalls).toBe(2);
+  });
+
+  it('key order does not matter — canonical JSON dedupes semantically equal params', async () => {
+    orderCreateCalls = 0;
+    const first = await get402Wx({ prompt: 'sunset', style: 'anime' });
+    const reordered = await get402Wx({ style: 'anime', prompt: 'sunset' });
+    expect(reordered.out_trade_no).toBe(first.out_trade_no);
+    expect(orderCreateCalls).toBe(1);
+  });
+
+  it('paying one params-variant does not invalidate the others', async () => {
+    const red = await get402Wx({ prompt: 'red' });
+    const blue = await get402Wx({ prompt: 'blue' });
+    await payOrder(red.out_trade_no);
+    // red is consumed → fresh order; blue's pending order is untouched.
+    const redNext = await get402Wx({ prompt: 'red' });
+    const blueAgain = await get402Wx({ prompt: 'blue' });
+    expect(redNext.out_trade_no).not.toBe(red.out_trade_no);
+    expect(blueAgain.out_trade_no).toBe(blue.out_trade_no);
   });
 });
