@@ -90,6 +90,23 @@ function headerSafe(value: string): string {
     .replace(/"/g, '%22');
 }
 
+/**
+ * Deterministic JSON: object keys sorted recursively, so semantically equal
+ * params hash identically regardless of key order. Used for the WeChat
+ * pending-order idempotency key.
+ */
+function canonicalJson(value: any): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value) ?? 'null';
+  }
+  if (Array.isArray(value)) {
+    return '[' + value.map(canonicalJson).join(',') + ']';
+  }
+  return '{' + Object.keys(value).sort()
+    .map(k => JSON.stringify(k) + ':' + canonicalJson(value[k]))
+    .join(',') + '}';
+}
+
 // Token contract addresses by network
 const TOKEN_ADDRESSES: Record<string, Record<string, string>> = {
   'eip155:8453': {
@@ -254,14 +271,16 @@ export class MoltsPayServer {
   /** Custodial balance facilitator instance, set when `provider.balance` is configured (2.2.0). */
   private balanceFacilitator: BalanceFacilitator | null = null;
   /**
-   * Pending WeChat Native order per service — the double-charge fix.
+   * Pending WeChat Native order cache — the double-charge fix.
    *
    * Every `buildWechatChallenge` used to place a NEW Native order, so a client
    * that received two 402s (e.g. initial challenge + one poll re-request that
    * raced ahead of payment) could surface two live QRs and a buyer could pay
-   * both (confirmed ¥0.07×2 on 2026-07-02). Now the unpaid order is cached per
-   * service id and reused until it is paid or its `time_expire` window nears
-   * expiry, so any number of 402 emits within the window share ONE order.
+   * both (confirmed ¥0.07×2 on 2026-07-02). Now the unpaid order is cached
+   * under a content-derived key — sha256(service id | canonical params |
+   * price_cny) — and reused until it is paid or its `time_expire` window
+   * nears expiry, so any number of 402 emits for the same purchase intent
+   * share ONE order, even across separate client processes.
    * Storing the in-flight promise also dedupes concurrent 402 builds.
    * In-memory by design: on restart the worst case is one extra unpaid order,
    * which expires server-side per `time_expire` — never a double charge.
@@ -842,7 +861,7 @@ export class MoltsPayServer {
 
     // If no payment header, return 402 with payment requirements
     if (!paymentHeader) {
-      return this.sendPaymentRequired(skill.config, res);
+      return this.sendPaymentRequired(skill.config, res, params || {});
     }
 
     // Parse payment payload
@@ -1230,12 +1249,25 @@ export class MoltsPayServer {
    * accepts[] still ship).
    */
   private async buildWechatChallenge(
-    config: ServiceConfig
+    config: ServiceConfig,
+    params?: Record<string, any>
   ): Promise<{ accepts: X402PaymentRequirements } | null> {
     if (!this.wechatFacilitator || !config.wechat) return null;
 
+    // Content-derived idempotency key: same service + same params + same
+    // price ⇒ same pending order, even across separate client processes (a
+    // client-random key could not dedupe two independent `pay` retries).
+    // Distinct params get distinct orders, so one buyer's payment can never
+    // cover another buyer's different work product. Documented limitation:
+    // two buyers requesting the IDENTICAL service+params within the TTL share
+    // one order (no buyer identity exists at 402 time — accepted).
+    const cacheKey = crypto
+      .createHash('sha256')
+      .update(`${config.id}|${canonicalJson(params ?? {})}|${config.wechat.price_cny}`)
+      .digest('hex');
+
     const now = Date.now();
-    const cached = this.wechatPendingChallenges.get(config.id);
+    const cached = this.wechatPendingChallenges.get(cacheKey);
     if (cached) {
       if (now < cached.expiresAtMs) {
         const hit = await cached.promise;
@@ -1245,7 +1277,7 @@ export class MoltsPayServer {
         }
         // Build failed after we joined it — fall through to a fresh attempt.
       }
-      this.wechatPendingChallenges.delete(config.id);
+      this.wechatPendingChallenges.delete(cacheKey);
     }
 
     // Refresh 30s before the real order expiry so a just-served QR always has
@@ -1272,11 +1304,11 @@ export class MoltsPayServer {
       } catch (err: any) {
         console.error(`[MoltsPay] WeChat challenge build failed for ${config.id}: ${err.message}`);
         // Never cache a failure — the next 402 retries.
-        this.wechatPendingChallenges.delete(config.id);
+        this.wechatPendingChallenges.delete(cacheKey);
         return null;
       }
     })();
-    this.wechatPendingChallenges.set(config.id, entry);
+    this.wechatPendingChallenges.set(cacheKey, entry);
 
     const result = await entry.promise;
     return result ? { accepts: result.accepts } : null;
@@ -1288,9 +1320,9 @@ export class MoltsPayServer {
    * (Native is one-code-one-payment).
    */
   private invalidateWechatChallenge(outTradeNo: string): void {
-    for (const [serviceId, entry] of this.wechatPendingChallenges) {
+    for (const [cacheKey, entry] of this.wechatPendingChallenges) {
       if (entry.outTradeNo === outTradeNo) {
-        this.wechatPendingChallenges.delete(serviceId);
+        this.wechatPendingChallenges.delete(cacheKey);
       }
     }
   }
@@ -1603,7 +1635,7 @@ export class MoltsPayServer {
     }
 
     // No payment provided - return 402 with both x402 and MPP headers
-    return this.sendMPPPaymentRequired(config, res);
+    return this.sendMPPPaymentRequired(config, res, params);
   }
 
   /**
@@ -1753,7 +1785,7 @@ export class MoltsPayServer {
   /**
    * Return 402 with both x402 and MPP payment requirements
    */
-  private async sendMPPPaymentRequired(config: ServiceConfig, res: ServerResponse): Promise<void> {
+  private async sendMPPPaymentRequired(config: ServiceConfig, res: ServerResponse, params?: Record<string, any>): Promise<void> {
     const acceptedTokens = getAcceptedCurrencies(config);
     const providerChains = this.getProviderChains();
 
@@ -1774,7 +1806,7 @@ export class MoltsPayServer {
     }
 
     // WeChat fiat rail (2.1.0): append the wechat x402 entry when configured.
-    const wechatChallenge = await this.buildWechatChallenge(config);
+    const wechatChallenge = await this.buildWechatChallenge(config, params);
     if (wechatChallenge) {
       accepts.push(wechatChallenge.accepts);
     }
@@ -1864,7 +1896,7 @@ export class MoltsPayServer {
    * Return 402 with x402 payment requirements (v2 format)
    * Includes requirements for all chains and all accepted currencies
    */
-  private async sendPaymentRequired(config: ServiceConfig, res: ServerResponse): Promise<void> {
+  private async sendPaymentRequired(config: ServiceConfig, res: ServerResponse, params?: Record<string, any>): Promise<void> {
     const acceptedTokens = getAcceptedCurrencies(config);
     const providerChains = this.getProviderChains();
 
@@ -1886,7 +1918,7 @@ export class MoltsPayServer {
     }
 
     // WeChat fiat rail (2.1.0): append the wechat x402 entry when configured.
-    const wechatChallenge = await this.buildWechatChallenge(config);
+    const wechatChallenge = await this.buildWechatChallenge(config, params);
     if (wechatChallenge) {
       accepts.push(wechatChallenge.accepts);
     }
