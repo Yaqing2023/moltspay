@@ -325,5 +325,96 @@ P2   nginx check -> decryptCallback -> POST /wechat/notify
 P3   signed buyer tokens + limits
 ```
 
+## 16. Recoverable top-up for chat channels (topup-order / topup-confirm)
+
+**Added 2026-07-12 (target 2.5.0).** Splits the blocking auto-topup into a recoverable, non-blocking `topup-order` + `topup-confirm` pair, mirroring the WeChat rail's `start`/`status`/`fulfill` sessions.
+
+### Why
+
+The 2.3 auto-topup (`pay --rail balance`, `balance topup-pack`) is a **single blocking command**: create the pack order, then poll `/balance/topup/confirm` for up to ~5 minutes until the scan credits, then retry. Fine at a terminal; broken in a **turn-based agent** channel.
+
+The SDK's Discord/WebChat path is **openclaw running the CLI** (openclaw is the agent in the channel and executes `moltspay` commands per the skill; the standalone `moltspay-discordbot` is an unrelated bot, out of scope). openclaw is turn-based: it shows the QR, ends the turn, and cannot hold a 5-minute foreground command across the human scan (exec tools time out). So it degrades to "show QR -> end turn -> user says 已支付 -> re-run" -- but the balance path had **no confirm-by-out_trade_no command**, so the agent improvised with "已支付" wording and often re-issued a fresh order (new QR), losing the association. The WeChat per-tx rail already solved this with recoverable sessions; the balance-topup path never got it.
+
+### Server: no change
+
+Both endpoints already exist (see §6.1/§6.2) and are the right shape. `POST /balance/topup/confirm` is already a **single-shot check** (`{credited:true,...}` vs `{credited:false,pending:true,reason}`), idempotent on `wechat:<out_trade_no>`. So this is a pure client/CLI packaging change.
+
+### SDK (`src/client/node/index.ts`)
+
+Split the blocking `topupBalancePack()` into two composable, non-blocking methods; keep the blocking one as a terminal wrapper built on them:
+
+```ts
+createBalanceTopupOrder(serverUrl, { pack?, buyerId?, context? })
+  -> { outTradeNo, codeUrl, pack, maxTimeoutSeconds }   // create + persist session, return at once
+confirmBalanceTopup(serverUrl, outTradeNo, { buyerId? })
+  -> { credited, pending?, balance?, txId?, reason? }    // one-shot, no loop; updates session on credit
+topupBalancePack(...)   // re-implemented = create + poll(confirm) until credited/expired (unchanged signature)
+```
+
+`payViaBalance()` keeps blocking auto-topup as default and gains `--topup-mode manual` (§ below).
+
+### Session persistence (`<configDir>/balance-topup-sessions`)
+
+Mirror `<configDir>/wechat-sessions`. On `createBalanceTopupOrder`, persist a JSON session so `topup-confirm` (and an agent that only kept the `out_trade_no`) can recover across turns / restarts:
+
+```json
+{ "out_trade_no": "WX...", "buyer_id": "<id>", "pack": "2.00", "server_url": "...",
+  "code_url": "weixin://...", "status": "pending|credited|expired",
+  "created_at": "ISO", "expires_at": "ISO",
+  "context": { "channel": "discord", "user_id": "...", "service": "ping" } }
+```
+
+Recoverable by `out_trade_no`; `confirm` flips `status`. Client-side recovery state only (server's in-memory cache is unaffected).
+
+### `pay --rail balance` non-blocking mode
+
+- `--topup-mode auto` (default, unchanged): block through topup + retry (terminal).
+- `--topup-mode manual`: on insufficient balance, **create the order, surface the QR + out_trade_no, and return a `topup_required` result without polling** -- the agent confirms + retries in later turns.
+
+`--json` result: `{ "status": "topup_required", "out_trade_no": "WX...", "code_url": "weixin://...", "pack": "2.00", "server_url": "..." }`.
+
+### CLI (`src/cli/index.ts`) -- mirrors `wechat start/status/...`
+
+| Command | Behavior |
+|---|---|
+| `balance topup-order <server> [--pack] [--buyer]` | Create order, emit `MEDIA:` QR PNG + terminal QR + `out_trade_no`, persist session, **exit immediately**. |
+| `balance topup-confirm <out_trade_no> [--buyer] [--wait <s>]` | Confirm once (default) or bounded-poll for `--wait` seconds; prints credited/balance or "not paid yet". |
+| `balance topup-status <out_trade_no>` | Read the persisted session (status/pack/expiry) without hitting the gateway. |
+| `balance topup-list` | List persisted balance-topup sessions. |
+
+`balance topup-pack` (blocking) stays as the terminal one-shot wrapper.
+
+### Agent / Discord flow (openclaw)
+
+```
+insufficient balance
+  -> `pay --rail balance --topup-mode manual`  (or `balance query` -> low -> `balance topup-order`)
+  -> topup_required + out_trade_no + code_url
+     -> render QR as a Discord image ATTACHMENT (better than a /tmp path), remember out_trade_no, END TURN
+  -> user scans, pays, says "已支付"
+  -> `balance topup-confirm <out_trade_no>`   (credited -> continue; pending -> tell user, keep waiting)
+  -> `pay --rail balance`  -> password-free -> deliver
+```
+
+"已支付" now maps to a real `topup-confirm`, and the QR is never re-minted by accident (same `out_trade_no`).
+
+### Skill updates
+
+Add the recoverable commands to the table + a "balance top-up in a chat channel" section parallel to the WeChat `start/status/fulfill` one: on insufficient balance use `topup-order` (show the QR attachment, end the turn); on "已支付" run `topup-confirm <out_trade_no>` then `pay --rail balance` -- never re-issue a new order just because the user says paid. Reuse the WeChat QR-handling rules.
+
+### Backward compatibility & scope
+
+Additive only: server unchanged; `topupBalancePack` / `pay --rail balance` defaults unchanged (still blocking for terminal use); new SDK methods, new CLI subcommands, `--topup-mode manual`, and a new session directory. Out of scope: server callback (`/wechat/notify`, Phase 2), auto-detect without a confirm step, the standalone `moltspay-discordbot`.
+
+### Implementation plan
+
+| Step | File | Change |
+|---|---|---|
+| 1 | `src/client/node/index.ts` | `createBalanceTopupOrder()` + `confirmBalanceTopup()`; re-implement `topupBalancePack()` on top; `--topup-mode manual` path in `payViaBalance()`. |
+| 2 | client session store | `<configDir>/balance-topup-sessions` read/write (mirror `wechat-sessions`). |
+| 3 | `src/cli/index.ts` | `balance topup-order` / `topup-confirm` / `topup-status` / `topup-list`; `pay --topup-mode`. |
+| 4 | Tests | order-then-confirm (stubbed gateway): pending -> credited; idempotent confirm; session persisted + recovered by out_trade_no; `pay --topup-mode manual` returns `topup_required`. |
+| 5 | Docs | `moltspay-skill` recoverable balance section; `CHANGELOG.md` [2.5.0]; README. |
+
 ---
-*Authored 2026-07-12. Decisions locked: CNY ledger (1:1 fen), fixed top-up packs, callback-primary + polling-fallback.*
+*Authored 2026-07-12. Decisions locked: CNY ledger (1:1 fen), fixed top-up packs, callback-primary + polling-fallback. Section 16 (recoverable top-up) added 2026-07-12 for 2.5.0.*
