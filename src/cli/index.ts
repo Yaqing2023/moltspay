@@ -2246,6 +2246,54 @@ program
         }
       }
 
+      // Validate provider.balance (custodial rail, 2.2+/2.3+)
+      const chains: string[] = Array.isArray(content.provider?.chains) ? content.provider.chains : [];
+      const bal = content.provider?.balance;
+      const AMOUNT_RE = /^\d+(\.\d{1,2})?$/;
+      const toCents = (s: string): number => {
+        const [w, f = ''] = s.split('.');
+        return parseInt(w, 10) * 100 + parseInt(f.padEnd(2, '0') || '0', 10);
+      };
+      if (chains.includes('balance') && !bal) {
+        errors.push("chains includes 'balance' but provider.balance is missing");
+      }
+      if (bal) {
+        if (!bal.db_path) errors.push('Missing provider.balance.db_path');
+        if (bal.currency !== undefined && !['USD', 'CNY'].includes(bal.currency)) {
+          errors.push(`provider.balance.currency must be "USD" or "CNY" (got "${bal.currency}")`);
+        }
+        for (const k of ['single_limit', 'daily_limit', 'default_pack', 'auto_topup_max']) {
+          if (bal[k] !== undefined && !AMOUNT_RE.test(String(bal[k]))) {
+            errors.push(`provider.balance.${k} must be a decimal string with <= 2 places (got "${bal[k]}")`);
+          }
+        }
+        let packs: string[] | null = null;
+        if (bal.topup_packs !== undefined) {
+          if (!Array.isArray(bal.topup_packs) || bal.topup_packs.length === 0) {
+            errors.push('provider.balance.topup_packs must be a non-empty array');
+          } else if (!bal.topup_packs.every((p: any) => typeof p === 'string' && AMOUNT_RE.test(p))) {
+            errors.push('provider.balance.topup_packs entries must be decimal strings with <= 2 places');
+          } else {
+            packs = bal.topup_packs;
+          }
+        }
+        // Cross-field: default_pack must be one of topup_packs
+        if (bal.default_pack !== undefined && AMOUNT_RE.test(String(bal.default_pack))) {
+          if (!packs) {
+            errors.push('provider.balance.default_pack requires a valid provider.balance.topup_packs');
+          } else if (!packs.includes(bal.default_pack)) {
+            errors.push(`provider.balance.default_pack "${bal.default_pack}" is not in topup_packs [${packs.join(', ')}]`);
+          }
+        }
+        // Cross-field: auto_topup_max must be >= the largest pack
+        if (bal.auto_topup_max !== undefined && AMOUNT_RE.test(String(bal.auto_topup_max)) && packs) {
+          const maxPack = Math.max(...packs.map(toCents));
+          if (toCents(bal.auto_topup_max) < maxPack) {
+            errors.push(`provider.balance.auto_topup_max "${bal.auto_topup_max}" is below the largest topup_pack`);
+          }
+        }
+      }
+
       // Validate services
       if (!content.services || !Array.isArray(content.services)) {
         errors.push('Missing required field: services (array)');
