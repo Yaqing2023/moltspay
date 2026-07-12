@@ -106,6 +106,13 @@ export interface LedgerConfig {
   defaultSingleLimitSat?: number;
   /** Default daily limit for new buyers, integer cents. */
   defaultDailyLimitSat?: number;
+  /**
+   * Ledger quote currency (e.g. 'USD', 'CNY'). Recorded once in `ledger_meta`
+   * on first init and enforced on every subsequent open: the minor unit
+   * (`*_sat`) is 1/100 of this currency, so reopening a USD ledger as CNY would
+   * silently reinterpret every balance. Defaults to "USD".
+   */
+  currency?: string;
 }
 
 export const DEFAULT_SINGLE_LIMIT_SAT = 500; // 5.00
@@ -184,7 +191,33 @@ export class BalanceLedger {
         ON ledger_transactions(refunds_tx_id) WHERE refunds_tx_id IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_ledger_buyer_time
         ON ledger_transactions(buyer_id, created_at);
+      CREATE TABLE IF NOT EXISTS ledger_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
     `);
+
+    // Record and enforce the ledger's quote currency. The minor unit (`*_sat`)
+    // is 1/100 of this currency -- cents for USD, fen for CNY -- so reopening a
+    // USD-funded ledger under a CNY config would silently reinterpret every
+    // balance (7 sat = 0.07 USD vs 0.07 CNY). Refuse the mismatch; a different
+    // currency requires a separate db_path.
+    const currency = config.currency ?? 'USD';
+    const existingCurrency = this.db
+      .prepare(`SELECT value FROM ledger_meta WHERE key = 'currency'`)
+      .get() as { value: string } | undefined;
+    if (existingCurrency) {
+      if (existingCurrency.value !== currency) {
+        throw new Error(
+          `Balance ledger currency mismatch: db=${existingCurrency.value} config=${currency}. ` +
+          `Use a separate db_path for a different currency; do not reinterpret an existing ledger.`
+        );
+      }
+    } else {
+      this.db
+        .prepare(`INSERT INTO ledger_meta (key, value) VALUES ('currency', ?)`)
+        .run(currency);
+    }
   }
 
   /** Fetch a buyer, or null. */

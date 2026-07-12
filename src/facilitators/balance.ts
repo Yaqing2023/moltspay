@@ -103,6 +103,7 @@ export class BalanceFacilitator extends BaseFacilitator {
       dbPath: config.db_path,
       defaultSingleLimitSat: config.single_limit ? toSat(config.single_limit) : DEFAULT_SINGLE_LIMIT_SAT,
       defaultDailyLimitSat: config.daily_limit ? toSat(config.daily_limit) : DEFAULT_DAILY_LIMIT_SAT,
+      currency: this.currency,
     };
     this.ledger = new BalanceLedger(ledgerConfig);
   }
