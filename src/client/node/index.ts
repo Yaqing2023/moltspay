@@ -674,10 +674,14 @@ export class MoltsPayClient {
     let attempt = await this.balanceDeduct(serverUrl, service, params, options, buyerId);
     if (attempt.ok) return attempt.result;
 
-    // Insufficient balance is the one recoverable case: scan a top-up pack
-    // once, then retry the deduct (which stays password-free thereafter).
-    const insufficient = attempt.status === 402 && /insufficient/i.test(attempt.error || '');
-    if (!insufficient || options.autoTopup === false) {
+    // Recoverable via a top-up: an empty account (buyer_not_found) or a short
+    // balance (insufficient_balance). Limit/frozen errors are not -- topping up
+    // would not help -- so they fail fast.
+    const fundable = attempt.status === 402 && (
+      attempt.code === 'buyer_not_found' || attempt.code === 'insufficient_balance' ||
+      /insufficient balance|unknown buyer|top up first/i.test(attempt.error || '')
+    );
+    if (!fundable || options.autoTopup === false) {
       throw new Error(attempt.error || `Balance payment failed with HTTP ${attempt.status}`);
     }
 
@@ -703,7 +707,7 @@ export class MoltsPayClient {
     params: Record<string, any>,
     options: PayOptions,
     buyerId: string,
-  ): Promise<{ ok: boolean; result?: any; status: number; error?: string }> {
+  ): Promise<{ ok: boolean; result?: any; status: number; error?: string; code?: string }> {
     // Discover the resource endpoint (same as the other rails).
     let executeUrl = `${serverUrl}/execute`;
     try {
@@ -729,7 +733,7 @@ export class MoltsPayClient {
       signal: options.signal,
     });
     const data: any = await res.json().catch(() => ({}));
-    if (!res.ok) return { ok: false, status: res.status, error: data.error };
+    if (!res.ok) return { ok: false, status: res.status, error: data.error, code: data.code };
     return { ok: true, status: res.status, result: data.result ?? data };
   }
 
