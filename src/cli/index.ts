@@ -1694,6 +1694,7 @@ program
   .option('--buyer <id>', 'Buyer id for --rail balance (defaults to the persisted one)')
   .option('--pack <amount>', '--rail balance: top-up pack to scan when the balance is short (defaults to the server pack)')
   .option('--no-auto-topup', '--rail balance: fail on an insufficient balance instead of prompting a top-up')
+  .option('--topup-mode <mode>', '--rail balance: "auto" (block through the scan, default) or "manual" (create order, show QR, exit for later confirm)', 'auto')
   .option('--config-dir <dir>', 'Config directory with wallet.json', DEFAULT_CONFIG_DIR)
   .option('--json', 'Output raw JSON only')
   .action(async (server, service, paramsJson, options) => {
@@ -1815,7 +1816,7 @@ program
         rawData: useRawData,
         onPaymentPending: ({ paymentUrl, shortenUrl }: { paymentUrl: string; shortenUrl?: string; tradeNo: string }) => {
           if (!options.json) {
-            process.stdout.write(`\n📲 请用支付宝扫码或访问：${shortenUrl ?? paymentUrl}\n\n`);
+            process.stdout.write(`\n📲 Scan with Alipay or open: ${shortenUrl ?? paymentUrl}\n\n`);
           }
         },
         onLine: (line: string) => { if (!options.json) process.stdout.write(line + '\n'); },
@@ -1825,14 +1826,14 @@ program
         onPaymentPending: ({ paymentUrl, tradeNo }: { paymentUrl: string; shortenUrl?: string; tradeNo: string }) => {
           if (!options.json) {
             const qrPath = writeQRCodePng(paymentUrl, { filename: `wechat-${tradeNo}.png` });
-            process.stdout.write(`\n📲 请用微信扫码支付（订单号 ${tradeNo}）：\n`);
+            process.stdout.write(`\n📲 Scan with WeChat to pay (order ${tradeNo}):\n`);
             process.stdout.write(`MEDIA: ${qrPath}\n`);
             // Render the weixin:// code_url as a scannable terminal QR.
             void printQRCode(paymentUrl);
             process.stdout.write(
-              `\n   已生成二维码图片：${qrPath}\n` +
-              `   Native code_url 是二维码载荷，不是普通浏览器付款链接。\n` +
-              `   等待支付中…\n\n`,
+              `\n   QR image: ${qrPath}\n` +
+              `   The Native code_url is QR payload, not a browser checkout link.\n` +
+              `   Waiting for payment...\n\n`,
             );
           }
         },
@@ -1843,17 +1844,18 @@ program
         topupPack: options.pack,
         // commander sets options.autoTopup=false for --no-auto-topup.
         autoTopup: options.autoTopup,
+        topupMode: options.topupMode,
         onTopupRequired: (pack: string, codeUrl: string) => {
           if (!options.json) {
             const qrPath = writeQRCodePng(codeUrl, { filename: `wechat-topup-${pack}.png` });
-            process.stdout.write(`\n💳 余额不足，请用微信扫码充值 ${pack}：\n`);
+            process.stdout.write(`\n💳 Insufficient balance. Scan with WeChat to top up ${pack}:\n`);
             process.stdout.write(`MEDIA: ${qrPath}\n`);
             void printQRCode(codeUrl);
-            process.stdout.write(`\n   已生成二维码图片：${qrPath}\n   等待充值到账…\n\n`);
+            process.stdout.write(`\n   QR image: ${qrPath}\n   Waiting for the top-up to credit...\n\n`);
           }
         },
         onTopupCredited: (balance: string) => {
-          if (!options.json) process.stdout.write(`\n✅ 充值到账，余额 ${balance}，继续免密支付…\n`);
+          if (!options.json) process.stdout.write(`\n✅ Topped up, balance ${balance}. Continuing password-free payment...\n`);
         },
       } : {
         token: token as 'USDC' | 'USDT',
@@ -1862,7 +1864,18 @@ program
       };
       const result = await client.pay(server, service, params, railOptions as any);
 
-      if (options.json) {
+      // Manual top-up mode: pay() returns a topup_required sentinel (QR already
+      // surfaced via onTopupRequired); tell the caller how to confirm + resume.
+      if (result && (result as any).status === 'topup_required') {
+        if (options.json) {
+          console.log(JSON.stringify(result));
+        } else {
+          const otn = (result as any).out_trade_no;
+          console.log(`\n⏳ Insufficient balance. Created top-up order ${otn}`);
+          console.log(`   After paying, run: moltspay balance topup-confirm ${otn}`);
+          console.log(`   Once credited, run: moltspay pay ${server} ${service} --rail balance\n`);
+        }
+      } else if (options.json) {
         console.log(JSON.stringify(result));
       } else {
         console.log('✅ Success!\n');
@@ -2080,7 +2093,7 @@ wechatCommand
 /**
  * npx moltspay balance <query|topup|transactions|set-buyer>
  *
- * Custodial balance rail (2.2.0, password-free / 免密支付) management.
+ * Custodial balance rail (2.2.0, password-free) management.
  * After a one-time top-up, `pay --rail balance` charges the prepaid
  * balance with no signature or QR per transaction.
  */
@@ -2171,22 +2184,122 @@ balanceCommand
         onCodeUrl: (pack: string, codeUrl: string) => {
           if (!options.json) {
             const qrPath = writeQRCodePng(codeUrl, { filename: `wechat-topup-${pack}.png` });
-            process.stdout.write(`\n💳 请用微信扫码充值 ${pack}：\n`);
+            process.stdout.write(`\n💳 Scan with WeChat to top up ${pack}:\n`);
             process.stdout.write(`MEDIA: ${qrPath}\n`);
             void printQRCode(codeUrl);
-            process.stdout.write(`\n   已生成二维码图片：${qrPath}\n   等待充值到账…\n\n`);
+            process.stdout.write(`\n   QR image: ${qrPath}\n   Waiting for the top-up to credit...\n\n`);
           }
         },
       });
       if (options.json) {
         console.log(JSON.stringify(result, null, 2));
       } else {
-        console.log(`\n✅ 充值到账，余额 ${result.balance} (tx ${result.txId})\n`);
+        console.log(`\n✅ Topped up, balance ${result.balance} (tx ${result.txId})\n`);
       }
     } catch (err: any) {
       if (options.json) console.log(JSON.stringify({ error: err.message }));
       else console.error(`❌ Error: ${err.message}`);
       process.exit(1);
+    }
+  });
+
+// Recoverable balance top-up (2.5): non-blocking order + separate confirm, for
+// turn-based agents (openclaw over Discord/WebChat). See the passwordless design
+// section 16. topup-pack above stays as the blocking terminal wrapper.
+balanceCommand
+  .command('topup-order <server>')
+  .description('Create a WeChat top-up order and exit (non-blocking); confirm later with topup-confirm')
+  .option('--pack <amount>', 'Pack amount (defaults to the server default_pack)')
+  .option('--buyer <id>', 'Buyer id (defaults to the persisted one)')
+  .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
+  .option('--json', 'Output raw JSON only')
+  .action(async (server, options) => {
+    try {
+      const client = new MoltsPayClient({ configDir: options.configDir });
+      const order = await client.createBalanceTopupOrder(server, { pack: options.pack, buyerId: options.buyer });
+      if (options.json) {
+        console.log(JSON.stringify({ status: 'topup_required', out_trade_no: order.outTradeNo, code_url: order.codeUrl, pack: order.pack, server_url: server }));
+      } else {
+        const qrPath = writeQRCodePng(order.codeUrl, { filename: `wechat-topup-${order.pack}.png` });
+        process.stdout.write(`\n💳 Scan with WeChat to top up ${order.pack}:\n`);
+        process.stdout.write(`MEDIA: ${qrPath}\n`);
+        void printQRCode(order.codeUrl);
+        process.stdout.write(`\n   QR image: ${qrPath}\n   Order: ${order.outTradeNo}\n   After paying, run: moltspay balance topup-confirm ${order.outTradeNo}\n\n`);
+      }
+    } catch (err: any) {
+      if (options.json) console.log(JSON.stringify({ error: err.message }));
+      else console.error(`❌ Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+balanceCommand
+  .command('topup-confirm <out_trade_no>')
+  .description('Confirm a top-up order once (or poll for --wait seconds); credits if paid')
+  .option('--server <url>', 'Server URL (defaults to the persisted session)')
+  .option('--wait <seconds>', 'Poll for up to N seconds instead of a single check', '0')
+  .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
+  .option('--json', 'Output raw JSON only')
+  .action(async (outTradeNo, options) => {
+    try {
+      const client = new MoltsPayClient({ configDir: options.configDir });
+      const deadline = Date.now() + (parseInt(options.wait, 10) || 0) * 1000;
+      let conf = await client.confirmBalanceTopup(outTradeNo, { serverUrl: options.server });
+      while (!conf.credited && conf.pending && Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 2000));
+        conf = await client.confirmBalanceTopup(outTradeNo, { serverUrl: options.server });
+      }
+      if (options.json) {
+        console.log(JSON.stringify(conf));
+      } else if (conf.credited) {
+        console.log(`\n✅ Topped up, balance ${conf.balance} (tx ${conf.txId})\n`);
+      } else if (conf.pending) {
+        console.log(`\n⏳ Not confirmed yet; retry: topup-confirm ${outTradeNo}\n`);
+      } else {
+        console.error(`❌ ${conf.reason || 'confirm failed'}`);
+        process.exit(1);
+      }
+    } catch (err: any) {
+      if (options.json) console.log(JSON.stringify({ error: err.message }));
+      else console.error(`❌ Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+balanceCommand
+  .command('topup-status <out_trade_no>')
+  .description('Show a persisted top-up session (status/pack/expiry) without hitting the gateway')
+  .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
+  .option('--json', 'Output raw JSON only')
+  .action((outTradeNo, options) => {
+    const client = new MoltsPayClient({ configDir: options.configDir });
+    const s = client.getBalanceTopupSession(outTradeNo);
+    if (!s) {
+      if (options.json) console.log(JSON.stringify({ error: 'session not found' }));
+      else console.error(`❌ No session for ${outTradeNo}`);
+      process.exit(1);
+    }
+    if (options.json) console.log(JSON.stringify(s, null, 2));
+    else console.log(`\n${s.out_trade_no}  ${s.status}  pack ${s.pack}  buyer ${s.buyer_id}\n   created ${s.created_at}  expires ${s.expires_at}\n`);
+  });
+
+balanceCommand
+  .command('topup-list')
+  .description('List persisted top-up sessions, newest first')
+  .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
+  .option('--json', 'Output raw JSON only')
+  .action((options) => {
+    const client = new MoltsPayClient({ configDir: options.configDir });
+    const sessions = client.listBalanceTopupSessions();
+    if (options.json) {
+      console.log(JSON.stringify(sessions, null, 2));
+    } else {
+      console.log('\nTop-up sessions\n');
+      for (const s of sessions) {
+        console.log(`   ${s.created_at}  ${s.out_trade_no}  ${s.status.padEnd(9)} pack ${s.pack}  buyer ${s.buyer_id}`);
+      }
+      if (sessions.length === 0) console.log('   (none)');
+      console.log('');
     }
   });
 

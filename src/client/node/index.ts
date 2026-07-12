@@ -9,7 +9,7 @@
  *   const result = await client.pay('http://provider:3000', 'text-to-video', { prompt: '...' });
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, chmodSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, chmodSync, readdirSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { randomUUID } from 'node:crypto';
@@ -44,6 +44,21 @@ import { timeStep } from '../alipay/log.js';
 import { selectRail, ALIPAY_RAIL, WECHAT_RAIL, BALANCE_RAIL } from '../alipay/router.js';
 
 export * from '../types.js';
+
+/** A recoverable balance top-up session, persisted under `<configDir>/balance-topup-sessions`. */
+export interface BalanceTopupSession {
+  out_trade_no: string;
+  buyer_id: string;
+  pack: string;
+  server_url: string;
+  code_url: string;
+  status: 'pending' | 'credited' | 'expired';
+  created_at: string;
+  expires_at: string;
+  context?: Record<string, any>;
+  tx_id?: string;
+  balance?: string;
+}
 
 export interface PayOptions {
   /** Token to pay with (default: USDC, or auto-select based on balance) */
@@ -89,6 +104,15 @@ export interface PayOptions {
    * Set false to fail fast instead.
    */
   autoTopup?: boolean;
+  /**
+   * Balance rail top-up mode (2.5.0). `'auto'` (default): block through the
+   * top-up scan + retry (terminal use). `'manual'`: on an insufficient
+   * balance, create the order, surface the QR via `onTopupRequired`, and
+   * return a `{ status: 'topup_required', out_trade_no, code_url, pack,
+   * server_url }` result WITHOUT polling — the caller confirms + retries in
+   * later turns (recoverable flow for turn-based agents).
+   */
+  topupMode?: 'auto' | 'manual';
   /** Balance rail: pack to fund with; defaults to the server's `default_pack`. */
   topupPack?: string;
   /** Balance rail: poll interval while waiting for the top-up scan (default 2000ms). */
@@ -655,7 +679,7 @@ export class MoltsPayClient {
   }
 
   /**
-   * Pay via the custodial balance rail (2.2.0, password-free / 免密支付).
+   * Pay via the custodial balance rail (2.2.0, password-free).
    *
    * No wallet, no QR: the request carries `{buyer_id, request_id}` in the
    * X-Payment payload and the server deducts the prepaid balance atomically
@@ -683,6 +707,24 @@ export class MoltsPayClient {
     );
     if (!fundable || options.autoTopup === false) {
       throw new Error(attempt.error || `Balance payment failed with HTTP ${attempt.status}`);
+    }
+
+    // Manual mode (recoverable): create the order, surface the QR, and return a
+    // topup_required result without blocking. The caller confirms + retries.
+    if (options.topupMode === 'manual') {
+      const order = await this.createBalanceTopupOrder(serverUrl, {
+        pack: options.topupPack,
+        buyerId,
+        context: { service },
+      });
+      options.onTopupRequired?.(order.pack, order.codeUrl);
+      return {
+        status: 'topup_required',
+        out_trade_no: order.outTradeNo,
+        code_url: order.codeUrl,
+        pack: order.pack,
+        server_url: serverUrl,
+      };
     }
 
     const credited = await this.topupBalancePack(serverUrl, {
@@ -738,11 +780,76 @@ export class MoltsPayClient {
   }
 
   /**
-   * POST /balance/topup/order then poll /balance/topup/confirm until the scan
-   * is credited (or the order expires). Surfaces the pack QR via `onCodeUrl`.
-   * The server binds the order to the buyer and credits the gateway-verified
-   * amount, so the client never handles money amounts here. Returns the
-   * credited balance.
+   * Non-blocking: POST /balance/topup/order, persist a recoverable session, and
+   * return at once (no polling). Use with {@link confirmBalanceTopup} for
+   * turn-based agents; the blocking {@link topupBalancePack} is built on this.
+   */
+  async createBalanceTopupOrder(
+    serverUrl: string,
+    opts: { pack?: string; buyerId?: string; context?: Record<string, any> } = {},
+  ): Promise<{ outTradeNo: string; codeUrl: string; pack: string; maxTimeoutSeconds: number }> {
+    const id = this.resolveBuyerId(opts.buyerId);
+    const orderRes = await fetch(`${serverUrl}/balance/topup/order`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ buyer_id: id, pack: opts.pack }),
+    });
+    const order: any = await orderRes.json().catch(() => ({}));
+    if (!orderRes.ok) throw new Error(order.error || `Top-up order failed with HTTP ${orderRes.status}`);
+
+    const maxTimeoutSeconds = order.max_timeout_seconds ?? 300;
+    const now = Date.now();
+    this.saveBalanceTopupSession({
+      out_trade_no: order.out_trade_no,
+      buyer_id: id,
+      pack: order.pack,
+      server_url: serverUrl,
+      code_url: order.code_url,
+      status: 'pending',
+      created_at: new Date(now).toISOString(),
+      expires_at: new Date(now + maxTimeoutSeconds * 1000).toISOString(),
+      context: opts.context,
+    });
+    return { outTradeNo: order.out_trade_no, codeUrl: order.code_url, pack: order.pack, maxTimeoutSeconds };
+  }
+
+  /**
+   * One-shot: POST /balance/topup/confirm for a single order. No polling.
+   * Updates the persisted session on credit. `serverUrl` defaults to the one
+   * recorded in the session (recover by out_trade_no alone).
+   */
+  async confirmBalanceTopup(
+    outTradeNo: string,
+    opts: { serverUrl?: string } = {},
+  ): Promise<{ credited: boolean; pending?: boolean; balance?: string; txId?: string; reason?: string }> {
+    const session = this.getBalanceTopupSession(outTradeNo);
+    const serverUrl = opts.serverUrl || session?.server_url;
+    if (!serverUrl) {
+      return { credited: false, reason: `No server URL for ${outTradeNo}: pass serverUrl or run topup-order first` };
+    }
+    const confRes = await fetch(`${serverUrl}/balance/topup/confirm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ out_trade_no: outTradeNo }),
+    });
+    const conf: any = await confRes.json().catch(() => ({}));
+    if (!confRes.ok) return { credited: false, reason: conf.error || `Confirm failed with HTTP ${confRes.status}` };
+    if (conf.credited) {
+      if (session) {
+        session.status = 'credited';
+        session.tx_id = conf.tx_id;
+        session.balance = conf.balance;
+        this.saveBalanceTopupSession(session);
+      }
+      return { credited: true, balance: conf.balance, txId: conf.tx_id };
+    }
+    return { credited: false, pending: !!conf.pending, reason: conf.reason };
+  }
+
+  /**
+   * Blocking terminal wrapper: create the order then poll confirm until the
+   * scan is credited (or the order expires). Built on
+   * {@link createBalanceTopupOrder} + {@link confirmBalanceTopup}.
    */
   async topupBalancePack(
     serverUrl: string,
@@ -754,34 +861,54 @@ export class MoltsPayClient {
       onCodeUrl?: (pack: string, codeUrl: string) => void;
     } = {},
   ): Promise<{ balance: string; outTradeNo: string; txId?: string }> {
-    const id = this.resolveBuyerId(opts.buyerId);
-    const orderRes = await fetch(`${serverUrl}/balance/topup/order`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ buyer_id: id, pack: opts.pack }),
-      signal: opts.signal,
-    });
-    const order: any = await orderRes.json().catch(() => ({}));
-    if (!orderRes.ok) throw new Error(order.error || `Top-up order failed with HTTP ${orderRes.status}`);
-    opts.onCodeUrl?.(order.pack, order.code_url);
+    const order = await this.createBalanceTopupOrder(serverUrl, { pack: opts.pack, buyerId: opts.buyerId });
+    opts.onCodeUrl?.(order.pack, order.codeUrl);
 
     const interval = opts.pollIntervalMs ?? 2000;
-    const deadline = Date.now() + (order.max_timeout_seconds ?? 300) * 1000;
+    const deadline = Date.now() + order.maxTimeoutSeconds * 1000;
     while (Date.now() < deadline) {
       if (opts.signal?.aborted) throw new Error('Top-up aborted');
-      const confRes = await fetch(`${serverUrl}/balance/topup/confirm`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ out_trade_no: order.out_trade_no }),
-        signal: opts.signal,
-      });
-      const conf: any = await confRes.json().catch(() => ({}));
-      if (confRes.ok && conf.credited) {
-        return { balance: conf.balance, outTradeNo: order.out_trade_no, txId: conf.tx_id };
-      }
+      const conf = await this.confirmBalanceTopup(order.outTradeNo, { serverUrl });
+      if (conf.credited) return { balance: conf.balance!, outTradeNo: order.outTradeNo, txId: conf.txId };
       await this.sleep(interval, opts.signal);
     }
     throw new Error('Top-up timed out before the payment was confirmed');
+  }
+
+  // --- Recoverable balance top-up sessions (<configDir>/balance-topup-sessions) ---
+
+  private balanceTopupSessionDir(): string {
+    return join(this.configDir, 'balance-topup-sessions');
+  }
+
+  private saveBalanceTopupSession(session: BalanceTopupSession): void {
+    const dir = this.balanceTopupSessionDir();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${session.out_trade_no}.json`), JSON.stringify(session, null, 2));
+  }
+
+  /** Read a persisted top-up session by out_trade_no, or null. */
+  getBalanceTopupSession(outTradeNo: string): BalanceTopupSession | null {
+    const p = join(this.balanceTopupSessionDir(), `${outTradeNo}.json`);
+    if (!existsSync(p)) return null;
+    try {
+      return JSON.parse(readFileSync(p, 'utf-8')) as BalanceTopupSession;
+    } catch {
+      return null;
+    }
+  }
+
+  /** List persisted top-up sessions, newest first. */
+  listBalanceTopupSessions(): BalanceTopupSession[] {
+    const dir = this.balanceTopupSessionDir();
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir)
+      .filter(f => f.endsWith('.json'))
+      .map(f => {
+        try { return JSON.parse(readFileSync(join(dir, f), 'utf-8')) as BalanceTopupSession; } catch { return null; }
+      })
+      .filter((s): s is BalanceTopupSession => s !== null)
+      .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
   }
 
   /** Abortable sleep used by the top-up poll loop. */
