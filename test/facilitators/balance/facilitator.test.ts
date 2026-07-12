@@ -253,4 +253,21 @@ describe('BalanceFacilitator', () => {
     const h = await f.healthCheck();
     expect(h.healthy).toBe(true);
   });
+
+  it('credit records a verified settlement and returns the new balance', () => {
+    const r = f.credit({ buyerId: 'b1', amountSat: 2000, externalRef: 'wechat:WX1', description: 'topup' });
+    expect(r.replayed).toBe(false);
+    expect(r.balance).toBe('20.00');
+    expect(r.balanceSat).toBe(2000);
+    expect(f.getLedger().getBuyer('b1')!.balance_sat).toBe(2000);
+  });
+
+  it('credit is idempotent on externalRef: a replay credits nothing', () => {
+    const first = f.credit({ buyerId: 'b1', amountSat: 2000, externalRef: 'wechat:WX1' });
+    const replay = f.credit({ buyerId: 'b1', amountSat: 9999, externalRef: 'wechat:WX1' });
+    expect(replay.replayed).toBe(true);
+    expect(replay.txId).toBe(first.txId);
+    expect(replay.balanceSat).toBe(2000); // unchanged; the 9999 replay is ignored
+    expect(f.getLedger().getBuyer('b1')!.balance_sat).toBe(2000);
+  });
 });

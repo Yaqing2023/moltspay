@@ -201,6 +201,35 @@ export class BalanceFacilitator extends BaseFacilitator {
     return this.ledger.refund(deductTxId, reason);
   }
 
+  /**
+   * Credit a gateway-verified external settlement to a buyer's balance. The
+   * single entry point for every funding path -- WeChat callback, WeChat
+   * polling, and the operator `/balance/topup` endpoint -- so they share one
+   * idempotency boundary: `externalRef` is unique in the ledger, so a replay
+   * credits nothing and returns the original transaction (`replayed: true`).
+   * Callers must pass a gateway-verified `amountSat`, never a client-declared
+   * amount.
+   */
+  credit(opts: {
+    buyerId: string;
+    amountSat: number;
+    externalRef: string;
+    description?: string;
+  }): { txId: string; balance: string; balanceSat: number; replayed: boolean } {
+    const result = this.ledger.topup({
+      buyerId: opts.buyerId,
+      amountSat: opts.amountSat,
+      externalRef: opts.externalRef,
+      description: opts.description,
+    });
+    return {
+      txId: result.txId,
+      balance: fromSat(result.balanceSat),
+      balanceSat: result.balanceSat,
+      replayed: result.replayed ?? false,
+    };
+  }
+
   async healthCheck(): Promise<HealthCheckResult> {
     const start = Date.now();
     try {
