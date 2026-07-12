@@ -83,6 +83,20 @@ export interface PayOptions {
   onWechatPaymentCompleted?: (session: WechatPaymentSession) => void | Promise<void>;
   /** WeChat: called when background poll expires, fails, or is cancelled. */
   onWechatPaymentFailed?: (session: WechatPaymentSession) => void | Promise<void>;
+  /**
+   * Balance rail (2.3.0): when a password-free deduct finds an insufficient
+   * balance, auto-fund via a WeChat top-up pack, then retry once. Default true.
+   * Set false to fail fast instead.
+   */
+  autoTopup?: boolean;
+  /** Balance rail: pack to fund with; defaults to the server's `default_pack`. */
+  topupPack?: string;
+  /** Balance rail: poll interval while waiting for the top-up scan (default 2000ms). */
+  topupPollIntervalMs?: number;
+  /** Balance rail: called when a top-up pack QR must be shown (scan once). */
+  onTopupRequired?: (pack: string, codeUrl: string) => void;
+  /** Balance rail: called after the top-up is credited (new balance). */
+  onTopupCredited?: (balance: string) => void;
 }
 
 // x402 constants, X402PaymentRequirements, and EIP3009Authorization
@@ -656,6 +670,40 @@ export class MoltsPayClient {
   ): Promise<Record<string, any>> {
     const buyerId = this.resolveBuyerId(options.buyerId);
 
+    // First attempt: password-free deduct.
+    let attempt = await this.balanceDeduct(serverUrl, service, params, options, buyerId);
+    if (attempt.ok) return attempt.result;
+
+    // Insufficient balance is the one recoverable case: scan a top-up pack
+    // once, then retry the deduct (which stays password-free thereafter).
+    const insufficient = attempt.status === 402 && /insufficient/i.test(attempt.error || '');
+    if (!insufficient || options.autoTopup === false) {
+      throw new Error(attempt.error || `Balance payment failed with HTTP ${attempt.status}`);
+    }
+
+    const credited = await this.topupBalancePack(serverUrl, {
+      pack: options.topupPack,
+      buyerId,
+      pollIntervalMs: options.topupPollIntervalMs,
+      signal: options.signal,
+      onCodeUrl: (pack, codeUrl) => options.onTopupRequired?.(pack, codeUrl),
+    });
+    options.onTopupCredited?.(credited.balance);
+
+    attempt = await this.balanceDeduct(serverUrl, service, params, options, buyerId);
+    if (attempt.ok) return attempt.result;
+    throw new Error(attempt.error || 'Balance payment failed after top-up');
+  }
+
+  /** One password-free deduct attempt. Never throws on an HTTP error; the
+   *  caller inspects `{ ok, status, error }` to decide whether to auto-fund. */
+  private async balanceDeduct(
+    serverUrl: string,
+    service: string,
+    params: Record<string, any>,
+    options: PayOptions,
+    buyerId: string,
+  ): Promise<{ ok: boolean; result?: any; status: number; error?: string }> {
     // Discover the resource endpoint (same as the other rails).
     let executeUrl = `${serverUrl}/execute`;
     try {
@@ -681,10 +729,64 @@ export class MoltsPayClient {
       signal: options.signal,
     });
     const data: any = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(data.error || `Balance payment failed with HTTP ${res.status}`);
+    if (!res.ok) return { ok: false, status: res.status, error: data.error };
+    return { ok: true, status: res.status, result: data.result ?? data };
+  }
+
+  /**
+   * POST /balance/topup/order then poll /balance/topup/confirm until the scan
+   * is credited (or the order expires). Surfaces the pack QR via `onCodeUrl`.
+   * The server binds the order to the buyer and credits the gateway-verified
+   * amount, so the client never handles money amounts here. Returns the
+   * credited balance.
+   */
+  async topupBalancePack(
+    serverUrl: string,
+    opts: {
+      pack?: string;
+      buyerId?: string;
+      pollIntervalMs?: number;
+      signal?: AbortSignal;
+      onCodeUrl?: (pack: string, codeUrl: string) => void;
+    } = {},
+  ): Promise<{ balance: string; outTradeNo: string; txId?: string }> {
+    const id = this.resolveBuyerId(opts.buyerId);
+    const orderRes = await fetch(`${serverUrl}/balance/topup/order`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ buyer_id: id, pack: opts.pack }),
+      signal: opts.signal,
+    });
+    const order: any = await orderRes.json().catch(() => ({}));
+    if (!orderRes.ok) throw new Error(order.error || `Top-up order failed with HTTP ${orderRes.status}`);
+    opts.onCodeUrl?.(order.pack, order.code_url);
+
+    const interval = opts.pollIntervalMs ?? 2000;
+    const deadline = Date.now() + (order.max_timeout_seconds ?? 300) * 1000;
+    while (Date.now() < deadline) {
+      if (opts.signal?.aborted) throw new Error('Top-up aborted');
+      const confRes = await fetch(`${serverUrl}/balance/topup/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ out_trade_no: order.out_trade_no }),
+        signal: opts.signal,
+      });
+      const conf: any = await confRes.json().catch(() => ({}));
+      if (confRes.ok && conf.credited) {
+        return { balance: conf.balance, outTradeNo: order.out_trade_no, txId: conf.tx_id };
+      }
+      await this.sleep(interval, opts.signal);
     }
-    return data.result ?? data;
+    throw new Error('Top-up timed out before the payment was confirmed');
+  }
+
+  /** Abortable sleep used by the top-up poll loop. */
+  private sleep(ms: number, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) return reject(new Error('aborted'));
+      const t = setTimeout(resolve, ms);
+      signal?.addEventListener('abort', () => { clearTimeout(t); reject(new Error('aborted')); }, { once: true });
+    });
   }
 
   /** Persist the buyer id used by the balance rail (bearer semantics). */
