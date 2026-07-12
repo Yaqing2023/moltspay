@@ -1685,6 +1685,8 @@ program
   .option('--chain <chain>', 'Chain to pay on (base, polygon, base_sepolia, tempo_moderato, solana, or solana_devnet).')
   .option('--rail <rail>', 'Payment rail: a chain name, "alipay" (CNY via alipay-bot), "wechat" (CNY via WeChat Native, scan to pay), or "balance" (password-free, prepaid custodial balance)')
   .option('--buyer <id>', 'Buyer id for --rail balance (defaults to the persisted one)')
+  .option('--pack <amount>', '--rail balance: top-up pack to scan when the balance is short (defaults to the server pack)')
+  .option('--no-auto-topup', '--rail balance: fail on an insufficient balance instead of prompting a top-up')
   .option('--config-dir <dir>', 'Config directory with wallet.json', DEFAULT_CONFIG_DIR)
   .option('--json', 'Output raw JSON only')
   .action(async (server, service, paramsJson, options) => {
@@ -1831,6 +1833,21 @@ program
         rail: 'balance',
         rawData: useRawData,
         buyerId: options.buyer,
+        topupPack: options.pack,
+        // commander sets options.autoTopup=false for --no-auto-topup.
+        autoTopup: options.autoTopup,
+        onTopupRequired: (pack: string, codeUrl: string) => {
+          if (!options.json) {
+            const qrPath = writeQRCodePng(codeUrl, { filename: `wechat-topup-${pack}.png` });
+            process.stdout.write(`\n💳 余额不足，请用微信扫码充值 ${pack}：\n`);
+            process.stdout.write(`MEDIA: ${qrPath}\n`);
+            void printQRCode(codeUrl);
+            process.stdout.write(`\n   已生成二维码图片：${qrPath}\n   等待充值到账…\n\n`);
+          }
+        },
+        onTopupCredited: (balance: string) => {
+          if (!options.json) process.stdout.write(`\n✅ 充值到账，余额 ${balance}，继续免密支付…\n`);
+        },
       } : {
         token: token as 'USDC' | 'USDT',
         chain,
@@ -2123,6 +2140,41 @@ balanceCommand
         console.log(`\n✅ Already credited (replay). Balance: ${result.balance}\n`);
       } else {
         console.log(`\n✅ Topped up. Balance: ${result.balance} (tx ${result.tx_id})\n`);
+      }
+    } catch (err: any) {
+      if (options.json) console.log(JSON.stringify({ error: err.message }));
+      else console.error(`❌ Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+balanceCommand
+  .command('topup-pack <server>')
+  .description('Fund the balance by scanning a WeChat top-up pack (creates + confirms the order)')
+  .option('--pack <amount>', 'Pack amount (defaults to the server default_pack)')
+  .option('--buyer <id>', 'Buyer id (defaults to the persisted one)')
+  .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
+  .option('--json', 'Output raw JSON only')
+  .action(async (server, options) => {
+    try {
+      const client = new MoltsPayClient({ configDir: options.configDir });
+      const result = await client.topupBalancePack(server, {
+        pack: options.pack,
+        buyerId: options.buyer,
+        onCodeUrl: (pack: string, codeUrl: string) => {
+          if (!options.json) {
+            const qrPath = writeQRCodePng(codeUrl, { filename: `wechat-topup-${pack}.png` });
+            process.stdout.write(`\n💳 请用微信扫码充值 ${pack}：\n`);
+            process.stdout.write(`MEDIA: ${qrPath}\n`);
+            void printQRCode(codeUrl);
+            process.stdout.write(`\n   已生成二维码图片：${qrPath}\n   等待充值到账…\n\n`);
+          }
+        },
+      });
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(`\n✅ 充值到账，余额 ${result.balance} (tx ${result.txId})\n`);
       }
     } catch (err: any) {
       if (options.json) console.log(JSON.stringify({ error: err.message }));
