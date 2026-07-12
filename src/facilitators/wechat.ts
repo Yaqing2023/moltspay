@@ -87,6 +87,13 @@ export interface CreatePaymentRequirementsOpts {
   outTradeNo?: string;
   /** Order lifetime; defaults to {@link WECHAT_TIME_EXPIRE_MS}. */
   expiresInMs?: number;
+  /**
+   * Passthrough metadata WeChat echoes back on order-query and callback
+   * (v3 `attach`, max 128 bytes once JSON-serialized). Used to bind an
+   * otherwise payer-agnostic Native order to a `buyer_id` for balance
+   * top-ups. Read it back with {@link parseWechatAttach}.
+   */
+  attach?: Record<string, string>;
 }
 
 /** Result of placing a Native order. */
@@ -150,6 +157,16 @@ export class WechatFacilitator extends BaseFacilitator {
       amount: { total, currency: 'CNY' },
     };
 
+    if (opts.attach) {
+      const attachStr = JSON.stringify(opts.attach);
+      if (Buffer.byteLength(attachStr, 'utf8') > 128) {
+        throw new Error(
+          `WechatFacilitator.createPaymentRequirements: attach exceeds WeChat's 128-byte limit (${Buffer.byteLength(attachStr, 'utf8')} bytes)`,
+        );
+      }
+      body.attach = attachStr;
+    }
+
     const { body: resp } = await wechatV3Call(
       'POST',
       '/v3/pay/transactions/native',
@@ -209,6 +226,7 @@ export class WechatFacilitator extends BaseFacilitator {
           transaction_id: resp.transaction_id,
           out_trade_no: resp.out_trade_no ?? outTradeNo,
           amount: resp.amount,
+          attach: resp.attach,
         },
       };
     } catch (e: unknown) {
@@ -330,6 +348,24 @@ export function cnyToFen(cny: string): number {
  */
 export function generateOutTradeNo(): string {
   return 'WX' + crypto.randomBytes(15).toString('hex');
+}
+
+/**
+ * Safely parse the `attach` string echoed back on order-query / callback into
+ * the object passed to {@link CreatePaymentRequirementsOpts.attach}. Returns
+ * null for a missing, non-string, or malformed value (a per-transaction order
+ * that carried no attach, or tampered input) so callers never throw on it.
+ */
+export function parseWechatAttach(attach: unknown): Record<string, string> | null {
+  if (typeof attach !== 'string' || attach.length === 0) return null;
+  try {
+    const parsed = JSON.parse(attach);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, string>)
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

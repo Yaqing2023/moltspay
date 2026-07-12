@@ -22,6 +22,7 @@ import {
   cnyToFen,
   generateOutTradeNo,
   extractOutTradeNo,
+  parseWechatAttach,
 } from '../../../src/facilitators/wechat.js';
 import { X402PaymentPayload, X402PaymentRequirements } from '../../../src/facilitators/interface.js';
 
@@ -161,6 +162,34 @@ describe('WechatFacilitator', () => {
       const f = makeFacilitator();
       await expect(f.createPaymentRequirements({ priceCny: '1.00', description: 'd' })).rejects.toThrow(/code_url/);
     });
+
+    it('serializes attach into the Native request body', async () => {
+      mockFetchOnce(200, { code_url: 'weixin://x' });
+      const f = makeFacilitator();
+      await f.createPaymentRequirements({
+        priceCny: '20.00',
+        description: 'topup',
+        outTradeNo: 'WXtop01',
+        attach: { buyer_id: 'b1', nonce: 'n1' },
+      });
+      const sent = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+      expect(sent.attach).toBe('{"buyer_id":"b1","nonce":"n1"}');
+    });
+
+    it('omits attach when not provided', async () => {
+      mockFetchOnce(200, { code_url: 'weixin://x' });
+      const f = makeFacilitator();
+      await f.createPaymentRequirements({ priceCny: '1.00', description: 'd' });
+      const sent = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+      expect(sent.attach).toBeUndefined();
+    });
+
+    it('rejects an attach over the 128-byte limit', async () => {
+      const f = makeFacilitator();
+      await expect(
+        f.createPaymentRequirements({ priceCny: '1.00', description: 'd', attach: { x: 'y'.repeat(200) } }),
+      ).rejects.toThrow(/128-byte/);
+    });
   });
 
   describe('verify', () => {
@@ -176,6 +205,20 @@ describe('WechatFacilitator', () => {
       expect(r.valid).toBe(true);
       expect(r.details?.transaction_id).toBe('4200001234202606270000000001');
       expect(r.details?.trade_state).toBe('SUCCESS');
+    });
+
+    it('surfaces attach in details so the buyer can be recovered', async () => {
+      mockFetchOnce(200, {
+        trade_state: 'SUCCESS',
+        transaction_id: 'T2',
+        out_trade_no: 'WXtop01',
+        amount: { total: 2000, payer_total: 2000, currency: 'CNY' },
+        attach: '{"buyer_id":"b1","nonce":"n1"}',
+      });
+      const f = makeFacilitator();
+      const r = await f.verify({ payload: 'WXtop01' } as X402PaymentPayload, REQ);
+      expect(r.valid).toBe(true);
+      expect(parseWechatAttach(r.details?.attach)).toEqual({ buyer_id: 'b1', nonce: 'n1' });
     });
 
     it('signs the order-query path including the mchid query string', async () => {
@@ -248,5 +291,23 @@ describe('WechatFacilitator', () => {
       expect(h.healthy).toBe(false);
       expect(h.error).toMatch(/apiv3_key/);
     });
+  });
+});
+
+describe('parseWechatAttach', () => {
+  it('round-trips a serialized attach object', () => {
+    expect(parseWechatAttach('{"buyer_id":"b1","nonce":"n1"}')).toEqual({ buyer_id: 'b1', nonce: 'n1' });
+  });
+
+  it('returns null for missing, empty, or non-string input', () => {
+    expect(parseWechatAttach(undefined)).toBeNull();
+    expect(parseWechatAttach('')).toBeNull();
+    expect(parseWechatAttach(123)).toBeNull();
+  });
+
+  it('returns null for malformed or non-object JSON (never throws)', () => {
+    expect(parseWechatAttach('not json')).toBeNull();
+    expect(parseWechatAttach('[1,2,3]')).toBeNull();
+    expect(parseWechatAttach('"a string"')).toBeNull();
   });
 });
