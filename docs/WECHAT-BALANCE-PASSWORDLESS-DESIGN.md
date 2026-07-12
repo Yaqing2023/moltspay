@@ -242,5 +242,88 @@ Kept for operator/recovery use, already hardened to credit `payer_total` only (n
 - **nginx**: confirm `/wechat/notify` + `/balance*` forward correctly on the current host (Tencent Cloud 硅谷 `43.162.105.191`, post-migration) before enabling callback-primary.
 - **Pack UX**: whether to let channels present multiple packs to the user or always auto-pick `default_pack`.
 
+## 15. Implementation change path
+
+Concrete, code-grounded, bottom-up. Change on `feature/balance`. Each step has a verification gate; do not proceed until it passes. Ships in three phases; Phase 1 is end-to-end without any public callback.
+
+### Key finding: `sat` is already `fen` — no money-math change
+
+`toSat("20.00")` in `src/facilitators/balance/ledger.ts:115` returns `2000` (`whole*100 + frac`), and WeChat `payer_total` for ¥20.00 is `2000` fen. The ledger's minor unit (`*_sat`) is "1/100 of the quote currency" — **cents for USD, fen for CNY** — so `payer_total` maps to `amount_sat` **1:1 with no FX**. The already-shipped fix (`amountSat = paidFen`) is correct as-is. Switching to CNY is therefore a **label change**, not an accounting change. The only real risk is re-interpreting an existing USD ledger as CNY (same `7` sat means `$0.07` vs `¥0.07`) — hence the P0 guard.
+
+### P0 — Ledger currency guard (`src/facilitators/balance/ledger.ts`)
+
+Prevents opening a USD ledger under a CNY config (or vice versa).
+- Add `CREATE TABLE IF NOT EXISTS ledger_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)` in the init block (near `ledger.ts:154`).
+- `BalanceLedger` takes `currency`; on first init write `ledger_meta('currency', <currency>)`; if a row exists and differs, **throw** (`ledger currency mismatch: db=<X> config=<Y>`).
+- `BalanceFacilitator` (`balance.ts:99`) passes `this.currency` through.
+- **Gate**: USD db + CNY config -> startup error; empty db + CNY -> `ledger_meta.currency='CNY'`. Production switch is an ops action (new `db_path` for CNY, freeze the old USD db); code only enforces the guard.
+
+### P1-1 — Schema (`schemas/moltspay.services.schema.json`)
+
+- Allow `provider.balance.currency: "CNY"`.
+- Add `topup_packs` (array of amount strings, minItems 1), `default_pack` (string, must be in `topup_packs`), `auto_topup_max` (string, >= max pack).
+- **Gate**: `moltspay validate` passes for old and new configs; missing/out-of-set `default_pack` fails.
+
+### P1-2 — Unified credit entry (`src/facilitators/balance.ts`)
+
+- Wrap the existing `ledger.topup()` (`ledger.ts:304`, already idempotent on `external_ref`) as `credit({ buyerId, amountSat, externalRef, description })` so callback / poll / manual paths share one entry.
+- **Gate**: unit test — same `externalRef` credited twice returns `replayed:true`, balance unchanged.
+
+### P1-3 — WeChat `attach` passthrough (`src/facilitators/wechat.ts:124`)
+
+- `createPaymentRequirements(opts)` accepts `attach?: Record<string,string>`; serialize into the Native order `body.attach` (`wechat.ts:145`) as JSON (<=128 bytes). WeChat echoes `attach` in order-query and callback; parse with `JSON.parse`.
+- **Gate**: unit test — order created with attach; mocked gateway echoes it; `buyer_id` parsed back.
+
+### P1-4 — Server: top-up order + polling-fallback credit (`src/server/index.ts`)
+
+- New `POST /balance/topup/order` (route block near `index.ts:673`, mirror `/balance/topup`): validate `pack in topup_packs || pack <= auto_topup_max` (else 400); call `wechatFacilitator.createPaymentRequirements({ priceCny: pack, description, attach: { buyer_id, nonce } })`; reuse `wechatPendingChallenges` (`index.ts:288`) **re-keyed to `sha256(buyer_id|pack)`**; return `{ code_url, out_trade_no, pack, expires_at }`.
+- Polling fallback: when a session poll observes a top-up order `SUCCESS`, extract `attach.buyer_id` + `payer_total` and call `credit(externalRef = "wechat:" + out_trade_no)`. Factor the `payer_total` extraction out of the existing `handleBalanceTopup` (`index.ts:1484`) into a shared helper.
+- **Gate**: integration test (stubbed gateway) — order -> mock SUCCESS -> poll -> `GET /balance` reflects `payer_total`, credited to the correct buyer.
+
+### P1-5 — Client orchestration (`src/client/wechat/index.ts` + client `pay()`)
+
+- `pay()`: when a 402 offers `balance` and a `buyer_id` is set, `GET /balance`; if sufficient, deduct (password-free); else pick a pack, `POST /balance/topup/order`, surface the QR via the existing session hooks, poll `GET /balance` until credited or the order expires, then auto-retry the original request.
+- Add hooks `onTopupRequired(pack, codeUrl)` / `onTopupCredited(balance)`.
+- **Gate**: client test — sufficient balance -> no QR; insufficient -> one QR -> credited -> auto-retry succeeds.
+
+### P1-6 — CLI (`src/cli/index.ts`)
+
+- `moltspay pay`: transparent password-free when funded; otherwise print the pack QR, wait, complete — no manual `out_trade_no`.
+- `moltspay balance topup --pack 20`; `moltspay balance` (balance + limits + today's spend).
+- **Gate**: CLI smoke — one `pay` runs "first top-up -> subsequent password-free".
+
+### P1-7 — Tests (`test/`)
+
+- Extend `test/server/wechat-balance-topup.test.ts` to cover `topup/order`, polling credit, `attach` binding, pack validation, and client auto-retry.
+- **Gate**: `npm run test:run` new cases green; the 11 pre-existing unrelated failures do not grow.
+
+**Phase 1 exit**: `typecheck` + tests green + `build` + local (`127.0.0.1:8402`) end-to-end "scan once, then password-free".
+
+### Phase 2 — Authoritative callback
+
+1. Verify nginx forwards `/wechat/notify` + `/balance*` on Tencent Cloud `43.162.105.191` (the 2026-07-11 report saw `/balance` 404 on the old host).
+2. `decryptCallback(headers, rawBody)` in `wechat.ts` / `wechat/sign.ts`: platform-cert signature verify + apiv3 **AES-256-GCM** decrypt.
+3. `POST /wechat/notify`: verify -> decrypt -> on `SUCCESS`, `credit(payer_total, "wechat:"+out_trade_no, attach.buyer_id)` -> ack `{code:"SUCCESS"}` (idempotent on duplicates; callback vs poll de-duped by `out_trade_no`).
+- **Gate**: callback-first credits; poll-after is a no-op; results identical.
+
+### Phase 3 — Hardening
+
+Signed buyer tokens gating `topup/order` and deductions; operator-tunable `auto_topup_max`; optional FX ledger only if a USD deployment is later required.
+
+### Execution order (TL;DR)
+
+```
+P0   ledger_meta + currency guard
+P1-1 schema: CNY + topup_packs/default_pack/auto_topup_max
+P1-2 balance.ts: unified credit()
+P1-3 wechat.ts: attach passthrough
+P1-4 server: POST /balance/topup/order + polling-fallback credit + cache re-key
+P1-5 client: balance-first + auto-topup + auto-retry + hooks
+P1-6 cli: passwordless pay + balance topup --pack + balance view
+P1-7 tests                                            -> Phase 1 exit
+P2   nginx check -> decryptCallback -> POST /wechat/notify
+P3   signed buyer tokens + limits
+```
+
 ---
 *Authored 2026-07-12. Decisions locked: CNY ledger (1:1 fen), fixed top-up packs, callback-primary + polling-fallback.*

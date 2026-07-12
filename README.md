@@ -1072,7 +1072,66 @@ Since **`2.2.0`**, MoltsPay supports a third payment mode: a **custodial balance
 
 Unlike the other rails, nothing settles externally at purchase time: the ledger lives in SQLite on the provider server (Node's built-in `node:sqlite`, zero new dependencies). Enabling the rail requires **Node.js >= 22.5** on the server; servers that don't enable it keep the package's `node >= 18` floor.
 
-> ⚠️ **Custodial trust model.** Buyer funds are held by the provider, and `buyer_id` is a **bearer identifier** — anyone who presents it can spend that balance. This fits channel-mediated use (the channel runtime holds the id and maps its own sessions to it). Signed buyer tokens are planned. See [`docs/BALANCE-RAIL-DESIGN.md`](docs/BALANCE-RAIL-DESIGN.md).
+> ⚠️ **Custodial trust model.** Buyer funds are held by the provider, and `buyer_id` is a **bearer identifier** — anyone who presents it can spend that balance. This fits channel-mediated use (the channel runtime holds the id and maps its own sessions to it). Signed buyer tokens are planned. See [`docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md`](docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md).
+
+### WeChat-Funded Password-Free (Scan Once, Then Password-Free)
+
+Since **`2.3.0`**, the WeChat rail can **fund** the balance instead of charging per transaction. The buyer scans **once** to load a top-up pack (e.g. ¥20); every subsequent purchase deducts from the balance with **no scan, no password**, until it runs low and one more scan tops it up. WeChat has no autonomous payer, so "password-free" lives on the balance side — the first purchase against an empty balance still needs one scan, but it buys a pack, not a single item.
+
+Set the ledger currency to `CNY` (WeChat `payer_total` credits 1:1 as fen — no FX), define top-up packs, and the client handles the rest:
+
+```json
+{
+  "provider": {
+    "name": "My Service",
+    "wallet": "0x...",
+    "chains": ["balance", "wechat"],
+    "balance": {
+      "db_path": "./data/balance-cny.sqlite",
+      "currency": "CNY",
+      "single_limit": "50.00",
+      "daily_limit": "200.00",
+      "topup_packs": ["20.00", "50.00"],
+      "default_pack": "20.00",
+      "auto_topup_max": "50.00"
+    },
+    "wechat": {
+      "mchid": "1900000001",
+      "appid": "wx8888888888888888",
+      "serial_no": "...",
+      "private_key_path": "/abs/apiclient_key.pem",
+      "notify_url": "https://your-host/wechat/notify",
+      "platform_public_key_path": "/abs/wechat_platform_cert.pem",
+      "apiv3_key": "<32-byte apiv3 key>"
+    }
+  },
+  "services": [{
+    "id": "my-service",
+    "function": "handleRequest",
+    "price": 3.99,
+    "currency": "CNY",
+    "balance": { "price": "3.99" }
+  }]
+}
+```
+
+**New `provider.balance` fields (2.3.0):**
+
+| Field | Req | Description |
+|-------|-----|-------------|
+| `currency` | — | Set to `"CNY"` to fund via WeChat 1:1 (fen). A ledger remembers its currency and refuses to start on a mismatch |
+| `topup_packs` | — | Offered recharge amounts (yuan strings), e.g. `["20.00","50.00"]` |
+| `default_pack` | — | Pack the client auto-selects when funds are short (must be in `topup_packs`) |
+| `auto_topup_max` | — | Ceiling on client auto-top-up without explicit pack selection |
+
+The callback path (`POST /wechat/notify`) requires `apiv3_key` + `platform_public_key_path`; without them the server falls back to polling the order (still safe, higher latency). Usage — a single `pay` command:
+
+```bash
+npx moltspay balance set-buyer my-buyer-id
+# First purchase: prints a pack QR, waits for the scan, credits, completes.
+# Later purchases: password-free, no QR — deducted from the balance.
+npx moltspay pay https://server.com my-service '{"prompt":"hello"}'
+```
 
 ### Money-Safety Design
 

@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.3.0] - Unreleased
+
+**Scan once, then password-free.** Fuses the WeChat Native rail (2.1.0) and the custodial balance rail (2.2.0) into one flow: WeChat becomes a **balance funding source** (the buyer scans once to load a top-up pack) and the balance rail does the spending (subsequent purchases deduct server-side, no scan, no password). WeChat has no autonomous payer product, so "password-free" lives entirely on the balance-deduction side; the first purchase against an empty balance still requires one scan, but it buys a pack, not a single item.
+
+**No breaking changes.** The per-transaction WeChat rail and the manual balance top-up endpoint keep working; the fused flow is opt-in via config + client behavior. Design: [`docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md`](docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md) (supersedes the now-deprecated `WECHAT-RAIL-DESIGN.md` / `BALANCE-RAIL-DESIGN.md`).
+
+### Added
+- **WeChat-funded balance top-up** — `POST /balance/topup/order` mints a buyer-bound WeChat Native order for a configured top-up pack and returns `{ code_url, out_trade_no, pack, expires_at }`. Buyer binding rides in the WeChat `attach` passthrough (`{ buyer_id, nonce }`), so an anonymous Native order credits the correct balance.
+- **Automatic crediting** — callback-primary (`POST /wechat/notify`: apiv3 AES-256-GCM decrypt + platform-cert verify) with server-side polling as fallback; both credit the gateway-verified `payer_total` and are idempotent on `wechat:<out_trade_no>`, so whichever arrives first wins. Replaces the manual `balance topup --out-trade-no --amount` step.
+- **Fixed top-up packs** — `provider.balance.topup_packs` / `default_pack` / `auto_topup_max`. The client auto-tops-up with `default_pack` (bounded by `auto_topup_max`) when a 402 finds an insufficient balance, then auto-retries the original request.
+- **CNY ledger** — `provider.balance.currency: "CNY"`. The ledger minor unit (`*_sat`) is fen for CNY, so WeChat `payer_total` credits 1:1 with no FX. A new `ledger_meta` row records the ledger currency and the rail refuses to start on a currency mismatch (guards against re-interpreting a USD ledger as CNY).
+- **Client password-free orchestration** — `pay()` goes balance-first, surfaces a pack QR only when funds are short, and auto-retries after crediting; new `onTopupRequired` / `onTopupCredited` hooks. CLI: `moltspay balance topup --pack <amt>`; `moltspay pay` completes password-free when funded.
+
+### Security
+- **Structural amount integrity** — top-ups credit only the gateway-verified `payer_total` (callback decrypt+verify, or order-query `SUCCESS`); a client-declared amount never reaches the ledger. This makes the amount-spoofing class impossible by construction, generalizing the earlier `handleBalanceTopup` fix.
+- **Bearer `buyer_id` caveat** — password-free means a pre-funded balance sits behind a bearer identifier; signed buyer tokens (Phase 3) are recommended before wide rollout, and `auto_topup_max` bounds how much a compromised client can pull from the user's WeChat.
+
 ## [2.2.0] - Unreleased
 
 Third payment mode: a **custodial balance rail (password-free payments / 免密支付)**, alongside per-transaction crypto signing and the Alipay/WeChat scan-to-pay fiat rails. A buyer tops up once and subsequent purchases are deducted server-side — no signature, no QR, no password per transaction.
