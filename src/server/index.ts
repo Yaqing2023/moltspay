@@ -1535,6 +1535,20 @@ export class MoltsPayServer {
       if (!check.valid) {
         return this.sendJson(res, 402, { error: `WeChat order verification failed: ${check.error}` });
       }
+      // Credit what WeChat actually confirms was paid on this order, not the
+      // client-declared `amount` -- otherwise a buyer can pay 0.01 CNY and claim
+      // any amount. `payer_total` is fen, which is 1:1 with ledger cents.
+      const paidFen = (check.details?.amount as any)?.payer_total ?? (check.details?.amount as any)?.total;
+      if (typeof paidFen !== 'number' || !Number.isFinite(paidFen) || paidFen <= 0) {
+        return this.sendJson(res, 502, { error: 'WeChat order verification did not return a usable paid amount' });
+      }
+      if (paidFen !== amountSat) {
+        console.warn(
+          `[MoltsPay] WeChat topup amount mismatch for ${outTradeNo}: client declared ${fromSat(amountSat)}, ` +
+            `gateway confirms ${fromSat(paidFen)} paid -- crediting the verified amount`
+        );
+      }
+      amountSat = paidFen;
       externalRef = `wechat:${outTradeNo}`;
       description = `wechat topup out_trade_no=${outTradeNo} fiat=${JSON.stringify(check.details?.amount ?? null)}`;
       console.log(`[MoltsPay] WeChat topup verified: ${description}`);
