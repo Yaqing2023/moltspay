@@ -1,5 +1,12 @@
 # Password-Free Payment (Custodial Balance Rail) — Design
 
+> # ⚠️ DEPRECATED (2026-07-12)
+> **This design is superseded by [`WECHAT-BALANCE-PASSWORDLESS-DESIGN.md`](./WECHAT-BALANCE-PASSWORDLESS-DESIGN.md).**
+> Two classes of obsolete content live here: (1) the standalone WebchatPay service
+> (port 4402) sections — an abandoned route; (2) the manual per-step top-up flow,
+> now replaced by the fused WeChat-funds-balance password-free design.
+> Do **not** design or implement new work from this file.
+
 > **Status (2026-07-04)**: **Implemented** on the `2.2.0` code path — see the "SDK integration design" section at the end of this document for the shipped shape (x402 `balance` scheme, `BalanceFacilitator`, `provider.balance` config, `/balance` endpoints, `pay --rail balance`). Originally this document was migrated from a standalone design (`webchatpay-design.md`) written for an **independent WebchatPay service (port 4402) — that route was abandoned** in favor of unifying the rail into the MoltsPay SDK as a third payment mode alongside crypto (per-transaction signing) and the fiat QR rails (Alipay/WeChat, per-transaction scan-to-pay). The data model, API semantics, and security design below remain valid as background; where the historical sections disagree with the "SDK integration design" section, the latter is authoritative. See also `README.md` § "Balance Rail (Password-Free Payments)" and `CHANGELOG.md` [2.2.0].
 
 ## Goal

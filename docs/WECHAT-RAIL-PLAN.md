@@ -1,5 +1,10 @@
 # WeChat Pay Rail — Development Plan (Scenario A)
 
+> # ⚠️ DEPRECATED (2026-07-12)
+> **Companion to the deprecated [`WECHAT-RAIL-DESIGN.md`](./WECHAT-RAIL-DESIGN.md).**
+> Superseded by [`WECHAT-BALANCE-PASSWORDLESS-DESIGN.md`](./WECHAT-BALANCE-PASSWORDLESS-DESIGN.md).
+> Do **not** plan or implement new work from this file.
+
 > **Companion design**: [WECHAT-RAIL-DESIGN.md](./WECHAT-RAIL-DESIGN.md)
 > **Scope**: Scenario A — server issues a Native code, payer not pre-bound, one-code-one-payment, all funds to one `mchid`, **SDK-managed poll-based confirmation**
 > **Target**: `moltspay@2.1.0`

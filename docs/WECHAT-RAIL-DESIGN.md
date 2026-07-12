@@ -1,5 +1,12 @@
 # WeChat Pay Rail (WeChat Pay v3)
 
+> # ⚠️ DEPRECATED (2026-07-12)
+> **This design is superseded by [`WECHAT-BALANCE-PASSWORDLESS-DESIGN.md`](./WECHAT-BALANCE-PASSWORDLESS-DESIGN.md).**
+> The per-transaction scan-to-pay flow below still describes shipped 2.1.0 behavior,
+> but the intended direction repositions the WeChat rail as a **balance funding source**
+> (scan-once, then password-free). Do **not** design or implement new work from this file.
+> Kept only as a record of the original per-transaction rail.
+
 > **Target**: `moltspay@2.1.0`
 > **Status**: Implemented: server-side verify/settle plus SDK-managed recoverable buyer sessions
 > **Scope**: WeChat Native scan-to-pay: SDK client persists the payment session, surfaces QR media, polls in the background, and fulfills idempotently after a human pays.
