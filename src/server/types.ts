@@ -183,6 +183,12 @@ export interface ProviderBalanceConfig {
   single_limit?: string;
   /** Default daily limit for new buyers, decimal string. Defaults to `"10.00"`. */
   daily_limit?: string;
+  /** Offered top-up pack amounts in ledger currency (2.3+), e.g. `["20.00","50.00"]`. */
+  topup_packs?: string[];
+  /** Pack the client auto-selects when a 402 finds an insufficient balance (2.3+). Must be one of `topup_packs`. */
+  default_pack?: string;
+  /** Ceiling on client auto-top-up without explicit pack selection (2.3+). */
+  auto_topup_max?: string;
 }
 
 /**

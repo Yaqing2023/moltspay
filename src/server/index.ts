@@ -34,6 +34,7 @@ import {
   WECHAT_NETWORK,
   WECHAT_SCHEME,
   WECHAT_TIME_EXPIRE_MS,
+  parseWechatAttach,
   BalanceFacilitator,
   BalanceFacilitatorConfig,
   BALANCE_SCHEME,
@@ -286,7 +287,7 @@ export class MoltsPayServer {
    * which expires server-side per `time_expire` — never a double charge.
    */
   private wechatPendingChallenges: Map<string, {
-    promise: Promise<{ accepts: X402PaymentRequirements; outTradeNo: string } | null>;
+    promise: Promise<{ accepts: X402PaymentRequirements; codeUrl: string; outTradeNo: string } | null>;
     expiresAtMs: number;
     outTradeNo?: string;
   }> = new Map();
@@ -669,6 +670,14 @@ export class MoltsPayServer {
       if (url.pathname.startsWith('/balance') && this.balanceFacilitator) {
         if (url.pathname === '/balance' && req.method === 'GET') {
           return this.handleBalanceQuery(url, res);
+        }
+        if (url.pathname === '/balance/topup/order' && req.method === 'POST') {
+          const body = await this.readBody(req);
+          return await this.handleBalanceTopupOrder(body, res);
+        }
+        if (url.pathname === '/balance/topup/confirm' && req.method === 'POST') {
+          const body = await this.readBody(req);
+          return await this.handleBalanceTopupConfirm(body, res);
         }
         if (url.pathname === '/balance/topup' && req.method === 'POST') {
           const body = await this.readBody(req);
@@ -1266,16 +1275,37 @@ export class MoltsPayServer {
       .update(`${config.id}|${canonicalJson(params ?? {})}|${config.wechat.price_cny}`)
       .digest('hex');
 
+    const result = await this.getOrCreatePendingWechatOrder(cacheKey, config.id, () =>
+      this.wechatFacilitator!.createPaymentRequirements({
+        priceCny: config.wechat!.price_cny,
+        description: config.wechat!.description,
+      }),
+    );
+    return result ? { accepts: result.accepts } : null;
+  }
+
+  /**
+   * Get-or-create a pending WeChat Native order under `cacheKey`, deduping
+   * concurrent builds and reusing an unpaid order until it nears expiry.
+   * Shared by the 402 challenge path ({@link buildWechatChallenge}) and the
+   * balance top-up order path ({@link handleBalanceTopupOrder}). See the
+   * `wechatPendingChallenges` doc for the double-charge rationale.
+   */
+  private async getOrCreatePendingWechatOrder(
+    cacheKey: string,
+    logLabel: string,
+    create: () => Promise<{ x402Accepts: X402PaymentRequirements; codeUrl: string; outTradeNo: string }>,
+  ): Promise<{ accepts: X402PaymentRequirements; codeUrl: string; outTradeNo: string } | null> {
     const now = Date.now();
     const cached = this.wechatPendingChallenges.get(cacheKey);
     if (cached) {
       if (now < cached.expiresAtMs) {
         const hit = await cached.promise;
         if (hit) {
-          console.log(`[MoltsPay] Reusing pending WeChat order ${hit.outTradeNo} for ${config.id}`);
-          return { accepts: hit.accepts };
+          console.log(`[MoltsPay] Reusing pending WeChat order ${hit.outTradeNo} for ${logLabel}`);
+          return hit;
         }
-        // Build failed after we joined it — fall through to a fresh attempt.
+        // Build failed after we joined it -- fall through to a fresh attempt.
       }
       this.wechatPendingChallenges.delete(cacheKey);
     }
@@ -1286,7 +1316,7 @@ export class MoltsPayServer {
     const cacheTtlMs = Math.max(orderTtlMs - 30_000, Math.floor(orderTtlMs / 2));
 
     const entry: {
-      promise: Promise<{ accepts: X402PaymentRequirements; outTradeNo: string } | null>;
+      promise: Promise<{ accepts: X402PaymentRequirements; codeUrl: string; outTradeNo: string } | null>;
       expiresAtMs: number;
       outTradeNo?: string;
     } = {
@@ -1295,23 +1325,19 @@ export class MoltsPayServer {
     };
     entry.promise = (async () => {
       try {
-        const req = await this.wechatFacilitator!.createPaymentRequirements({
-          priceCny: config.wechat!.price_cny,
-          description: config.wechat!.description,
-        });
+        const req = await create();
         entry.outTradeNo = req.outTradeNo;
-        return { accepts: req.x402Accepts, outTradeNo: req.outTradeNo };
+        return { accepts: req.x402Accepts, codeUrl: req.codeUrl, outTradeNo: req.outTradeNo };
       } catch (err: any) {
-        console.error(`[MoltsPay] WeChat challenge build failed for ${config.id}: ${err.message}`);
-        // Never cache a failure — the next 402 retries.
+        console.error(`[MoltsPay] WeChat order build failed for ${logLabel}: ${err.message}`);
+        // Never cache a failure -- the next attempt retries.
         this.wechatPendingChallenges.delete(cacheKey);
         return null;
       }
     })();
     this.wechatPendingChallenges.set(cacheKey, entry);
 
-    const result = await entry.promise;
-    return result ? { accepts: result.accepts } : null;
+    return entry.promise;
   }
 
   /**
@@ -1465,6 +1491,143 @@ export class MoltsPayServer {
   }
 
   /**
+   * Extract the gateway-confirmed paid amount (fen) from a WeChat verify
+   * result. `payer_total` is what the buyer actually paid; falls back to
+   * `total`. Returns null if no usable positive integer is present, so the
+   * client-declared amount can never be trusted for crediting.
+   */
+  private wechatPaidFen(check: { details?: { amount?: unknown } }): number | null {
+    const amount = check.details?.amount as { payer_total?: unknown; total?: unknown } | undefined;
+    const paid = amount?.payer_total ?? amount?.total;
+    return typeof paid === 'number' && Number.isFinite(paid) && paid > 0 ? paid : null;
+  }
+
+  /**
+   * POST /balance/topup/order -- mint a buyer-bound WeChat Native order for a
+   * configured top-up pack. The buyer_id rides in the WeChat `attach` so the
+   * later confirm/callback credits the correct balance. Reuses the pending
+   * order cache (keyed by buyer_id + pack) so concurrent requests share one
+   * order. Body: `{ buyer_id, pack? }`. Returns `{ code_url, out_trade_no,
+   * pack, max_timeout_seconds }`.
+   */
+  private async handleBalanceTopupOrder(body: any, res: ServerResponse): Promise<void> {
+    const { buyer_id, pack } = body || {};
+    if (typeof buyer_id !== 'string' || !buyer_id) {
+      return this.sendJson(res, 400, { error: 'buyer_id is required' });
+    }
+    if (!this.wechatFacilitator) {
+      return this.sendJson(res, 400, { error: 'WeChat rail not configured on this server' });
+    }
+    const balCfg = this.manifest.provider.balance;
+    const packs = balCfg?.topup_packs ?? [];
+    const chosen: string | undefined =
+      typeof pack === 'string' && pack ? pack : balCfg?.default_pack;
+    if (!chosen) {
+      return this.sendJson(res, 400, { error: 'no pack specified and no default_pack configured' });
+    }
+    // Accept a pack that is either offered or within the auto-topup ceiling.
+    let chosenSat: number;
+    try {
+      chosenSat = toSat(chosen);
+      if (chosenSat <= 0) throw new Error('pack must be positive');
+    } catch (err: any) {
+      return this.sendJson(res, 400, { error: `Invalid pack: ${err.message}` });
+    }
+    const withinMax = balCfg?.auto_topup_max ? chosenSat <= toSat(balCfg.auto_topup_max) : false;
+    if (!packs.includes(chosen) && !withinMax) {
+      return this.sendJson(res, 400, {
+        error: `pack "${chosen}" is not an offered top-up pack and exceeds auto_topup_max`,
+      });
+    }
+
+    const nonce = crypto.randomBytes(8).toString('hex');
+    const cacheKey = crypto
+      .createHash('sha256')
+      .update(`topup|${buyer_id}|${chosen}`)
+      .digest('hex');
+    const result = await this.getOrCreatePendingWechatOrder(cacheKey, `topup:${buyer_id}`, () =>
+      this.wechatFacilitator!.createPaymentRequirements({
+        priceCny: chosen,
+        description: `Balance top-up ${chosen}`,
+        attach: { buyer_id, nonce },
+      }),
+    );
+    if (!result) {
+      return this.sendJson(res, 502, { error: 'failed to create WeChat top-up order' });
+    }
+    return this.sendJson(res, 200, {
+      code_url: result.codeUrl,
+      out_trade_no: result.outTradeNo,
+      pack: chosen,
+      max_timeout_seconds: result.accepts.maxTimeoutSeconds,
+    });
+  }
+
+  /**
+   * POST /balance/topup/confirm -- the polling-fallback credit path. The client
+   * polls this after a scan; the server verifies the order with the WeChat
+   * gateway and, on SUCCESS, credits the buyer bound in `attach` with the
+   * gateway-confirmed `payer_total` (never a client-declared amount).
+   * Idempotent on `wechat:<out_trade_no>`. Body: `{ out_trade_no }`.
+   */
+  private async handleBalanceTopupConfirm(body: any, res: ServerResponse): Promise<void> {
+    const outTradeNo = body?.out_trade_no;
+    if (typeof outTradeNo !== 'string' || !outTradeNo) {
+      return this.sendJson(res, 400, { error: 'out_trade_no is required' });
+    }
+    if (!this.wechatFacilitator) {
+      return this.sendJson(res, 400, { error: 'WeChat rail not configured on this server' });
+    }
+    const wxPayload: X402PaymentPayload = {
+      x402Version: X402_VERSION,
+      scheme: WECHAT_SCHEME,
+      network: WECHAT_NETWORK,
+      payload: { out_trade_no: outTradeNo },
+    };
+    const wxReqs: X402PaymentRequirements = {
+      scheme: WECHAT_SCHEME, network: WECHAT_NETWORK, asset: 'CNY', amount: '0',
+      payTo: this.manifest.provider.wechat?.mchid || '', maxTimeoutSeconds: 30,
+      extra: { out_trade_no: outTradeNo },
+    };
+    const check = await this.wechatFacilitator.verify(wxPayload, wxReqs);
+    if (!check.valid) {
+      // Not yet paid (or a transient gateway error): tell the client to keep
+      // polling rather than surfacing an error.
+      return this.sendJson(res, 200, { credited: false, pending: true, reason: check.error });
+    }
+    const paidFen = this.wechatPaidFen(check);
+    if (paidFen === null) {
+      return this.sendJson(res, 502, { error: 'WeChat order verification did not return a usable paid amount' });
+    }
+    const attach = parseWechatAttach((check.details as { attach?: unknown } | undefined)?.attach);
+    const buyerId = attach?.buyer_id;
+    if (!buyerId) {
+      return this.sendJson(res, 422, {
+        error: 'top-up order has no buyer binding (attach.buyer_id missing)',
+      });
+    }
+    const credited = this.balanceFacilitator!.credit({
+      buyerId,
+      amountSat: paidFen,
+      externalRef: `wechat:${outTradeNo}`,
+      description: `wechat topup out_trade_no=${outTradeNo} fiat=${JSON.stringify(check.details?.amount ?? null)}`,
+    });
+    // Paid orders can leave the pending cache immediately (one code, one payment).
+    this.invalidateWechatChallenge(outTradeNo);
+    console.log(
+      `[MoltsPay] Balance top-up credited buyer=${buyerId} +${fromSat(paidFen)} ` +
+        `(${outTradeNo})${credited.replayed ? ' [replayed]' : ''}`,
+    );
+    return this.sendJson(res, 200, {
+      credited: true,
+      buyer_id: buyerId,
+      tx_id: credited.txId,
+      balance: credited.balance,
+      replayed: credited.replayed,
+    });
+  }
+
+  /**
    * POST /balance/topup — verify an externally settled payment and credit
    * the buyer's ledger balance. MVP verification per rail:
    *
@@ -1538,8 +1701,8 @@ export class MoltsPayServer {
       // Credit what WeChat actually confirms was paid on this order, not the
       // client-declared `amount` -- otherwise a buyer can pay 0.01 CNY and claim
       // any amount. `payer_total` is fen, which is 1:1 with ledger cents.
-      const paidFen = (check.details?.amount as any)?.payer_total ?? (check.details?.amount as any)?.total;
-      if (typeof paidFen !== 'number' || !Number.isFinite(paidFen) || paidFen <= 0) {
+      const paidFen = this.wechatPaidFen(check);
+      if (paidFen === null) {
         return this.sendJson(res, 502, { error: 'WeChat order verification did not return a usable paid amount' });
       }
       if (paidFen !== amountSat) {

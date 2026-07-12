@@ -84,6 +84,7 @@ export {
   WECHAT_API_BASE,
   WECHAT_AMOUNT_REGEX,
   WECHAT_TIME_EXPIRE_MS,
+  parseWechatAttach,
 } from './wechat.js';
 
 // Custodial Balance Facilitator (password-free rail, 2.2.0)
