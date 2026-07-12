@@ -34,15 +34,12 @@ import {
   WECHAT_NETWORK,
   WECHAT_SCHEME,
   WECHAT_TIME_EXPIRE_MS,
-  parseWechatAttach,
   BalanceFacilitator,
   BalanceFacilitatorConfig,
   BALANCE_SCHEME,
-  toSat,
-  fromSat,
 } from '../facilitators/index.js';
 import { toPem } from '../facilitators/alipay/encoding.js';
-import { verifyPayment as verifyOnChainPayment } from '../verify/index.js';
+import { BalanceEndpoints } from './balance-endpoints.js';
 import { isAlipayChainId, isWechatChainId, isBalanceChainId } from '../chains/index.js';
 import {
   ServicesManifest,
@@ -85,6 +82,7 @@ export class MoltsPayServer {
   private wechatFacilitator: WechatFacilitator | null = null;
   /** Custodial balance facilitator instance, set when `provider.balance` is configured (2.2.0). */
   private balanceFacilitator: BalanceFacilitator | null = null;
+  private balanceEndpoints: BalanceEndpoints | null = null;
   /**
    * Pending WeChat Native order cache — the double-charge fix.
    *
@@ -261,6 +259,16 @@ export class MoltsPayServer {
 
     if (providerBalance) {
       this.balanceFacilitator = this.registry.get('balance') as BalanceFacilitator;
+      // WeChat is set up before balance, so wechatFacilitator is final here.
+      this.balanceEndpoints = new BalanceEndpoints({
+        manifest: this.manifest,
+        balance: this.balanceFacilitator,
+        wechat: this.wechatFacilitator,
+        sendJson: (res, status, data) => this.sendJson(res, status, data),
+        getOrCreatePendingWechatOrder: (cacheKey, logLabel, create) =>
+          this.getOrCreatePendingWechatOrder(cacheKey, logLabel, create),
+        invalidateWechatChallenge: (outTradeNo) => this.invalidateWechatChallenge(outTradeNo),
+      });
       console.log(`[MoltsPay] Custodial balance rail enabled (ledger ${providerBalance.db_path})`);
     }
 
@@ -481,28 +489,28 @@ export class MoltsPayServer {
       }
 
       // Custodial balance rail management endpoints (2.2.0).
-      if (url.pathname.startsWith('/balance') && this.balanceFacilitator) {
+      if (url.pathname.startsWith('/balance') && this.balanceEndpoints) {
         if (url.pathname === '/balance' && req.method === 'GET') {
-          return this.handleBalanceQuery(url, res);
+          return this.balanceEndpoints.handleQuery(url, res);
         }
         if (url.pathname === '/balance/topup/order' && req.method === 'POST') {
           const body = await this.readBody(req);
-          return await this.handleBalanceTopupOrder(body, res);
+          return await this.balanceEndpoints.handleTopupOrder(body, res);
         }
         if (url.pathname === '/balance/topup/confirm' && req.method === 'POST') {
           const body = await this.readBody(req);
-          return await this.handleBalanceTopupConfirm(body, res);
+          return await this.balanceEndpoints.handleTopupConfirm(body, res);
         }
         if (url.pathname === '/balance/topup' && req.method === 'POST') {
           const body = await this.readBody(req);
-          return await this.handleBalanceTopup(body, res);
+          return await this.balanceEndpoints.handleTopup(body, res);
         }
         if (url.pathname === '/balance/refund' && req.method === 'POST') {
           const body = await this.readBody(req);
-          return this.handleBalanceRefund(body, res);
+          return this.balanceEndpoints.handleRefund(body, res);
         }
         if (url.pathname === '/balance/transactions' && req.method === 'GET') {
-          return this.handleBalanceTransactions(url, res);
+          return this.balanceEndpoints.handleTransactions(url, res);
         }
       }
 
@@ -1276,325 +1284,6 @@ export class MoltsPayServer {
   }
 
   /** GET /balance?buyer_id= — balance, limits, and today's spend. */
-  private handleBalanceQuery(url: URL, res: ServerResponse): void {
-    const buyerId = url.searchParams.get('buyer_id');
-    if (!buyerId) {
-      return this.sendJson(res, 400, { error: 'buyer_id query parameter is required' });
-    }
-    const ledger = this.balanceFacilitator!.getLedger();
-    const buyer = ledger.getBuyer(buyerId);
-    if (!buyer) {
-      // A never-seen buyer is a valid empty account, not an error.
-      return this.sendJson(res, 200, {
-        buyer_id: buyerId,
-        balance: '0.00',
-        currency: this.balanceFacilitator!.currency,
-        exists: false,
-      });
-    }
-    this.sendJson(res, 200, {
-      buyer_id: buyerId,
-      balance: fromSat(buyer.balance_sat),
-      currency: this.balanceFacilitator!.currency,
-      single_limit: fromSat(buyer.single_limit_sat),
-      daily_limit: fromSat(buyer.daily_limit_sat),
-      today_spent: fromSat(ledger.spentTodaySat(buyerId)),
-      status: buyer.status,
-      exists: true,
-    });
-  }
-
-  /**
-   * Extract the gateway-confirmed paid amount (fen) from a WeChat verify
-   * result. `payer_total` is what the buyer actually paid; falls back to
-   * `total`. Returns null if no usable positive integer is present, so the
-   * client-declared amount can never be trusted for crediting.
-   */
-  private wechatPaidFen(check: { details?: { amount?: unknown } }): number | null {
-    const amount = check.details?.amount as { payer_total?: unknown; total?: unknown } | undefined;
-    const paid = amount?.payer_total ?? amount?.total;
-    return typeof paid === 'number' && Number.isFinite(paid) && paid > 0 ? paid : null;
-  }
-
-  /**
-   * POST /balance/topup/order -- mint a buyer-bound WeChat Native order for a
-   * configured top-up pack. The buyer_id rides in the WeChat `attach` so the
-   * later confirm/callback credits the correct balance. Reuses the pending
-   * order cache (keyed by buyer_id + pack) so concurrent requests share one
-   * order. Body: `{ buyer_id, pack? }`. Returns `{ code_url, out_trade_no,
-   * pack, max_timeout_seconds }`.
-   */
-  private async handleBalanceTopupOrder(body: any, res: ServerResponse): Promise<void> {
-    const { buyer_id, pack } = body || {};
-    if (typeof buyer_id !== 'string' || !buyer_id) {
-      return this.sendJson(res, 400, { error: 'buyer_id is required' });
-    }
-    if (!this.wechatFacilitator) {
-      return this.sendJson(res, 400, { error: 'WeChat rail not configured on this server' });
-    }
-    const balCfg = this.manifest.provider.balance;
-    const packs = balCfg?.topup_packs ?? [];
-    const chosen: string | undefined =
-      typeof pack === 'string' && pack ? pack : balCfg?.default_pack;
-    if (!chosen) {
-      return this.sendJson(res, 400, { error: 'no pack specified and no default_pack configured' });
-    }
-    // Accept a pack that is either offered or within the auto-topup ceiling.
-    let chosenSat: number;
-    try {
-      chosenSat = toSat(chosen);
-      if (chosenSat <= 0) throw new Error('pack must be positive');
-    } catch (err: any) {
-      return this.sendJson(res, 400, { error: `Invalid pack: ${err.message}` });
-    }
-    const withinMax = balCfg?.auto_topup_max ? chosenSat <= toSat(balCfg.auto_topup_max) : false;
-    if (!packs.includes(chosen) && !withinMax) {
-      return this.sendJson(res, 400, {
-        error: `pack "${chosen}" is not an offered top-up pack and exceeds auto_topup_max`,
-      });
-    }
-
-    const nonce = crypto.randomBytes(8).toString('hex');
-    const cacheKey = crypto
-      .createHash('sha256')
-      .update(`topup|${buyer_id}|${chosen}`)
-      .digest('hex');
-    const result = await this.getOrCreatePendingWechatOrder(cacheKey, `topup:${buyer_id}`, () =>
-      this.wechatFacilitator!.createPaymentRequirements({
-        priceCny: chosen,
-        description: `Balance top-up ${chosen}`,
-        attach: { buyer_id, nonce },
-      }),
-    );
-    if (!result) {
-      return this.sendJson(res, 502, { error: 'failed to create WeChat top-up order' });
-    }
-    return this.sendJson(res, 200, {
-      code_url: result.codeUrl,
-      out_trade_no: result.outTradeNo,
-      pack: chosen,
-      max_timeout_seconds: result.accepts.maxTimeoutSeconds,
-    });
-  }
-
-  /**
-   * POST /balance/topup/confirm -- the polling-fallback credit path. The client
-   * polls this after a scan; the server verifies the order with the WeChat
-   * gateway and, on SUCCESS, credits the buyer bound in `attach` with the
-   * gateway-confirmed `payer_total` (never a client-declared amount).
-   * Idempotent on `wechat:<out_trade_no>`. Body: `{ out_trade_no }`.
-   */
-  private async handleBalanceTopupConfirm(body: any, res: ServerResponse): Promise<void> {
-    const outTradeNo = body?.out_trade_no;
-    if (typeof outTradeNo !== 'string' || !outTradeNo) {
-      return this.sendJson(res, 400, { error: 'out_trade_no is required' });
-    }
-    if (!this.wechatFacilitator) {
-      return this.sendJson(res, 400, { error: 'WeChat rail not configured on this server' });
-    }
-    const wxPayload: X402PaymentPayload = {
-      x402Version: X402_VERSION,
-      scheme: WECHAT_SCHEME,
-      network: WECHAT_NETWORK,
-      payload: { out_trade_no: outTradeNo },
-    };
-    const wxReqs: X402PaymentRequirements = {
-      scheme: WECHAT_SCHEME, network: WECHAT_NETWORK, asset: 'CNY', amount: '0',
-      payTo: this.manifest.provider.wechat?.mchid || '', maxTimeoutSeconds: 30,
-      extra: { out_trade_no: outTradeNo },
-    };
-    const check = await this.wechatFacilitator.verify(wxPayload, wxReqs);
-    if (!check.valid) {
-      // Not yet paid (or a transient gateway error): tell the client to keep
-      // polling rather than surfacing an error.
-      return this.sendJson(res, 200, { credited: false, pending: true, reason: check.error });
-    }
-    const paidFen = this.wechatPaidFen(check);
-    if (paidFen === null) {
-      return this.sendJson(res, 502, { error: 'WeChat order verification did not return a usable paid amount' });
-    }
-    const attach = parseWechatAttach((check.details as { attach?: unknown } | undefined)?.attach);
-    const buyerId = attach?.buyer_id;
-    if (!buyerId) {
-      return this.sendJson(res, 422, {
-        error: 'top-up order has no buyer binding (attach.buyer_id missing)',
-      });
-    }
-    const credited = this.balanceFacilitator!.credit({
-      buyerId,
-      amountSat: paidFen,
-      externalRef: `wechat:${outTradeNo}`,
-      description: `wechat topup out_trade_no=${outTradeNo} fiat=${JSON.stringify(check.details?.amount ?? null)}`,
-    });
-    // Paid orders can leave the pending cache immediately (one code, one payment).
-    this.invalidateWechatChallenge(outTradeNo);
-    console.log(
-      `[MoltsPay] Balance top-up credited buyer=${buyerId} +${fromSat(paidFen)} ` +
-        `(${outTradeNo})${credited.replayed ? ' [replayed]' : ''}`,
-    );
-    return this.sendJson(res, 200, {
-      credited: true,
-      buyer_id: buyerId,
-      tx_id: credited.txId,
-      balance: credited.balance,
-      replayed: credited.replayed,
-    });
-  }
-
-  /**
-   * POST /balance/topup — verify an externally settled payment and credit
-   * the buyer's ledger balance. MVP verification per rail:
-   *
-   * - `crypto`: `tx_hash` is verified on-chain (receipt success + USDC/USDT
-   *   transfer to the provider wallet + amount >= `amount`).
-   * - `wechat`: `out_trade_no` is queried via the WeChat rail; must be
-   *   SUCCESS. The credited `amount` is in LEDGER currency — CNY→ledger FX
-   *   is the operator's call in the MVP; the fiat amount is logged.
-   * - `alipay`: same trust model as wechat, but Alipay AI-Pay verification
-   *   needs the buyer's payment_proof (not just a trade_no), so the MVP
-   *   accepts the operator-confirmed `trade_no` as the idempotency ref
-   *   WITHOUT gateway verification. Guard this endpoint accordingly.
-   *
-   * All rails: the external reference is UNIQUE in the ledger — replaying
-   * the same tx_hash / trade number never credits twice.
-   */
-  private async handleBalanceTopup(body: any, res: ServerResponse): Promise<void> {
-    const { buyer_id, rail, amount } = body || {};
-    if (typeof buyer_id !== 'string' || !buyer_id) {
-      return this.sendJson(res, 400, { error: 'buyer_id is required' });
-    }
-    let amountSat: number;
-    try {
-      amountSat = toSat(String(amount));
-      if (amountSat <= 0) throw new Error('amount must be positive');
-    } catch (err: any) {
-      return this.sendJson(res, 400, { error: `Invalid amount: ${err.message}` });
-    }
-
-    let externalRef: string;
-    let description: string;
-    if (rail === 'crypto') {
-      const txHash = body.tx_hash;
-      if (typeof txHash !== 'string' || !txHash) {
-        return this.sendJson(res, 400, { error: 'tx_hash is required for rail "crypto"' });
-      }
-      const check = await verifyOnChainPayment({
-        txHash,
-        expectedAmount: amountSat / 100,
-        expectedTo: this.manifest.provider.wallet,
-        chain: body.chain || 'base',
-      });
-      if (!check.verified) {
-        return this.sendJson(res, 402, { error: `On-chain verification failed: ${check.error}` });
-      }
-      externalRef = txHash.toLowerCase();
-      description = `crypto topup ${check.amount} ${check.token} on ${body.chain || 'base'}`;
-    } else if (rail === 'wechat') {
-      const outTradeNo = body.out_trade_no;
-      if (typeof outTradeNo !== 'string' || !outTradeNo) {
-        return this.sendJson(res, 400, { error: 'out_trade_no is required for rail "wechat"' });
-      }
-      if (!this.wechatFacilitator) {
-        return this.sendJson(res, 400, { error: 'WeChat rail not configured on this server' });
-      }
-      const wxPayload: X402PaymentPayload = {
-        x402Version: X402_VERSION,
-        scheme: WECHAT_SCHEME,
-        network: WECHAT_NETWORK,
-        payload: { out_trade_no: outTradeNo },
-      };
-      const wxReqs: X402PaymentRequirements = {
-        scheme: WECHAT_SCHEME, network: WECHAT_NETWORK, asset: 'CNY', amount: '0',
-        payTo: this.manifest.provider.wechat?.mchid || '', maxTimeoutSeconds: 30,
-        extra: { out_trade_no: outTradeNo },
-      };
-      const check = await this.wechatFacilitator.verify(wxPayload, wxReqs);
-      if (!check.valid) {
-        return this.sendJson(res, 402, { error: `WeChat order verification failed: ${check.error}` });
-      }
-      // Credit what WeChat actually confirms was paid on this order, not the
-      // client-declared `amount` -- otherwise a buyer can pay 0.01 CNY and claim
-      // any amount. `payer_total` is fen, which is 1:1 with ledger cents.
-      const paidFen = this.wechatPaidFen(check);
-      if (paidFen === null) {
-        return this.sendJson(res, 502, { error: 'WeChat order verification did not return a usable paid amount' });
-      }
-      if (paidFen !== amountSat) {
-        console.warn(
-          `[MoltsPay] WeChat topup amount mismatch for ${outTradeNo}: client declared ${fromSat(amountSat)}, ` +
-            `gateway confirms ${fromSat(paidFen)} paid -- crediting the verified amount`
-        );
-      }
-      amountSat = paidFen;
-      externalRef = `wechat:${outTradeNo}`;
-      description = `wechat topup out_trade_no=${outTradeNo} fiat=${JSON.stringify(check.details?.amount ?? null)}`;
-      console.log(`[MoltsPay] WeChat topup verified: ${description}`);
-    } else if (rail === 'alipay') {
-      const tradeNo = body.trade_no;
-      if (typeof tradeNo !== 'string' || !tradeNo) {
-        return this.sendJson(res, 400, { error: 'trade_no is required for rail "alipay"' });
-      }
-      // MVP: no gateway verification possible without the buyer's
-      // payment_proof — operator-trusted credit, idempotent on trade_no.
-      externalRef = `alipay:${tradeNo}`;
-      description = `alipay topup trade_no=${tradeNo} (operator-confirmed, unverified)`;
-      console.warn(`[MoltsPay] Alipay topup credited without gateway verification: ${tradeNo}`);
-    } else {
-      return this.sendJson(res, 400, { error: 'rail must be one of "crypto" | "alipay" | "wechat"' });
-    }
-
-    const ledger = this.balanceFacilitator!.getLedger();
-    const result = ledger.topup({ buyerId: buyer_id, amountSat, externalRef, description });
-    this.sendJson(res, 200, {
-      success: true,
-      tx_id: result.txId,
-      balance: fromSat(result.balanceSat),
-      replayed: result.replayed ?? false,
-    });
-  }
-
-  /** POST /balance/refund — reverse a deduct (operator/agent use). */
-  private handleBalanceRefund(body: any, res: ServerResponse): void {
-    const { tx_id, reason } = body || {};
-    if (typeof tx_id !== 'string' || !tx_id) {
-      return this.sendJson(res, 400, { error: 'tx_id is required' });
-    }
-    const result = this.balanceFacilitator!.refund(tx_id, typeof reason === 'string' ? reason : undefined);
-    if (!result.success) {
-      return this.sendJson(res, result.error === 'tx_not_found' ? 404 : 400, { error: result.error });
-    }
-    this.sendJson(res, 200, {
-      success: true,
-      tx_id: result.txId,
-      balance: fromSat(result.balanceSat!),
-      replayed: result.replayed ?? false,
-    });
-  }
-
-  /** GET /balance/transactions?buyer_id=&limit=&offset= — history, newest first. */
-  private handleBalanceTransactions(url: URL, res: ServerResponse): void {
-    const buyerId = url.searchParams.get('buyer_id');
-    if (!buyerId) {
-      return this.sendJson(res, 400, { error: 'buyer_id query parameter is required' });
-    }
-    const limit = Math.min(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 100);
-    const offset = parseInt(url.searchParams.get('offset') || '0', 10) || 0;
-    const rows = this.balanceFacilitator!.getLedger().listTransactions(buyerId, limit, offset);
-    this.sendJson(res, 200, {
-      buyer_id: buyerId,
-      transactions: rows.map(r => ({
-        tx_id: r.id,
-        type: r.type,
-        amount: fromSat(r.amount_sat),
-        service: r.service,
-        description: r.description,
-        external_ref: r.external_ref,
-        status: r.status,
-        created_at: r.created_at,
-      })),
-    });
-  }
-
   /**
    * Handle MPP (Machine Payments Protocol) request
    * Supports both x402 and MPP protocols on service endpoints
