@@ -1,5 +1,5 @@
 /**
- * Custodial Balance Facilitator (password-free / 免密支付 rail).
+ * Custodial Balance Facilitator (password-free rail).
  *
  * Third payment mode beside per-transaction crypto signing and fiat QR
  * (Alipay/WeChat): buyers top up once into a server-custodied SQLite ledger

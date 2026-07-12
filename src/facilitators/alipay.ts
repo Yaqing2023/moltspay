@@ -1,7 +1,7 @@
 /**
- * Alipay AI 收 Facilitator (2.0.0)
+ * Alipay AI Pay Facilitator (2.0.0)
  *
- * Implements the `Facilitator` interface for Alipay's 智能收 (AI Pay) 402
+ * Implements the `Facilitator` interface for Alipay's AI Pay 402
  * protocol. Adds a fiat rail (CNY) alongside the existing USDC/EVM/SVM
  * rails. Server-side only; clients shell out to the `alipay-bot` CLI
  * (see `AlipayClient` under `src/client/alipay/` in 1.7.0-rc.2).
@@ -9,7 +9,7 @@
  * Key protocol differences from x402:
  * - Wire challenge is Base64URL-encoded `Payment-Needed` header with
  *   nested `{protocol, method}` JSON (not flat `accepts[]`).
- * - Amount unit is **元** (CNY decimal string, not atomic units).
+ * - Amount unit is **yuan** (CNY decimal string, not atomic units).
  * - Signature is RSA2 (SHA256WithRSA), not EIP-712 / EIP-3009.
  * - Verify/settle hit Alipay Open API HTTP endpoints, not chain RPC.
  *
@@ -49,7 +49,7 @@ export const ALIPAY_GATEWAY_PROD = 'https://openapi.alipay.com/gateway.do';
 /** Sandbox gateway URL (for testing without real CNY). */
 export const ALIPAY_GATEWAY_SANDBOX = 'https://openapi.alipaydev.com/gateway.do';
 
-/** Validation regex for `price_cny` / `amount` (decimal string, unit 元, ≤ 2 decimal places). */
+/** Validation regex for `price_cny` / `amount` (decimal string, unit yuan, ≤ 2 decimal places). */
 export const ALIPAY_AMOUNT_REGEX = /^\d+(\.\d{1,2})?$/;
 
 /** Lifetime of a 402 challenge before `pay_before` expires (Alipay convention). */
@@ -100,7 +100,7 @@ export interface AlipayFacilitatorConfig {
 export interface CreatePaymentRequirementsOpts {
   /** Per-service Alipay `service_id` (overrides `provider.alipay.service_id_default`). */
   serviceId: string;
-  /** CNY price as decimal string in **元** (e.g. `"1.00"` = 1 CNY). */
+  /** CNY price as decimal string in **yuan** (e.g. `"1.00"` = 1 CNY). */
   priceCny: string;
   /** Goods name shown to the user in the Alipay app. */
   goodsName: string;
@@ -144,14 +144,14 @@ export interface AlipayPaymentProof {
 }
 
 /**
- * Alipay AI 收 facilitator.
+ * Alipay AI Pay facilitator.
  *
  * Construction is cheap; expensive setup (key parsing, gateway probe) is
  * deferred to `healthCheck()`.
  */
 export class AlipayFacilitator extends BaseFacilitator {
   readonly name = 'alipay';
-  readonly displayName = 'Alipay AI 收';
+  readonly displayName = 'Alipay AI Pay';
   readonly supportedNetworks = [ALIPAY_NETWORK];
 
   private readonly config: AlipayFacilitatorConfig;
@@ -176,7 +176,7 @@ export class AlipayFacilitator extends BaseFacilitator {
     if (!ALIPAY_AMOUNT_REGEX.test(opts.priceCny)) {
       throw new Error(
         `AlipayFacilitator.createPaymentRequirements: priceCny "${opts.priceCny}" ` +
-          `does not match /^\\d+(\\.\\d{1,2})?$/ (unit is 元, not 分; e.g. "1.00" not "100")`,
+          `does not match /^\\d+(\\.\\d{1,2})?$/ (unit is yuan, not fen; e.g. "1.00" not "100")`,
       );
     }
 
@@ -307,7 +307,7 @@ export class AlipayFacilitator extends BaseFacilitator {
    * service resource has been returned to the buyer.
    *
    * Per the design (see ALIPAY-INTEGRATION-DESIGN.md §5.1, risk row
-   * "履约确认失败"), this is **fire-and-forget**: the caller (registry /
+   * (a fulfillment-confirm failure), this is **fire-and-forget**: the caller (registry /
    * server) is expected to log fulfillment failures but NOT roll back
    * the already-delivered resource.
    *

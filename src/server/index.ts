@@ -76,7 +76,7 @@ export class MoltsPayServer {
   private registry: FacilitatorRegistry;
   private networkId: string;
   private useMainnet: boolean;
-  /** Alipay AI 收 facilitator instance, set when `provider.alipay` is configured (2.0.0). */
+  /** Alipay AI Pay facilitator instance, set when `provider.alipay` is configured (2.0.0). */
   private alipayFacilitator: AlipayFacilitator | null = null;
   /** WeChat Pay Native facilitator instance, set when `provider.wechat` is configured (2.1.0). */
   private wechatFacilitator: WechatFacilitator | null = null;
@@ -138,7 +138,7 @@ export class MoltsPayServer {
       },
     };
 
-    // ── Alipay AI 收 fiat rail (2.0.0): opt-in via provider.alipay ──
+    // ── Alipay AI Pay fiat rail (2.0.0): opt-in via provider.alipay ──
     // When configured, resolve the PEM key files (the manifest stores PATHS,
     // the facilitator wants PEM STRINGS) and register the facilitator in the
     // selection so registry.verify/settle route `network: "alipay"` to it.
@@ -249,7 +249,7 @@ export class MoltsPayServer {
 
     if (providerAlipay) {
       this.alipayFacilitator = this.registry.get('alipay') as AlipayFacilitator;
-      console.log(`[MoltsPay] Alipay AI 收 rail enabled (seller ${providerAlipay.seller_id})`);
+      console.log(`[MoltsPay] Alipay AI Pay rail enabled (seller ${providerAlipay.seller_id})`);
     }
 
     if (providerWechat) {
@@ -842,7 +842,7 @@ export class MoltsPayServer {
   }
 
   /**
-   * Execute a service paid via the Alipay AI 收 fiat rail (2.0.0).
+   * Execute a service paid via the Alipay AI Pay fiat rail (2.0.0).
    *
    * Differs from the EVM/SVM path: no token detection, no EIP-3009/permit
    * validation. Verify hits the Alipay Open API (`payment.verify`). Settlement

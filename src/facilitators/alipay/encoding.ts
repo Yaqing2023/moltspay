@@ -1,5 +1,5 @@
 /**
- * Base64URL encoding helpers for Alipay AI 收 wire format.
+ * Base64URL encoding helpers for Alipay AI Pay wire format.
  *
  * Alipay's `Payment-Needed` and `Payment-Proof` headers use Base64URL
  * (`-` replaces `+`, `_` replaces `/`, padding optional). Some proxies

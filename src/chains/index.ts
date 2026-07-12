@@ -210,17 +210,17 @@ export function getChainById(chainId: number): ChainConfig | undefined {
   return Object.values(CHAINS).find(c => c.chainId === chainId);
 }
 
-// ============ Alipay AI 收 Fiat Rail (2.0.0+) ============
+// ============ Alipay AI Pay Fiat Rail (2.0.0+) ============
 
 /**
- * Chain-id string for the Alipay AI 收 fiat rail.
+ * Chain-id string for the Alipay AI Pay fiat rail.
  * Used in `provider.chains: ["alipay", ...]` to opt the provider into
  * accepting CNY payments alongside USDC.
  */
 export const ALIPAY_CHAIN_ID = 'alipay' as const;
 
 /**
- * Rail metadata for the Alipay AI 收 fiat rail (2.0.0+).
+ * Rail metadata for the Alipay AI Pay fiat rail (2.0.0+).
  *
  * Intentionally kept **outside** the {@link CHAINS} Record because that
  * Record is `Record<EvmChainName, ChainConfig>` and an EVM `ChainConfig`
@@ -237,7 +237,7 @@ export const ALIPAY_RAIL = {
   type: 'fiat-rail' as const,
   /** Quote currency. */
   currency: 'CNY' as const,
-  /** Decimal places for the `amount` field (元 with up to 2 decimals). */
+  /** Decimal places for the `amount` field (yuan with up to 2 decimals). */
   decimals: 2 as const,
   /** x402 `scheme` string — matches `ALIPAY_SCHEME` in src/facilitators/alipay.ts. */
   facilitator: 'alipay-aipay' as const,
@@ -295,7 +295,7 @@ export function isWechatChainId(id: string): id is typeof WECHAT_CHAIN_ID {
 // ============ Custodial Balance Rail (2.2.0+) ============
 
 /**
- * Chain-id string for the custodial balance ("password-free" / 免密支付) rail.
+ * Chain-id string for the custodial balance ("password-free" / password-free) rail.
  * Used in `provider.chains: ["balance", ...]` to opt the provider into
  * deducting from server-custodied buyer balances instead of a per-transaction
  * signature or scan-to-pay.

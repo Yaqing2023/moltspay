@@ -1,7 +1,7 @@
 /**
  * Custodial balance ledger (SQLite).
  *
- * Backs the balance ("password-free" / 免密支付) rail: buyers top up once and
+ * Backs the balance ("password-free" / password-free) rail: buyers top up once and
  * subsequent purchases are deducted server-side — no signature or scan per
  * transaction. All amounts are **integer cents** (`*_sat`, 1 USD = 100) to
  * avoid floating-point drift; the dollar<->cent boundary is `toSat`/`fromSat`.

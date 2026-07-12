@@ -4,7 +4,7 @@
  * The Alipay skill guide §5 forbids skipping any step; each maps to one
  * `alipay-bot` spawn. This class drives them in order and hands the caller a
  * single terminal `AlipayPaymentResult`, so paying via Alipay looks the same
- * as awaiting an EVM settle (design §5.2.3 "关键设计").
+ * as awaiting an EVM settle (design §5.2.3 "key design").
  *
  *   0.  ensureCli()                          version gate (≥ MIN_CLI_VERSION)
  *   1b. alipay-bot payment-intent …          session handshake
@@ -127,7 +127,7 @@ export function parsePaymentUrl(lines: string[]): { paymentUrl?: string; shorten
   for (const line of lines) {
     const m = line.match(/(alipays?:\/\/\S+|https?:\/\/\S+)/i);
     if (!m) continue;
-    // alipay-bot prints the link inside markdown `[文字](url)`; the greedy `\S+`
+    // alipay-bot prints the link inside markdown `[text](url)`; the greedy `\S+`
     // swallows the trailing `)` (and any `]`/`` ` ``/`>`), yielding a URL that
     // 404s. Strip those trailing chars.
     const url = m[1].replace(/[)\]`>]+$/, '');
@@ -149,7 +149,7 @@ export function extractMedia(line: string): string | null {
  * Decide whether check-wallet reports an opened, ready wallet.
  *
  * Observed real output (alipay-bot 0.3.15): a JSON object `{code, message,
- * reason}` — `code: 500, message: "未开通"` when the wallet is NOT opened, and
+ * reason}` -- `code: 500` with a "wallet not opened" message when the wallet is NOT opened, and
  * crucially the **process still exits 0**, so the exit code is useless here.
  * We therefore key off `code` (200 = ready) and fall back to textual markers.
  */
@@ -168,7 +168,7 @@ export function isWalletReady(lines: string[]): boolean {
  * Pull the embedded resource JSON out of an alipay-bot 0.3.15 status report.
  *
  * The settled `402-query-payment-status` report (Shape C) embeds the re-fetched
- * resource after a `资源响应体：` label, e.g. `**资源响应体**：\n{ "success": true,
+ * resource after a resource-body label (the alipay-bot Chinese literal matched below), e.g. `**<label>**:\n{ "success": true,
  * "result": { … } }`. We locate that label, brace-match the following JSON
  * object (string-aware, so braces inside values don't fool it), parse it and
  * surface `.result` (the seller's handler output). Returns `undefined` if no
@@ -207,7 +207,7 @@ function extractResourceFromReport(report: string): string | undefined {
  * Extract the resource body from the paid status-poll output.
  *
  * alipay-bot 0.3.15 (Shape C) wraps the settled report in `{body: "<markdown>"}`
- * with the resource embedded under a `资源响应体：` label — pull that out and
+ * with the resource embedded under a resource-body label -- pull that out and
  * surface `.result`. Older/other shapes put the resource under data/result/body
  * at the top level. Falls back to a `BODY:` marker, then to the joined
  * non-marker lines. Verified live 2026-06-10 against a real completed trade.
@@ -396,7 +396,7 @@ export class AlipayClient {
     // minimal one from the requirement when the caller didn't supply it.
     const intentSummary =
       opts.intentSummary?.trim() ||
-      `支付 ${requirement.amount ?? ''} ${requirement.asset ?? 'CNY'}`.trim();
+      `Pay ${requirement.amount ?? ''} ${requirement.asset ?? 'CNY'}`.trim();
 
     // Step 0: version gate.
     await timeStep('ensure-cli', flow, () => ensureCli(this.getVersion));

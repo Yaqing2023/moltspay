@@ -25,7 +25,7 @@ export interface ServiceConfig {
   /** Function name to import from skill's index.js (new skill-based approach) */
   function?: string;
   /**
-   * Alipay AI 收 per-service config (2.0.0+).
+   * Alipay AI Pay per-service config (2.0.0+).
    * Set when this service accepts CNY payments via the alipay rail.
    * The `price`/`currency` fields above still describe USDC pricing
    * for the x402 rails; `alipay.price_cny` is a separate CNY price.
@@ -89,14 +89,14 @@ export interface ServiceWechatConfig {
 }
 
 /**
- * Per-service Alipay AI 收 configuration (2.0.0+).
+ * Per-service Alipay AI Pay configuration (2.0.0+).
  *
  * Sample:
  * ```json
  * "alipay": {
  *   "service_id": "API_0EA6DC4FC99A4DF7",
  *   "price_cny": "7.00",
- *   "goods_name": "产品演示视频 - 系列一"
+ *   "goods_name": "Product demo video - series 1"
  * }
  * ```
  */
@@ -104,8 +104,8 @@ export interface ServiceAlipayConfig {
   /** Per-service service_id (defaults to provider.alipay.service_id_default). */
   service_id?: string;
   /**
-   * CNY price as decimal string in **元** (e.g. `"7.00"` = 7 CNY).
-   * NOT cents: `"100"` means 100 元, not 100 分.
+   * CNY price as decimal string in **yuan** (e.g. `"7.00"` = 7 CNY).
+   * NOT cents: `"100"` means 100 yuan, not 100 fen.
    * Must match `/^\d+(\.\d{1,2})?$/`.
    */
   price_cny: string;
@@ -141,7 +141,7 @@ export interface ProviderConfig {
   chain?: string;  // Single chain (backward compat)
   chains?: ChainConfig[];  // Multi-chain support
   /**
-   * Alipay AI 收 provider-level config (2.0.0+).
+   * Alipay AI Pay provider-level config (2.0.0+).
    * Required when `chains` includes `"alipay"`.
    * Server validates `private_key_path` / `alipay_public_key_path` are
    * readable + parse as RSA PEM at startup; rejects start otherwise.
@@ -211,7 +211,7 @@ export interface ProviderBalanceConfig {
  * ```
  */
 export interface ProviderWechatConfig {
-  /** Merchant id (商户号). */
+  /** Merchant id (mchid). */
   mchid: string;
   /** App id (official account / mini-program / app). */
   appid: string;
@@ -230,7 +230,7 @@ export interface ProviderWechatConfig {
 }
 
 /**
- * Provider-level Alipay AI 收 configuration (2.0.0+).
+ * Provider-level Alipay AI Pay configuration (2.0.0+).
  *
  * The user-facing form uses FILE PATHS for both PEM keys; the server
  * resolves them to PEM strings before constructing AlipayFacilitator.
@@ -240,7 +240,7 @@ export interface ProviderWechatConfig {
  * "alipay": {
  *   "seller_id": "2088641494699428",
  *   "app_id": "2021006150642142",
- *   "seller_name": "上海超响应数字科技有限公司",
+ *   "seller_name": "Example Co., Ltd.",
  *   "service_id_default": "API_0EA6DC4FC99A4DF7",
  *   "private_key_path": "./cert/ALIPAY_PRIVATE_KEY.txt",
  *   "alipay_public_key_path": "./cert/ALIPAY_PUBLIC_KEY.txt"

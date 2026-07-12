@@ -24,7 +24,7 @@
  * because (a) Alipay fulfillment is IDEMPOTENT: the buyer already paid, so no
  * concurrent call double-charges, and the first `/execute` to reach the gateway
  * fulfills (`status:"fulfilled"`) while any concurrent sibling is rejected with
- * `40004 交易状态不允许履约` ("trade state does not allow fulfillment") — observed
+ * `40004` ("trade state does not allow fulfillment") -- observed
  * live 2026-06-06, flow …048039. A 40004 sibling parses to `unknown` (NOT
  * `rejected`), so a loser never terminates the poll falsely. (b) Actual delivery
  * (e.g. the Discord role) is decoupled into the seller's single `onPaid`, fired
@@ -127,8 +127,9 @@ export function parseStatus(lines: string[]): PaymentStatus {
  *
  * Used for both non-JSON CLI output and the Shape-C `{body}` markdown report.
  * Paid markers are anchored and only appear AFTER the buyer paid and the
- * facilitator verified: the report's "查询支付状态成功并获取资源" header and a
- * `资源响应状态 200` resource re-fetch are emitted only on a settled trade
+ * facilitator verified: the report's "payment status queried, resource fetched"
+ * header and a "resource response status 200" re-fetch are emitted only on a
+ * settled trade (matched below against alipay-bot's Chinese literals)
  * (before payment the re-fetch returns 402). We also accept the x402/server
  * `"status":"fulfilled"` marker and Alipay `TRADE_SUCCESS/TRADE_FINISHED`.
  * We must NOT match bare "SUCCESS"/"PAID": the literal `"success"` key appears

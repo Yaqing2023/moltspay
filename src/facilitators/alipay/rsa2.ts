@@ -1,5 +1,5 @@
 /**
- * RSA2 (SHA256WithRSA) signing helpers for Alipay AI 收.
+ * RSA2 (SHA256WithRSA) signing helpers for Alipay AI Pay.
  *
  * Uses Node's built-in `crypto` module. On the merchant side, MoltsPay
  * signs the 8 fields of the 402 challenge in dictionary order

@@ -1,5 +1,5 @@
 /**
- * Alipay Open API caller for AI 收 verify and fulfillment.
+ * Alipay Open API caller for AI Pay verify and fulfillment.
  *
  * Wraps the `application/x-www-form-urlencoded` gateway protocol
  * (`https://openapi.alipay.com/gateway.do` for production,
