@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.4.0] - Unreleased
+
+**Withdraw from the CLI.** Exposes the SDK's existing `Wallet.transfer()` as a `moltspay send` command, so CLI/skill users can move USDC/USDT out of the wallet to any address (e.g. an exchange deposit address) without exporting the private key into a third-party wallet.
+
+### Added
+- **`moltspay send <to> <amount>`** — send USDC/USDT to any address. Options: `--token USDC|USDT` (default USDC), `--chain base|polygon|bnb|base_sepolia|bnb_testnet|tempo_moderato` (default base), `--yes` (skip the confirmation prompt for scripts/agents), `--json`. A thin wrapper over `Wallet.transfer()`; see `docs/SEND-COMMAND-DESIGN.md`.
+  - **EVM only** — Solana is a separate keypair/transfer path and is rejected with a clear message.
+  - **Not gasless** — unlike x402 `pay`, a plain transfer needs native gas (ETH/BNB/POL); the command preflights the token balance and native gas and fails early if short.
+  - **Safety** — checksum-validates the destination, previews From/To/Network before sending (interactive unless `--yes`/`--json`), never prints the private key, and reminds the caller that the send network must match the receiver's deposit network.
+
 ## [2.3.0] - Unreleased
 
 **Scan once, then password-free.** Fuses the WeChat Native rail (2.1.0) and the custodial balance rail (2.2.0) into one flow: WeChat becomes a **balance funding source** (the buyer scans once to load a top-up pack) and the balance rail does the spending (subsequent purchases deduct server-side, no scan, no password). WeChat has no autonomous payer product, so "password-free" lives entirely on the balance-deduction side; the first purchase against an empty balance still requires one scan, but it buys a pack, not a single item.

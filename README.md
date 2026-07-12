@@ -573,9 +573,18 @@ npx moltspay faucet --chain solana_devnet   # Get Solana devnet USDC
 npx moltspay faucet --chain bnb_testnet     # Get BNB testnet USDC + tBNB
 npx moltspay faucet --chain tempo_moderato  # Get Tempo testnet tokens
 npx moltspay status                  # Check balance (all chains)
+npx moltspay send <to> <amount>      # Send USDC/USDT out to any address (e.g. an exchange)
 npx moltspay config                  # Update limits
 npx moltspay services <url>          # List provider's services
 npx moltspay pay <url> <service>     # Pay and execute service
+
+# === Send / Withdraw (2.4.0) ===
+# Move USDC/USDT out of your wallet to any address (e.g. an exchange deposit address).
+npx moltspay send <to> <amount>                       # 5 USDC on Base (default), interactive confirm
+npx moltspay send <to> 10 --token USDT --chain bnb     # USDT on BNB Chain
+npx moltspay send <to> 5 --chain polygon --yes --json  # non-interactive (agents/scripts)
+# EVM chains only (base/polygon/bnb/...); a normal on-chain transfer, so the wallet needs a
+# little native gas (ETH/BNB/POL). The send network must match the receiver's deposit network.
 
 # === Service Discovery ===
 npx moltspay services                           # List all from registry

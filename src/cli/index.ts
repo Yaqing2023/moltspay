@@ -59,8 +59,15 @@ import {
   solanaWalletExists,
   isValidSolanaAddress,
 } from '../wallet/solana.js';
-import type { ChainName } from '../types/index.js';
+import type { ChainName, EvmChainName, TokenSymbol } from '../types/index.js';
+import { Wallet } from '../wallet/Wallet.js';
 import * as readline from 'readline';
+
+/** Native gas token symbol per EVM chain (for send preflight/output). */
+const GAS_SYMBOL: Record<string, string> = {
+  base: 'ETH', base_sepolia: 'ETH', tempo_moderato: 'ETH',
+  polygon: 'POL', bnb: 'BNB', bnb_testnet: 'BNB',
+};
 
 // Read version from package.json at runtime
 function getVersion(): string {
@@ -2386,6 +2393,106 @@ program
       console.error(`❌ Parse error: ${err.message}`);
       process.exit(1);
     }
+  });
+
+/**
+ * npx moltspay send <to> <amount> [--token USDC|USDT] [--chain base] [--yes] [--json]
+ *
+ * Send USDC/USDT out of the wallet to any address (e.g. an exchange deposit
+ * address). Thin wrapper over the SDK's Wallet.transfer(). EVM chains only;
+ * a normal on-chain transfer (NOT gasless) -- the wallet needs native gas.
+ * See docs/SEND-COMMAND-DESIGN.md.
+ */
+program
+  .command('send <to> <amount>')
+  .description('Send USDC/USDT to any address (e.g. an exchange deposit address)')
+  .option('--token <token>', 'Token to send: USDC or USDT', 'USDC')
+  .option('--chain <chain>', 'EVM chain: base, polygon, bnb, base_sepolia, bnb_testnet, tempo_moderato', 'base')
+  .option('--yes', 'Skip the confirmation prompt (for scripts/agents)')
+  .option('--json', 'Output raw JSON only')
+  .option('--config-dir <dir>', 'Config directory with wallet.json', DEFAULT_CONFIG_DIR)
+  .action(async (to, amountStr, options) => {
+    const asJson = !!options.json;
+    const fail = (msg: string): never => {
+      if (asJson) console.log(JSON.stringify({ success: false, error: msg }));
+      else console.error(`❌ ${msg}`);
+      process.exit(1);
+    };
+
+    // Validate chain + token
+    const chain = String(options.chain);
+    if (isSolanaChain(chain as ChainName)) {
+      fail('Solana send is not supported yet; use --chain base|polygon|bnb');
+    }
+    if (!CHAINS[chain as EvmChainName]) {
+      fail(`Unknown chain "${chain}". Supported: ${Object.keys(CHAINS).join(', ')}`);
+    }
+    const token = String(options.token).toUpperCase();
+    if (token !== 'USDC' && token !== 'USDT') {
+      fail(`Invalid --token "${options.token}" (use USDC or USDT)`);
+    }
+
+    // Validate amount + address
+    const amount = Number(amountStr);
+    if (!Number.isFinite(amount) || amount <= 0) fail('Invalid amount: must be a positive number');
+    let toAddr: string;
+    try {
+      toAddr = ethers.getAddress(to);
+    } catch {
+      return fail(`Invalid destination address: ${to}`);
+    }
+
+    // Load wallet key
+    const walletPath = join(options.configDir || DEFAULT_CONFIG_DIR, 'wallet.json');
+    if (!existsSync(walletPath)) fail('Wallet not initialized. Run: npx moltspay init');
+    let privateKey: string | undefined;
+    try {
+      privateKey = JSON.parse(readFileSync(walletPath, 'utf-8')).privateKey;
+    } catch {
+      return fail('Could not read wallet.json');
+    }
+    if (!privateKey) return fail('wallet.json has no privateKey');
+
+    const wallet = new Wallet({ chain: chain as EvmChainName, privateKey });
+    const chainConfig = CHAINS[chain as EvmChainName];
+    const gas = GAS_SYMBOL[chain] || 'gas';
+
+    // Preflight: token balance + native gas (read-only; transfer() re-checks authoritatively)
+    let tokenBal: number, nativeBal: number;
+    try {
+      tokenBal = Number(await wallet.getTokenBalance(token as TokenSymbol));
+      nativeBal = Number(await wallet.getEthBalance());
+    } catch (err: any) {
+      return fail(`Preflight failed: ${err.message}`);
+    }
+    if (tokenBal < amount) fail(`Insufficient ${token} on ${chain}: have ${tokenBal}, need ${amount}`);
+    if (nativeBal <= 0) fail(`No gas on ${chain}: fund a little ${gas} to cover the transfer`);
+
+    // Confirm (interactive default; --yes / --json skip)
+    if (!options.yes && !asJson) {
+      console.log(`\n💸 Send ${amount} ${token} on ${chainConfig.name}`);
+      console.log(`   From:    ${wallet.address}`);
+      console.log(`   To:      ${toAddr}`);
+      console.log(`   Network: ${chainConfig.name} (chain id ${chainConfig.chainId}), gas in ${gas}`);
+      const answer = await prompt('Type "yes" to confirm: ');
+      if (answer.trim().toLowerCase() !== 'yes') {
+        console.log('Cancelled.');
+        process.exit(0);
+      }
+    }
+
+    // Send
+    const r = await wallet.transfer(toAddr, amount, token as TokenSymbol);
+    if (asJson) {
+      console.log(JSON.stringify(r));
+      process.exit(r.success ? 0 : 1);
+    }
+    if (!r.success) fail(r.error || 'Transfer failed');
+    console.log(`\n✅ Sent ${amount} ${token} on ${chainConfig.name}`);
+    console.log(`   To:  ${toAddr}`);
+    console.log(`   Tx:  ${r.tx_hash}`);
+    if (r.explorer_url) console.log(`        ${r.explorer_url}`);
+    console.log(`   ⚠️  Ensure the receiver expects ${token} on ${chainConfig.name}.\n`);
   });
 
 program.parse();
