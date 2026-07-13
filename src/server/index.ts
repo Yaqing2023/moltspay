@@ -582,20 +582,56 @@ export class MoltsPayServer {
   }
 
   /**
-   * GET /.well-known/agent-services.json - Standard discovery endpoint
+   * Per-service pricing across every configured rail, for the discovery
+   * payloads. The top-level `price`/`currency` (crypto/USDC) stay unchanged
+   * for back-compat; this surfaces the fiat + balance rails (CNY) that were
+   * previously invisible in discovery even though the manifest defines them
+   * and the 402 challenge already quotes them. `acceptedCurrencies` becomes
+   * the union across rails so a client can see CNY is accepted without
+   * first triggering a 402.
    */
-  private handleAgentServicesDiscovery(res: ServerResponse): void {
-    const services = this.manifest.services.map(s => ({
+  private describeServicePricing(s: ServiceConfig): {
+    acceptedCurrencies: string[];
+    pricing: Array<{ rail: string; currency: string; amount: string }>;
+  } {
+    const pricing: Array<{ rail: string; currency: string; amount: string }> = [];
+    for (const currency of getAcceptedCurrencies(s)) {
+      pricing.push({ rail: 'crypto', currency, amount: String(s.price) });
+    }
+    if (s.alipay) pricing.push({ rail: 'alipay', currency: 'CNY', amount: s.alipay.price_cny });
+    if (s.wechat) pricing.push({ rail: 'wechat', currency: 'CNY', amount: s.wechat.price_cny });
+    if (s.balance) {
+      pricing.push({
+        rail: 'balance',
+        currency: this.manifest.provider.balance?.currency ?? 'CNY',
+        amount: s.balance.price ?? s.price.toFixed(2),
+      });
+    }
+    return { acceptedCurrencies: [...new Set(pricing.map(p => p.currency))], pricing };
+  }
+
+  /** Shared service-list entry for the discovery and /services endpoints. */
+  private buildDiscoveryService(s: ServiceConfig) {
+    const { acceptedCurrencies, pricing } = this.describeServicePricing(s);
+    return {
       id: s.id,
       name: s.name,
       description: s.description,
       price: s.price,
       currency: s.currency,
-      acceptedCurrencies: getAcceptedCurrencies(s),
+      acceptedCurrencies,
+      pricing,
       input: s.input,
       output: s.output,
       available: this.skills.has(s.id),
-    }));
+    };
+  }
+
+  /**
+   * GET /.well-known/agent-services.json - Standard discovery endpoint
+   */
+  private handleAgentServicesDiscovery(res: ServerResponse): void {
+    const services = this.manifest.services.map(s => this.buildDiscoveryService(s));
 
     this.sendJson(res, 200, {
       version: '1.0',
@@ -627,17 +663,7 @@ export class MoltsPayServer {
    * GET /services - List available services
    */
   private handleGetServices(res: ServerResponse): void {
-    const services = this.manifest.services.map(s => ({
-      id: s.id,
-      name: s.name,
-      description: s.description,
-      price: s.price,
-      currency: s.currency,
-      acceptedCurrencies: getAcceptedCurrencies(s),
-      input: s.input,
-      output: s.output,
-      available: this.skills.has(s.id),
-    }));
+    const services = this.manifest.services.map(s => this.buildDiscoveryService(s));
 
     const selection = this.registry.getSelection();
     
