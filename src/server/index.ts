@@ -484,6 +484,13 @@ export class MoltsPayServer {
         return this.handleAgentServicesDiscovery(res);
       }
 
+      // Root path — a caller (human or agent) landing on the base URL should be
+      // guided into service discovery, not met with a bare 404. Serve the same
+      // discovery payload as the well-known endpoint.
+      if (url.pathname === '/' && req.method === 'GET') {
+        return this.handleAgentServicesDiscovery(res);
+      }
+
       if (url.pathname === '/health' && req.method === 'GET') {
         return await this.handleHealthCheck(res);
       }
@@ -547,8 +554,13 @@ export class MoltsPayServer {
         return await this.handleMPPRequest(skill, body, authHeader, x402Header, res, proofHeader);
       }
 
-      // Not found
-      this.sendJson(res, 404, { error: 'Not found' });
+      // Not found — include discovery hints so a mistyped or unknown path still
+      // points the caller at service discovery instead of a dead end.
+      this.sendJson(res, 404, {
+        error: 'Not found',
+        discovery: '/.well-known/agent-services.json',
+        endpoints: ['/health', '/services', '/execute'],
+      });
     } catch (err: any) {
       console.error('[MoltsPay] Error:', err);
       this.sendJson(res, 500, { error: err.message || 'Internal error' });
