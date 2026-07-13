@@ -42,6 +42,7 @@ import { AlipayClient } from '../alipay/index.js';
 import { WechatClient, type WechatPaymentSession } from '../wechat/index.js';
 import { timeStep } from '../alipay/log.js';
 import { selectRail, ALIPAY_RAIL, WECHAT_RAIL, BALANCE_RAIL } from '../alipay/router.js';
+import { buildDeductMessage } from '../../facilitators/balance/auth.js';
 
 export * from '../types.js';
 
@@ -667,6 +668,26 @@ export class MoltsPayClient {
     }
   }
 
+  /**
+   * The ethers wallet used to sign balance-rail deductions: the client's EVM
+   * wallet if it has one, else a per-configDir identity key persisted at
+   * `<configDir>/balance-identity.key` (0600) so a balance-only client works
+   * without a full crypto wallet. Under `agent 统一代付`, one key spends every
+   * account the agent tops up.
+   */
+  private balanceSigner(): Wallet {
+    if (this.wallet) return this.wallet;
+    const p = join(this.configDir, 'balance-identity.key');
+    let pk: string;
+    if (existsSync(p)) {
+      pk = readFileSync(p, 'utf-8').trim();
+    } else {
+      pk = Wallet.createRandom().privateKey;
+      writeFileSync(p, pk, { mode: 0o600 });
+    }
+    return new Wallet(pk);
+  }
+
   /** The buyer id for the balance rail: explicit option > persisted config. */
   private resolveBuyerId(explicit?: string): string {
     const buyerId = explicit ?? this.config.buyerId;
@@ -761,11 +782,19 @@ export class MoltsPayClient {
     }
 
     const requestBody: any = options.rawData ? { service, ...params } : { service, params };
+    // Sign the deduction (user auth): the server recovers the signer address
+    // and TOFU-binds / checks it per its auth_mode. request_id is the
+    // idempotency key and part of the signed message.
+    const requestId = randomUUID();
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signature = await this.balanceSigner().signMessage(
+      buildDeductMessage({ buyerId, requestId, service, timestamp }),
+    );
     const xPayment = Buffer.from(JSON.stringify({
       x402Version: 2,
       scheme: BALANCE_RAIL,
       network: BALANCE_RAIL,
-      payload: { buyer_id: buyerId, request_id: randomUUID() },
+      payload: { buyer_id: buyerId, request_id: requestId, auth: { timestamp, signature } },
     })).toString('base64');
 
     const res = await fetch(executeUrl, {

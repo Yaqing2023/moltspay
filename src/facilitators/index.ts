@@ -97,6 +97,12 @@ export {
   BALANCE_SCHEME,
   toSat,
   fromSat,
+  BalanceAuthMode,
+  BalanceAuthFields,
+  verifyDeductAuth,
+  buildDeductMessage,
+  BALANCE_AUTH_DOMAIN,
+  BALANCE_AUTH_MAX_SKEW_MS,
 } from './balance.js';
 export {
   BalanceLedger,

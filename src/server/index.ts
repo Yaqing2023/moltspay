@@ -37,6 +37,8 @@ import {
   BalanceFacilitator,
   BalanceFacilitatorConfig,
   BALANCE_SCHEME,
+  extractBalancePayload,
+  verifyDeductAuth,
 } from '../facilitators/index.js';
 import { toPem } from '../facilitators/alipay/encoding.js';
 import { BalanceEndpoints } from './balance-endpoints.js';
@@ -234,6 +236,7 @@ export class MoltsPayServer {
         currency: providerBalance.currency,
         single_limit: providerBalance.single_limit,
         daily_limit: providerBalance.daily_limit,
+        auth_mode: providerBalance.auth_mode,
       };
       facilitatorConfig.config = {
         ...facilitatorConfig.config,
@@ -1249,6 +1252,41 @@ export class MoltsPayServer {
     }
 
     const requirements = this.balanceRequirementsFor(skill.config);
+
+    // User auth (1b): verify the originator signature and TOFU-bind the
+    // account's signer. `off` skips entirely; `shadow` records but never
+    // blocks; `enforce` rejects unsigned / wrong-signer deductions before any
+    // charge. See docs/2026-07-13-wechat-fiat-auth-design.md.
+    const authMode = this.balanceFacilitator.authMode;
+    if (authMode !== 'off') {
+      const bp = extractBalancePayload(payment);
+      const buyerId = bp?.buyer_id ?? '';
+      const requestId = bp?.request_id ?? '';
+      const av = verifyDeductAuth({
+        auth: bp?.auth ?? null,
+        buyerId,
+        requestId,
+        service: skill.id,
+        nowMs: Date.now(),
+      });
+      const ledger = this.balanceFacilitator.getLedger();
+      let denyReason: string | undefined;
+      if (av.ok && av.recovered) {
+        const bind = ledger.bindSigner(buyerId, av.recovered);
+        if (bind.conflict) denyReason = `wrong signer (account bound to ${bind.existing}, got ${av.recovered})`;
+      } else {
+        denyReason = `signature ${av.reason}`;
+      }
+      if (denyReason) {
+        if (authMode === 'enforce') {
+          console.warn(`[MoltsPay] Balance auth DENY (enforce) buyer=${buyerId} svc=${skill.id}: ${denyReason}`);
+          return this.sendJson(res, 401, { error: `Balance auth failed: ${denyReason}`, facilitator: 'balance' });
+        }
+        console.warn(`[MoltsPay] Balance auth would-deny (shadow) buyer=${buyerId} svc=${skill.id}: ${denyReason}`);
+      } else {
+        console.log(`[MoltsPay] Balance auth ok (${authMode}) buyer=${buyerId} signer=${av.recovered}`);
+      }
+    }
 
     // Atomic deduct (settle). checkDeduct runs inside the same transaction,
     // so a separate verify() call here would only add a TOCTOU window.

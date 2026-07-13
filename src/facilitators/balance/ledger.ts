@@ -285,6 +285,25 @@ export class BalanceLedger {
     return { bound: true, conflict: false, existing: null };
   }
 
+  /**
+   * TOFU-bind the account's spending signer address (EVM, lowercase). First
+   * signed request records it; later requests must match. A mismatch is
+   * reported (`conflict`) so the caller can reject under `enforce` — it is
+   * never silently overwritten. Creates the buyer if absent.
+   */
+  bindSigner(buyerId: string, address: string): { bound: boolean; conflict: boolean; existing: string | null } {
+    const a = address.toLowerCase();
+    const buyer = this.getOrCreateBuyer(buyerId);
+    if (buyer.signer_address === a) return { bound: true, conflict: false, existing: a };
+    if (buyer.signer_address && buyer.signer_address !== a) {
+      return { bound: false, conflict: true, existing: buyer.signer_address };
+    }
+    this.db
+      .prepare(`UPDATE buyers SET signer_address = ?, updated_at = datetime('now') WHERE buyer_id = ?`)
+      .run(a, buyerId);
+    return { bound: true, conflict: false, existing: null };
+  }
+
   /** Sum of today's (UTC) completed deducts minus refunds issued against them. */
   spentTodaySat(buyerId: string): number {
     const row = this.db

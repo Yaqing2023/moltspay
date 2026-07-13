@@ -41,6 +41,9 @@ import {
   DEFAULT_SINGLE_LIMIT_SAT,
   DEFAULT_DAILY_LIMIT_SAT,
 } from './balance/ledger.js';
+import { BalanceAuthMode, BalanceAuthFields, extractBalanceAuth } from './balance/auth.js';
+
+export * from './balance/auth.js';
 
 /** Network identifier exposed via `Facilitator.supportedNetworks`. */
 export const BALANCE_NETWORK = 'balance';
@@ -63,6 +66,12 @@ export interface BalanceFacilitatorConfig {
   single_limit?: string;
   /** Default daily limit for new buyers, decimal string. Default "10.00". */
   daily_limit?: string;
+  /**
+   * User-auth rollout gate for deductions. Default 'off' (bare buyer_id, as
+   * before). 'shadow' verifies + TOFU-binds the signer but never blocks;
+   * 'enforce' rejects unsigned/mismatched deductions.
+   */
+  auth_mode?: BalanceAuthMode;
 }
 
 /** The buyer-identifying payload carried in X-Payment for this rail. */
@@ -70,15 +79,18 @@ export interface BalancePaymentPayload {
   buyer_id: string;
   /** Client-generated idempotency key: replays never double-deduct. */
   request_id?: string;
+  /** Originator signature (present when the client signs). @see ./balance/auth.ts */
+  auth?: BalanceAuthFields;
 }
 
-/** Extract {buyer_id, request_id} from an x402 payload, or null. */
+/** Extract {buyer_id, request_id, auth} from an x402 payload, or null. */
 export function extractBalancePayload(payment: X402PaymentPayload): BalancePaymentPayload | null {
   const p = payment.payload as Record<string, unknown> | undefined;
   if (p && typeof p.buyer_id === 'string' && p.buyer_id.length > 0) {
     return {
       buyer_id: p.buyer_id,
       request_id: typeof p.request_id === 'string' ? p.request_id : undefined,
+      auth: extractBalanceAuth(p.auth) ?? undefined,
     };
   }
   return null;
@@ -94,11 +106,14 @@ export class BalanceFacilitator extends BaseFacilitator {
   readonly supportedNetworks = [BALANCE_NETWORK];
 
   readonly currency: string;
+  /** User-auth rollout gate for deductions (off | shadow | enforce). */
+  readonly authMode: BalanceAuthMode;
   private readonly ledger: BalanceLedger;
 
   constructor(config: BalanceFacilitatorConfig) {
     super();
     this.currency = config.currency ?? 'USD';
+    this.authMode = config.auth_mode ?? 'off';
     const ledgerConfig: LedgerConfig = {
       dbPath: config.db_path,
       defaultSingleLimitSat: config.single_limit ? toSat(config.single_limit) : DEFAULT_SINGLE_LIMIT_SAT,

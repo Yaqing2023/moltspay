@@ -189,6 +189,8 @@ export interface ProviderBalanceConfig {
   default_pack?: string;
   /** Ceiling on client auto-top-up without explicit pack selection (2.3+). */
   auto_topup_max?: string;
+  /** User-auth rollout gate for deductions: `off` | `shadow` | `enforce`. Default `off`. */
+  auth_mode?: 'off' | 'shadow' | 'enforce';
 }
 
 /**
