@@ -74,6 +74,7 @@ export class BalanceEndpoints {
       today_spent: fromSat(ledger.spentTodaySat(buyerId)),
       status: buyer.status,
       wechat_openid: buyer.wechat_openid ?? null,
+      signer_address: buyer.signer_address ?? null,
       exists: true,
     });
   }
@@ -104,6 +105,13 @@ export class BalanceEndpoints {
     if (typeof buyer_id !== 'string' || !buyer_id) {
       return sendJson(res, 400, { error: 'buyer_id is required' });
     }
+    // Optional: bind the client's spending signer at top-up time (stage 3).
+    // Rides in the WeChat attach so confirm can TOFU-bind it to the account
+    // alongside the payer openid.
+    const signerAddress =
+      typeof body?.signer_address === 'string' && /^0x[0-9a-fA-F]{40}$/.test(body.signer_address)
+        ? body.signer_address.toLowerCase()
+        : undefined;
     if (!wechat) {
       return sendJson(res, 400, { error: 'WeChat rail not configured on this server' });
     }
@@ -130,15 +138,21 @@ export class BalanceEndpoints {
     }
 
     const nonce = crypto.randomBytes(8).toString('hex');
+    // attach rides to confirm via the gateway. buyer_id is required; signer
+    // (when present) lets confirm bind the account's spender. Kept compact —
+    // WeChat caps attach at 128 bytes (createPaymentRequirements enforces).
+    const attach: Record<string, string> = signerAddress
+      ? { buyer_id, signer: signerAddress }
+      : { buyer_id, nonce };
     const cacheKey = crypto
       .createHash('sha256')
-      .update(`topup|${buyer_id}|${chosen}`)
+      .update(`topup|${buyer_id}|${chosen}|${signerAddress ?? ''}`)
       .digest('hex');
     const result = await getOrCreatePendingWechatOrder(cacheKey, `topup:${buyer_id}`, () =>
       wechat.createPaymentRequirements({
         priceCny: chosen,
         description: `Balance top-up ${chosen}`,
-        attach: { buyer_id, nonce },
+        attach,
       }),
     );
     if (!result) {
@@ -214,6 +228,18 @@ export class BalanceEndpoints {
         console.warn(
           `[MoltsPay] Balance top-up openid conflict for buyer=${buyerId}: ` +
             `already bound to ${openidBinding.existing}, this payment from ${openid} — recorded, not enforced`,
+        );
+      }
+    }
+    // Stage 3: bind the spending signer carried in attach (topup-time binding,
+    // complements consumption-time TOFU). Conflicts are recorded, not enforced.
+    const signer = (attach as { signer?: unknown } | null)?.signer;
+    if (typeof signer === 'string' && /^0x[0-9a-fA-F]{40}$/.test(signer)) {
+      const sb = balance.getLedger().bindSigner(buyerId, signer);
+      if (sb.conflict) {
+        console.warn(
+          `[MoltsPay] Balance top-up signer conflict for buyer=${buyerId}: ` +
+            `already bound to ${sb.existing}, this order signed for ${signer.toLowerCase()} — recorded, not enforced`,
         );
       }
     }

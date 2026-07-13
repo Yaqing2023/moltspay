@@ -2132,6 +2132,77 @@ balanceCommand
   });
 
 balanceCommand
+  .command('whoami [server]')
+  .description('Show this client\'s balance-rail signer identity (and its account binding if a server is given)')
+  .option('--buyer <id>', 'Buyer id (defaults to the persisted one)')
+  .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
+  .option('--json', 'Output raw JSON only')
+  .action(async (server, options) => {
+    try {
+      const client = new MoltsPayClient({ configDir: options.configDir });
+      const signer = client.getBalanceSignerAddress();
+      const account = server ? await client.getBuyerBalance(server, options.buyer) : null;
+      if (options.json) {
+        console.log(JSON.stringify({ signer, account }, null, 2));
+        return;
+      }
+      console.log(`\n🔑 Balance signer (this client): ${signer}`);
+      if (account) {
+        console.log(`   Account:       ${account.buyer_id}`);
+        console.log(`   Balance:       ${account.balance} ${account.currency}`);
+        const bound = account.signer_address;
+        if (!account.exists) console.log('   Binding:       (no account yet — run `balance bind` to create)');
+        else if (!bound) console.log('   Binding:       (account has no bound signer yet)');
+        else if (bound === signer) console.log('   Binding:       ✅ this client is the bound signer');
+        else console.log(`   Binding:       ⚠️  bound to a DIFFERENT signer (${bound})`);
+        if (account.wechat_openid) console.log(`   WeChat openid: ${account.wechat_openid}`);
+      }
+      console.log('');
+    } catch (err: any) {
+      if (options.json) console.log(JSON.stringify({ error: err.message }));
+      else console.error(`❌ Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+balanceCommand
+  .command('bind <server>')
+  .description('Bind this client to your WeChat account via one top-up (scan to pay); sets the openid + signer binding')
+  .option('--pack <amount>', 'Pack amount (defaults to the server default_pack)')
+  .option('--buyer <id>', 'Buyer id (defaults to the persisted one)')
+  .option('--config-dir <dir>', 'Config directory', DEFAULT_CONFIG_DIR)
+  .option('--json', 'Output raw JSON only')
+  .action(async (server, options) => {
+    try {
+      const client = new MoltsPayClient({ configDir: options.configDir });
+      const signer = client.getBalanceSignerAddress();
+      if (!options.json) process.stdout.write(`\n🔗 Binding this client (${signer}) to your WeChat account…\n`);
+      const result = await client.topupBalancePack(server, {
+        pack: options.pack,
+        buyerId: options.buyer,
+        onCodeUrl: (pack: string, codeUrl: string) => {
+          if (!options.json) {
+            const qrPath = writeQRCodePng(codeUrl, { filename: `wechat-bind-${pack}.png` });
+            process.stdout.write(`\n💳 Scan with WeChat to bind (top up ${pack}):\n`);
+            process.stdout.write(`MEDIA: ${qrPath}\n`);
+            void printQRCode(codeUrl);
+            process.stdout.write(`\n   QR image: ${qrPath}\n   Waiting for payment to bind...\n\n`);
+          }
+        },
+      });
+      if (options.json) {
+        console.log(JSON.stringify({ signer, ...result }, null, 2));
+      } else {
+        console.log(`\n✅ Bound. This client (${signer}) can now spend the account. Balance ${result.balance}\n`);
+      }
+    } catch (err: any) {
+      if (options.json) console.log(JSON.stringify({ error: err.message }));
+      else console.error(`❌ Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+balanceCommand
   .command('topup <server> <amount>')
   .description('Credit the balance from an externally settled payment')
   .requiredOption('--rail <rail>', 'Settlement rail: crypto | alipay | wechat')

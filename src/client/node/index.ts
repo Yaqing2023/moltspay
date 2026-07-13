@@ -688,6 +688,12 @@ export class MoltsPayClient {
     return new Wallet(pk);
   }
 
+  /** The balance-rail spending signer address (lowercase 0x…). Stable per
+   *  configDir; this is the identity the server TOFU-binds and later verifies. */
+  getBalanceSignerAddress(): string {
+    return this.balanceSigner().address.toLowerCase();
+  }
+
   /** The buyer id for the balance rail: explicit option > persisted config. */
   private resolveBuyerId(explicit?: string): string {
     const buyerId = explicit ?? this.config.buyerId;
@@ -821,7 +827,9 @@ export class MoltsPayClient {
     const orderRes = await fetch(`${serverUrl}/balance/topup/order`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ buyer_id: id, pack: opts.pack }),
+      // Carry the spending signer so the server binds it to the account on
+      // confirm (topup-time binding). The same key signs deductions later.
+      body: JSON.stringify({ buyer_id: id, pack: opts.pack, signer_address: this.getBalanceSignerAddress() }),
     });
     const order: any = await orderRes.json().catch(() => ({}));
     if (!orderRes.ok) throw new Error(order.error || `Top-up order failed with HTTP ${orderRes.status}`);
