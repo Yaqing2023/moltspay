@@ -558,13 +558,27 @@ export class MoltsPayServer {
       // points the caller at service discovery instead of a dead end.
       this.sendJson(res, 404, {
         error: 'Not found',
-        discovery: '/.well-known/agent-services.json',
-        endpoints: ['/health', '/services', '/execute'],
+        discovery: `${this.publicBase}/.well-known/agent-services.json`,
+        endpoints: [`${this.publicBase}/health`, `${this.publicBase}/services`, `${this.publicBase}/execute`],
       });
     } catch (err: any) {
       console.error('[MoltsPay] Error:', err);
       this.sendJson(res, 500, { error: err.message || 'Internal error' });
     }
+  }
+
+  /**
+   * Public base URL prefix for self-describing links, from PUBLIC_BASE_URL
+   * (trailing slash stripped). Empty when unset, so emitted paths stay
+   * root-relative — behavior is unchanged for local / no-prefix deploys.
+   *
+   * Needed because nginx rewrites the deployment prefix (e.g.
+   * `/t/moltspay-server`) away before proxying, so the process cannot infer
+   * its own public prefix; a root-relative `/services` would otherwise
+   * resolve against the domain root and hit the wrong backend.
+   */
+  private get publicBase(): string {
+    return (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
   }
 
   /**
@@ -595,9 +609,9 @@ export class MoltsPayServer {
       },
       services,
       endpoints: {
-        services: '/services',
-        execute: '/execute',
-        health: '/health',
+        services: `${this.publicBase}/services`,
+        execute: `${this.publicBase}/execute`,
+        health: `${this.publicBase}/health`,
       },
       payment: {
         protocol: 'x402',
@@ -1635,7 +1649,7 @@ export class MoltsPayServer {
       acceptedCurrencies: acceptedTokens,
       acceptedChains,
       resource: {
-        url: `/execute?service=${config.id}`,
+        url: `${this.publicBase}/execute?service=${config.id}`,
         description: `${config.name} - $${config.price} ${config.currency}`,
         mimeType: 'application/json',
       },
