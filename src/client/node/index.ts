@@ -682,6 +682,7 @@ export class MoltsPayClient {
     if (existsSync(p)) {
       pk = readFileSync(p, 'utf-8').trim();
     } else {
+      mkdirSync(this.configDir, { recursive: true });
       pk = Wallet.createRandom().privateKey;
       writeFileSync(p, pk, { mode: 0o600 });
     }
