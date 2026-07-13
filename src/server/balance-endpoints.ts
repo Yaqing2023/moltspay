@@ -73,6 +73,7 @@ export class BalanceEndpoints {
       daily_limit: fromSat(buyer.daily_limit_sat),
       today_spent: fromSat(ledger.spentTodaySat(buyerId)),
       status: buyer.status,
+      wechat_openid: buyer.wechat_openid ?? null,
       exists: true,
     });
   }
@@ -203,9 +204,23 @@ export class BalanceEndpoints {
     });
     // Paid orders can leave the pending cache immediately (one code, one payment).
     invalidateWechatChallenge(outTradeNo);
+    // Stage 1a: record the gateway-attested payer openid that funded this
+    // account (observational — anchors the balance to a real WeChat user).
+    const openid = (check.details as { openid?: unknown } | undefined)?.openid;
+    let openidBinding: { bound: boolean; conflict: boolean; existing: string | null } | undefined;
+    if (typeof openid === 'string' && openid) {
+      openidBinding = balance.getLedger().bindOpenid(buyerId, openid);
+      if (openidBinding.conflict) {
+        console.warn(
+          `[MoltsPay] Balance top-up openid conflict for buyer=${buyerId}: ` +
+            `already bound to ${openidBinding.existing}, this payment from ${openid} — recorded, not enforced`,
+        );
+      }
+    }
     console.log(
       `[MoltsPay] Balance top-up credited buyer=${buyerId} +${fromSat(paidFen)} ` +
-        `(${outTradeNo})${credited.replayed ? ' [replayed]' : ''}`,
+        `(${outTradeNo})${credited.replayed ? ' [replayed]' : ''}` +
+        `${typeof openid === 'string' && openid ? ` openid=${openid}${openidBinding?.conflict ? ' [CONFLICT]' : ''}` : ''}`,
     );
     return sendJson(res, 200, {
       credited: true,
@@ -213,6 +228,8 @@ export class BalanceEndpoints {
       tx_id: credited.txId,
       balance: credited.balance,
       replayed: credited.replayed,
+      openid_bound: openidBinding?.bound ?? false,
+      openid_conflict: openidBinding?.conflict ?? false,
     });
   }
 

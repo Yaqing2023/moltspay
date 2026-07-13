@@ -227,6 +227,10 @@ export class WechatFacilitator extends BaseFacilitator {
           out_trade_no: resp.out_trade_no ?? outTradeNo,
           amount: resp.amount,
           attach: resp.attach,
+          // Payer identity, gateway-attested. Present on a SUCCESS Native
+          // order even though order creation was payer-agnostic; anchors the
+          // custodial balance to a real WeChat user. @see WECHAT fiat auth design.
+          openid: (resp.payer as { openid?: string } | undefined)?.openid,
         },
       };
     } catch (e: unknown) {

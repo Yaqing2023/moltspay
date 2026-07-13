@@ -31,6 +31,18 @@ export interface BuyerRow {
   daily_limit_sat: number;
   single_limit_sat: number;
   status: 'active' | 'frozen' | 'banned';
+  /**
+   * TOFU-bound originator signer address (EVM, lowercase 0x…) for the
+   * WeChat fiat auth flow. Null for legacy accounts never seen with a
+   * signature; bound on first signed request. @see ./auth.ts
+   */
+  signer_address: string | null;
+  /**
+   * Gateway-attested WeChat payer openid that funded this account, recorded
+   * on top-up confirm. Anchors the custodial balance to a real WeChat user.
+   * Null for accounts never funded via WeChat (crypto/alipay/operator).
+   */
+  wechat_openid: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -197,6 +209,17 @@ export class BalanceLedger {
       );
     `);
 
+    // Migration: add auth columns to pre-existing ledgers. ALTER ... ADD
+    // COLUMN is not idempotent, so guard on the current column set.
+    const cols = (this.db.prepare('PRAGMA table_info(buyers)').all() as { name: string }[])
+      .map(c => c.name);
+    if (!cols.includes('signer_address')) {
+      this.db.exec('ALTER TABLE buyers ADD COLUMN signer_address TEXT');
+    }
+    if (!cols.includes('wechat_openid')) {
+      this.db.exec('ALTER TABLE buyers ADD COLUMN wechat_openid TEXT');
+    }
+
     // Record and enforce the ledger's quote currency. The minor unit (`*_sat`)
     // is 1/100 of this currency -- cents for USD, fen for CNY -- so reopening a
     // USD-funded ledger under a CNY config would silently reinterpret every
@@ -239,6 +262,27 @@ export class BalanceLedger {
       )
       .run(buyerId, displayName ?? null, this.defaultDailyLimitSat, this.defaultSingleLimitSat);
     return this.getBuyer(buyerId)!;
+  }
+
+  /**
+   * Record the gateway-attested WeChat payer openid that funded a buyer, on
+   * top-up confirm. Idempotent and observational (stage 1a): it never
+   * overwrites an existing binding with a *different* openid — a conflict is
+   * reported to the caller (possible account sharing / spoof) but not
+   * enforced here. Creates the buyer if absent.
+   */
+  bindOpenid(buyerId: string, openid: string): { bound: boolean; conflict: boolean; existing: string | null } {
+    const buyer = this.getOrCreateBuyer(buyerId);
+    if (buyer.wechat_openid === openid) {
+      return { bound: true, conflict: false, existing: openid };
+    }
+    if (buyer.wechat_openid && buyer.wechat_openid !== openid) {
+      return { bound: false, conflict: true, existing: buyer.wechat_openid };
+    }
+    this.db
+      .prepare(`UPDATE buyers SET wechat_openid = ?, updated_at = datetime('now') WHERE buyer_id = ?`)
+      .run(openid, buyerId);
+    return { bound: true, conflict: false, existing: null };
   }
 
   /** Sum of today's (UTC) completed deducts minus refunds issued against them. */
