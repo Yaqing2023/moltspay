@@ -1133,7 +1133,7 @@ Set the ledger currency to `CNY` (WeChat `payer_total` credits 1:1 as fen — no
 | `default_pack` | — | Pack the client auto-selects when funds are short (must be in `topup_packs`) |
 | `auto_topup_max` | — | Ceiling on client auto-top-up without explicit pack selection |
 
-The callback path (`POST /wechat/notify`) requires `apiv3_key` + `platform_public_key_path`; without them the server falls back to polling the order (still safe, higher latency). Usage — a single `pay` command:
+Top-ups are confirmed by **polling the WeChat order query** (`trade_state === SUCCESS`) and credited idempotently on `out_trade_no`. The async callback webhook (`POST /wechat/notify`) is **not implemented yet** — polling is the only confirmation path today, which is safe but adds latency. Configure `platform_public_key_path` regardless: it makes the server verify WeChat's response signatures, which is what makes the `payer.openid` behind balance identity trustworthy. Usage — a single `pay` command:
 
 ```bash
 npx moltspay balance set-buyer my-buyer-id
