@@ -598,8 +598,14 @@ export class MoltsPayServer {
     pricing: Array<{ rail: string; currency: string; amount: string }>;
   } {
     const pricing: Array<{ rail: string; currency: string; amount: string }> = [];
-    for (const currency of getAcceptedCurrencies(s)) {
-      pricing.push({ rail: 'crypto', currency, amount: String(s.price) });
+    // Only advertise the crypto rail when the provider actually has crypto
+    // chains configured. Otherwise discovery would promise a rail that the 402
+    // challenge never offers (getProviderChains drives those accepts[]), and a
+    // client would waste an attempt on a payment path that cannot succeed.
+    if (this.getProviderChains().length > 0) {
+      for (const currency of getAcceptedCurrencies(s)) {
+        pricing.push({ rail: 'crypto', currency, amount: String(s.price) });
+      }
     }
     if (s.alipay) pricing.push({ rail: 'alipay', currency: 'CNY', amount: s.alipay.price_cny });
     if (s.wechat) pricing.push({ rail: 'wechat', currency: 'CNY', amount: s.wechat.price_cny });
@@ -1733,11 +1739,20 @@ export class MoltsPayServer {
       headers[ALIPAY_PAYMENT_NEEDED_HEADER] = alipayChallenge.paymentNeededHeader;
     }
 
+    // The human-readable body must describe the rails actually on offer. It
+    // used to hardcode the USDC list price, which told an LLM agent to pay in
+    // crypto even on a server that no longer accepts it -- the agent then
+    // burned its first attempt on a rail with no accepts[] entry.
+    const offered = this.describeServicePricing(config);
+    const message = offered.pricing.length
+      ? `Payment required — ${offered.pricing.map(p => `${p.rail}: ${p.amount} ${p.currency}`).join(' | ')}`
+      : `Service requires $${config.price} ${config.currency}`;
+
     res.writeHead(402, headers);
     res.end(JSON.stringify({
       error: 'Payment required',
-      message: `Service requires $${config.price} ${config.currency}`,
-      acceptedCurrencies: acceptedTokens,
+      message,
+      acceptedCurrencies: offered.acceptedCurrencies,
       acceptedChains,
       x402: paymentRequired,
     }, null, 2));
