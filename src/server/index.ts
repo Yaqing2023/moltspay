@@ -622,12 +622,17 @@ export class MoltsPayServer {
   /** Shared service-list entry for the discovery and /services endpoints. */
   private buildDiscoveryService(s: ServiceConfig) {
     const { acceptedCurrencies, pricing } = this.describeServicePricing(s);
+    // The legacy top-level price/currency are the USDC list price. On a server
+    // that no longer accepts crypto they are a lie that reads as an offer --
+    // an agent quotes "$0.10 USDC" and tries to pay a rail with no accepts[]
+    // entry. When crypto is not on offer, headline the first rail that is.
+    const headline = pricing.find(p => p.rail === 'crypto') ?? pricing[0];
     return {
       id: s.id,
       name: s.name,
       description: s.description,
-      price: s.price,
-      currency: s.currency,
+      price: headline ? Number(headline.amount) : s.price,
+      currency: headline ? headline.currency : s.currency,
       acceptedCurrencies,
       pricing,
       input: s.input,
