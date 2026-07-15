@@ -27,7 +27,8 @@ MoltsPay enables agent-to-agent commerce using the [x402 protocol](https://www.x
 - **Multi-chain** - Base, Polygon, Solana, BNB, Tempo (mainnet & testnet)
 - **Fiat Rail — Alipay (`2.0.0`)** - Accept CNY via 支付宝 AI 收 from China mainland merchants. CLI-only (Node), browser unsupported. See [`docs/ALIPAY-RAIL.md`](docs/ALIPAY-RAIL.md)
 - **Fiat Rail — WeChat Pay (`2.1.0`)** - Accept CNY via WeChat Pay v3 Native (scan-to-pay). SDK-managed recoverable sessions persist QR/order context, poll in the background, and fulfill idempotently. See [`docs/WECHAT-RAIL-DESIGN.md`](docs/WECHAT-RAIL-DESIGN.md)
-- **Balance Rail — Password-Free (`2.2.0`)** - Top up once, then pay with no signature or QR per transaction. Server-custodied SQLite ledger with atomic deducts, hard spending limits, and idempotent retries. See [`docs/BALANCE-RAIL-DESIGN.md`](docs/BALANCE-RAIL-DESIGN.md)
+- **Balance Rail — Password-Free (`2.2.0`)** - Top up once, then pay with no signature or QR per transaction. Server-custodied SQLite ledger with atomic deducts, hard spending limits, and idempotent retries. See [`docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md`](docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md)
+- **Balance Identity & Authentication (`2.4.0`)** - The balance rail gets a real user: accounts are anchored to the WeChat payer's `openid` at top-up, and each deduction is authorized by a per-request signature (`auth_mode: off` | `shadow` | `enforce`). Knowing a `buyer_id` is no longer enough to spend — closes the bearer hole. See [Balance Authentication](#balance-authentication-240) below
 - **Agent-to-Agent** - Complete A2A payment flow support
 - **Multi-VM** - EVM chains + Solana (SVM) with unified API
 - **MCP Server** - Expose wallet + payments to Claude Desktop, Cursor, and other MCP hosts
@@ -616,10 +617,21 @@ npx moltspay wechat cancel <session-or-out_trade_no>        # Mark local session
 npx moltspay wechat list                                   # List persisted WeChat sessions
 
 # === Custodial Balance (Password-Free) ===
-npx moltspay balance set-buyer <id>                        # Persist the buyer id (bearer semantics)
-npx moltspay balance query <url>                           # Balance, limits, today's spend
-npx moltspay balance topup <url> <amount> --rail crypto --tx-hash 0x...   # Credit from a settled payment
+npx moltspay balance set-buyer <id>                        # Persist the buyer id (account label)
+npx moltspay balance query <url>                           # Balance, limits, today's spend, bound signer/openid
 npx moltspay balance transactions <url>                    # Ledger history, newest first
+npx moltspay balance topup <url> <amount> --rail crypto --tx-hash 0x...   # Credit from a settled payment (crypto/wechat/alipay)
+
+# --- Identity & auth (2.4.0) ---
+npx moltspay balance whoami [url]                          # Show local signer address (and, vs a server, the account's bound signer/openid)
+npx moltspay balance bind <url>                            # Bind the local signer to an account (runs a minimal top-up to establish identity)
+
+# --- Recoverable WeChat-funded top-up (for chat agents; non-blocking) ---
+npx moltspay balance topup-order <url> --pack 2.00         # Mint a WeChat pack order, emit the QR, exit immediately
+npx moltspay balance topup-confirm <out_trade_no>          # Confirm + credit a pending order later (idempotent on out_trade_no)
+npx moltspay balance topup-status <out_trade_no>           # Query one pending order
+npx moltspay balance topup-list                            # List pending top-up orders
+npx moltspay balance topup-pack <url>                      # Blocking variant: mint pack, wait for the scan, credit inline
 
 # === Server Commands ===
 npx moltspay start <skill-dir>       # Start server
@@ -1081,7 +1093,28 @@ Since **`2.2.0`**, MoltsPay supports a third payment mode: a **custodial balance
 
 Unlike the other rails, nothing settles externally at purchase time: the ledger lives in SQLite on the provider server (Node's built-in `node:sqlite`, zero new dependencies). Enabling the rail requires **Node.js >= 22.5** on the server; servers that don't enable it keep the package's `node >= 18` floor.
 
-> ⚠️ **Custodial trust model.** Buyer funds are held by the provider, and `buyer_id` is a **bearer identifier** — anyone who presents it can spend that balance. This fits channel-mediated use (the channel runtime holds the id and maps its own sessions to it). Signed buyer tokens are planned. See [`docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md`](docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md).
+> ⚠️ **Custodial trust model.** Buyer funds are held by the provider. Since **`2.4.0`**, spending is authorized by a **per-request signature**, not a bare `buyer_id` — see [Balance Authentication](#balance-authentication-240) below. With `auth_mode: enforce`, knowing a `buyer_id` is not enough to spend. (`auth_mode` defaults to `off` for backward compatibility, where the id retains bearer semantics.) See [`docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md`](docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md).
+
+### Balance Authentication (`2.4.0`)
+
+Before 2.4.0 the balance rail identified a buyer by a single plaintext `buyer_id`: anyone who knew it could spend that balance (bearer semantics), and the same person writing it two ways split into two accounts. 2.4.0 gives the rail a real identity, in two complementary halves:
+
+- **Identity anchor = WeChat `openid`.** On a WeChat-funded top-up, the server extracts `payer.openid` from the (signature-verified) order query and records it on the account. Accounts are anchored to the person who actually paid, not to a self-reported string — this removes the account-splitting class of bug at the source. Binding is observational and never overwrites a conflicting openid.
+- **Spend credential = a per-request signature.** Each deduction carries an EIP-191 signature over a canonical message (domain `moltspay-balance-auth:v1` / `balance-deduct` / `buyer_id` / `request_id` / `service` / `timestamp`). The server recovers the signer address, TOFU-binds it to the account on first use, and verifies it thereafter. The amount is deliberately *not* signed (the service id fixes the price server-side); a `request_id` + a ±5-minute `timestamp` window bound replay.
+
+**`provider.balance.auth_mode`** — staged rollout, not on by default:
+
+| Mode | Behavior |
+|------|----------|
+| `off` (default) | Signature is not checked. Backward-compatible; `buyer_id` keeps bearer semantics. |
+| `shadow` | Verify and log what it *would* reject, without blocking. Use this to confirm every client is signing before tightening. |
+| `enforce` | Reject unsigned / invalid / wrong-signer requests with **401**. |
+
+The client signs with its EVM wallet, or — for balance-only clients with no crypto wallet — a per-configDir identity key auto-created at `<configDir>/balance-identity.key` (0600). Inspect and bind identity with `moltspay balance whoami` / `moltspay balance bind`.
+
+> **Foundation — WeChat response verification.** The `openid` anchor is only trustworthy if the order-query response is verified against the WeChat platform certificate. Configure `provider.wechat.platform_public_key_path` (present ⇒ every response is verified, and a verification failure throws); without it, the identity anchor is not trustworthy.
+
+> **Trust model — one agent key spends for all its users.** The shipped model is *agent-custodial*: a single agent key is bound to every account it tops up (`signer_address` is one-to-many). Accounts stay separated by openid, but **whoever holds the agent's key can spend every bound user's balance** — protect `balance-identity.key` accordingly. There is currently no revocation/freeze API (operator-only, via the ledger DB); per-user key isolation is a future upgrade.
 
 ### WeChat-Funded Password-Free (Scan Once, Then Password-Free)
 
@@ -1215,7 +1248,8 @@ The server also exposes balance-management endpoints:
 ### Buyer Usage
 
 ```bash
-# One-time: persist your buyer id (bearer semantics — treat it like a token)
+# One-time: persist your buyer id (account label). Under auth_mode=enforce, spending also
+# requires the bound signing key — see "Balance Authentication" above.
 npx moltspay balance set-buyer my-buyer-id
 
 # Top up once, via any settled rail
