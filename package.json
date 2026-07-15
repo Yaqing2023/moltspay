@@ -108,6 +108,7 @@
     "scripts/postinstall.js",
     ".env.example",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "docs/ALIPAY-RAIL.md",
     "docs/WECHAT-RAIL-DESIGN.md",
