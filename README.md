@@ -25,7 +25,7 @@ MoltsPay enables agent-to-agent commerce using the [x402 protocol](https://www.x
 - **Payment Verification** - Automatic on-chain verification
 - **Secure Wallet** - Spending limits, whitelist, and audit logging
 - **Multi-chain** - Base, Polygon, Solana, BNB, Tempo (mainnet & testnet)
-- **Fiat Rail — Alipay (`2.0.0`)** - Accept CNY via 支付宝 AI 收 from China mainland merchants. CLI-only (Node), browser unsupported. See [`docs/ALIPAY-RAIL.md`](docs/ALIPAY-RAIL.md)
+- **Fiat Rail — Alipay (`2.0.0`)** - Accept CNY via Alipay AI Pay from China mainland merchants. CLI-only (Node), browser unsupported. See [`docs/ALIPAY-RAIL.md`](docs/ALIPAY-RAIL.md)
 - **Fiat Rail — WeChat Pay (`2.1.0`)** - Accept CNY via WeChat Pay v3 Native (scan-to-pay). SDK-managed recoverable sessions persist QR/order context, poll in the background, and fulfill idempotently. See [`docs/WECHAT-RAIL-DESIGN.md`](docs/WECHAT-RAIL-DESIGN.md)
 - **Balance Rail — Password-Free (`2.2.0`)** - Top up once, then pay with no signature or QR per transaction. Server-custodied SQLite ledger with atomic deducts, hard spending limits, and idempotent retries. See [`docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md`](docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md)
 - **Balance Identity & Authentication (`2.4.0`)** - The balance rail gets a real user: accounts are anchored to the WeChat payer's `openid` at top-up, and each deduction is authorized by a per-request signature (`auth_mode: off` | `shadow` | `enforce`). Knowing a `buyer_id` is no longer enough to spend — closes the bearer hole. See [Balance Authentication](#balance-authentication-240) below
@@ -866,7 +866,7 @@ npx moltspay status
 
 ## Fiat Rail (Alipay / CNY)
 
-Since **`2.0.0`**, MoltsPay supports a **fiat payment rail via Alipay (支付宝 AI 收)**, settling in **CNY (人民币)** alongside the existing USDC crypto rails. It uses the same HTTP 402 flow, so a service can price in USDC, CNY, or both — a purely additive change that leaves existing crypto-only services untouched.
+Since **`2.0.0`**, MoltsPay supports a **fiat payment rail via Alipay AI Pay**, settling in **CNY** alongside the existing USDC crypto rails. It uses the same HTTP 402 flow, so a service can price in USDC, CNY, or both — a purely additive change that leaves existing crypto-only services untouched.
 
 Unlike the crypto rails, `alipay` is a **fiat rail, not a blockchain**: there is no gas and no on-chain settlement — the buyer pays in the Alipay app and the merchant settles in CNY. The scheme is `alipay-aipay`, signed with RSA2.
 
@@ -918,7 +918,7 @@ Add `"alipay"` to `chains`, configure `provider.alipay` with your merchant keys,
 
 | Field | Req | Description |
 |-------|-----|-------------|
-| `price_cny` | ✅ | CNY price as a decimal string in **元**, e.g. `"7.00"` = 7 CNY (**NOT cents**) |
+| `price_cny` | ✅ | CNY price as a decimal string in **yuan**, e.g. `"7.00"` = 7 CNY (**NOT cents**) |
 | `goods_name` | ✅ | Goods name shown to the buyer in the Alipay app |
 | `service_id` | — | Per-service override (defaults to `provider.alipay.service_id_default`) |
 
@@ -948,7 +948,7 @@ See [`docs/ALIPAY-RAIL.md`](docs/ALIPAY-RAIL.md) for the full reference (402 flo
 
 ## Fiat Rail (WeChat Pay / CNY)
 
-Since **`2.1.0`**, MoltsPay supports a second **fiat payment rail via WeChat Pay v3 Native (扫码付)**, settling in **CNY (人民币)** alongside USDC and Alipay. It uses the same HTTP 402 flow, so a service can price in USDC, Alipay-CNY, WeChat-CNY, or any combination — purely additive.
+Since **`2.1.0`**, MoltsPay supports a second **fiat payment rail via WeChat Pay v3 Native (scan-to-pay)**, settling in **CNY** alongside USDC and Alipay. It uses the same HTTP 402 flow, so a service can price in USDC, Alipay-CNY, WeChat-CNY, or any combination — purely additive.
 
 Like `alipay`, `wechat` is a **fiat rail, not a blockchain**. The scheme is `wechatpay-native`, requests are signed with **SHA256-RSA** (`WECHATPAY2-SHA256-RSA2048`), and amounts are sent to WeChat in **fen** (the manifest still uses **yuan** decimal strings for consistency).
 
@@ -1003,7 +1003,7 @@ Add `"wechat"` to `chains`, configure `provider.wechat` with your merchant crede
 
 | Field | Req | Description |
 |-------|-----|-------------|
-| `mchid` | ✅ | Merchant id (商户号) |
+| `mchid` | ✅ | Merchant id |
 | `appid` | ✅ | App id (official account / mini-program / app) |
 | `serial_no` | ✅ | Merchant API certificate serial number |
 | `private_key_path` | ✅ | Path to the merchant RSA private key PEM (relative to the manifest) |
@@ -1089,7 +1089,7 @@ See [`examples/wechat-native-pay.ts`](examples/wechat-native-pay.ts) for a runna
 
 ## Balance Rail (Password-Free Payments)
 
-Since **`2.2.0`**, MoltsPay supports a third payment mode: a **custodial balance rail (免密支付)**. A buyer tops up once — via any existing rail — and subsequent purchases are deducted from a server-custodied balance: **no signature, no QR scan, no password per transaction**. It uses the same HTTP 402 flow (scheme/network `balance`), so a service can offer crypto, Alipay-CNY, WeChat-CNY, and balance simultaneously — purely additive.
+Since **`2.2.0`**, MoltsPay supports a third payment mode: a **custodial balance rail (password-free)**. A buyer tops up once — via any existing rail — and subsequent purchases are deducted from a server-custodied balance: **no signature, no QR scan, no password per transaction**. It uses the same HTTP 402 flow (scheme/network `balance`), so a service can offer crypto, Alipay-CNY, WeChat-CNY, and balance simultaneously — purely additive.
 
 Unlike the other rails, nothing settles externally at purchase time: the ledger lives in SQLite on the provider server (Node's built-in `node:sqlite`, zero new dependencies). Enabling the rail requires **Node.js >= 22.5** on the server; servers that don't enable it keep the package's `node >= 18` floor.
 
