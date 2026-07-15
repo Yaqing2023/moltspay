@@ -609,6 +609,11 @@ npx moltspay pay <url> <service> --rail alipay         # Pay with Alipay AI Pay
 npx moltspay pay <url> <service> --rail wechat         # Pay with WeChat Pay Native QR
 npx moltspay pay <url> <service> --rail balance        # Pay password-free from prepaid balance
 
+# === BNB One-Time Approve ===
+# BNB payments need a one-time spender approval first (the spender comes from the 402 response).
+npx moltspay approve --spender <address> --chain bnb   # Approve, then `pay --chain bnb` is gasless
+npx moltspay approve --spender <address>               # --chain defaults to bnb_testnet
+
 # === WeChat Recoverable Sessions ===
 npx moltspay wechat start <url> <service> --prompt "..."   # Start order, return QR metadata immediately
 npx moltspay wechat status <session-or-out_trade_no>        # Query/recover a pending session
@@ -820,15 +825,21 @@ npx moltspay pay https://server.com service-id --chain solana --prompt "test"
 
 BNB uses the **BNBFacilitator** with a pre-approval flow. Since CDP doesn't support BNB, we use a different approach:
 
-1. Client signs an EIP-712 payment intent (no gas needed)
-2. Server validates and executes the transfer
-3. Server sponsors gas (~$0.0001 per tx)
+1. Client approves a spender **once** (a one-time on-chain `approve`, costs ~0.001 BNB gas)
+2. Client signs an EIP-712 payment intent (no gas needed)
+3. Server validates and executes the transfer
+4. Server sponsors gas (~$0.0001 per tx)
 
 ```bash
 # Get free testnet USDC + tBNB for gas
 npx moltspay faucet --chain bnb_testnet
 
-# Pay on BNB (client pays no gas!)
+# One-time approve (required before the first BNB payment).
+# The spender address comes from the server's 402 response; a first `pay` also
+# prints it if you haven't approved yet.
+npx moltspay approve --spender 0xSPENDER --chain bnb_testnet
+
+# Pay on BNB (client pays no gas after the approve!)
 npx moltspay pay https://server.com service-id --chain bnb_testnet --prompt "test"
 
 # Check BNB balance
