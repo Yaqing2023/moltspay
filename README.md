@@ -954,21 +954,6 @@ Like `alipay`, `wechat` is a **fiat rail, not a blockchain**. The scheme is `wec
 
 > ⚠️ **Not a fully autonomous payer.** WeChat Pay has no agent-payment product equivalent to Alipay's `alipay-bot`. The flow is: the server issues a **payer-agnostic `code_url`** (Native, no `openid` — anyone can scan), the SDK client persists the session and polls, a human scans and pays, and the server verifies the order (`trade_state === SUCCESS`). It is **one code, one payment** — issue a new code to collect again. See [`docs/WECHAT-RAIL-DESIGN.md`](docs/WECHAT-RAIL-DESIGN.md).
 
-### Implementation Status
-
-The WeChat rail is implemented on the `2.1.0` code path:
-
-- `WechatFacilitator` creates Native orders, returns `code_url` / `out_trade_no`, verifies `SUCCESS` by querying WeChat Pay v3, and settles idempotently.
-- Server 402 integration emits a `wechatpay-native` entry in `accepts[]` when a service has `services[].wechat` pricing.
-- `WechatClient` owns the buyer-side payment lifecycle: it persists `payment_session_id`, `out_trade_no`, QR payload, original request body, and service context under `<configDir>/wechat-sessions`; it can poll, fulfill, cancel, and recover sessions by session id or `out_trade_no`.
-- `MoltsPayClient.startWechatPayment()` starts a session and returns immediately with QR metadata. It can also run SDK-managed background polling with `autoPoll` plus completion/failure callbacks for long-lived channel runtimes.
-- CLI support has two shapes:
-  - `moltspay pay --rail wechat` is the interactive terminal wrapper. It renders terminal ASCII QR, writes a PNG QR image, emits `MEDIA: <path>`, and waits for payment completion.
-  - `moltspay wechat start/status/fulfill/cancel/list` is the non-blocking recoverable interface for skills, chat channels, and operational recovery.
-- Browser support is intentionally not provided because the flow requires a human QR scan and server-side order verification.
-- Unit and wiring tests cover signing, facilitator behavior, chain/registry wiring, and server integration. Local server integration tests require an environment that allows binding `127.0.0.1`.
-- Release housekeeping: update any stale roadmap docs and tag `v2.1.0` after the normal test gates pass in a non-sandboxed environment.
-
 ### Provider Setup (Selling in CNY)
 
 Add `"wechat"` to `chains`, configure `provider.wechat` with your merchant credentials, and add a per-service `wechat` block with the CNY price:
