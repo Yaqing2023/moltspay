@@ -753,9 +753,6 @@ npx moltspay status
 
 # Request devnet SOL (for gas)
 npx moltspay faucet --chain solana_devnet
-
-# Test transfer (to self)
-npx moltspay send 0.01 YOUR_ADDRESS --chain solana_devnet
 ```
 
 ## File Checklist
