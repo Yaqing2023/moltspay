@@ -86,7 +86,7 @@ mkdir ~/molt-test && cd ~/molt-test && npm init -y
 npm install ~/moltspay/moltspay-1.7.0.tgz
 ```
 
-(For global install see [`../INSTALL-OPENCLAW.md`](../INSTALL-OPENCLAW.md) — `sudo` required when the npm prefix is `/usr/local`.)
+(For a global install, `sudo` is required when the npm prefix is `/usr/local`.)
 
 **All three postinstall paths must be verified**:
 
@@ -176,6 +176,5 @@ npm install ~/moltspay/moltspay-<ver>.tgz
 
 ## Related docs
 
-- [`../INSTALL-OPENCLAW.md`](../INSTALL-OPENCLAW.md) — full install steps for the openclaw deployment machine
 - [`ALIPAY-RAIL.md`](./ALIPAY-RAIL.md) — the Alipay payment rail / alipay-bot dependency and license model
 - [`../CHANGELOG.md`](../CHANGELOG.md) — 2.0.0 release notes (config examples and test scripts)
