@@ -300,7 +300,7 @@ program
   });
 
 /**
- * npx moltspay send <to> <amount> [--token USDC|USDT] [--chain base] [--yes] [--json]
+ * npx moltspay transfer <to> <amount> [--token USDC|USDT] [--chain base] [--yes] [--json]
  *
  * Send USDC/USDT out of the wallet to any address (e.g. an exchange deposit
  * address). Thin wrapper over the SDK's Wallet.transfer(). EVM chains only;
@@ -308,8 +308,8 @@ program
  * See docs/SEND-COMMAND-DESIGN.md.
  */
 program
-  .command('send <to> <amount>')
-  .description('Send USDC/USDT to any address (e.g. an exchange deposit address)')
+  .command('transfer <to> <amount>')
+  .description('Transfer USDC/USDT to any address (e.g. an exchange deposit address)')
   .option('--token <token>', 'Token to send: USDC or USDT', 'USDC')
   .option('--chain <chain>', 'EVM chain: base, polygon, bnb, base_sepolia, bnb_testnet, tempo_moderato', 'base')
   .option('--yes', 'Skip the confirmation prompt (for scripts/agents)')
@@ -326,7 +326,7 @@ program
     // Validate chain + token
     const chain = String(options.chain);
     if (isSolanaChain(chain as ChainName)) {
-      fail('Solana send is not supported yet; use --chain base|polygon|bnb');
+      fail('Solana transfer is not supported yet; use --chain base|polygon|bnb');
     }
     if (!CHAINS[chain as EvmChainName]) {
       fail(`Unknown chain "${chain}". Supported: ${Object.keys(CHAINS).join(', ')}`);

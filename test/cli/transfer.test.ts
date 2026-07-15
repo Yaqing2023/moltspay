@@ -1,5 +1,5 @@
 /**
- * Regression for the `moltspay send` command's argument validation.
+ * Regression for the `moltspay transfer` command's argument validation.
  *
  * Runs the CLI from source via tsx with `--json` and asserts the structured
  * error for each bad-input branch. These paths are pure validation (chain /
@@ -20,10 +20,10 @@ const CLI = path.join(ROOT, 'src/cli/index.ts');
 const TSX = path.join(ROOT, 'node_modules/.bin/tsx');
 const DEAD = '0x000000000000000000000000000000000000dEaD';
 
-/** Run `moltspay send ...` from source; return parsed JSON output. */
+/** Run `moltspay transfer ...` from source; return parsed JSON output. */
 async function send(args: string[]): Promise<any> {
   try {
-    const { stdout } = await execFileP(TSX, [CLI, 'send', ...args, '--json'], { timeout: 30_000 });
+    const { stdout } = await execFileP(TSX, [CLI, 'transfer', ...args, '--json'], { timeout: 30_000 });
     return JSON.parse(stdout.trim().split('\n').pop() as string);
   } catch (e: any) {
     // Non-zero exit still prints the JSON error on stdout.
@@ -32,7 +32,7 @@ async function send(args: string[]): Promise<any> {
   }
 }
 
-describe('moltspay send -- argument validation', () => {
+describe('moltspay transfer -- argument validation', () => {
   it('rejects a malformed destination address', async () => {
     const r = await send(['0xNOTANADDR', '5']);
     expect(r.success).toBe(false);
@@ -66,7 +66,7 @@ describe('moltspay send -- argument validation', () => {
   it('rejects a Solana chain (not supported yet)', async () => {
     const r = await send([DEAD, '5', '--chain', 'solana']);
     expect(r.success).toBe(false);
-    expect(r.error).toMatch(/Solana send is not supported/);
+    expect(r.error).toMatch(/Solana transfer is not supported/);
   });
 
   it('fails when the wallet is not initialized', async () => {

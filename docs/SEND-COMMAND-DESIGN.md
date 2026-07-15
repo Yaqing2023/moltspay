@@ -13,7 +13,7 @@ This adds a thin CLI command wrapping the existing SDK method. No new payment lo
 ## 2. Command specification
 
 ```
-moltspay send <to> <amount> [options]
+moltspay transfer <to> <amount> [options]
 ```
 
 | Arg / option | Required | Description |
@@ -29,10 +29,10 @@ moltspay send <to> <amount> [options]
 Examples:
 ```bash
 # Send 5 USDC on Base to an exchange deposit address (interactive confirm)
-moltspay send 0xBinanceDepositAddr... 5
+moltspay transfer 0xBinanceDepositAddr... 5
 
 # Send 10 USDT on BNB Chain, no prompt (agent/script)
-moltspay send 0x... 10 --token USDT --chain bnb --yes
+moltspay transfer 0x... 10 --token USDT --chain bnb --yes
 ```
 
 ## 3. Behavior / flow
