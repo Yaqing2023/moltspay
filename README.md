@@ -1286,7 +1286,7 @@ Live service at `https://moltspay.com/a/zen7`
 
 **Services:**
 - `text-to-video` - $0.01 USDC - Generate video from text prompt
-- `image-to-video` - $0.01 USDC - Animate a static image
+- `image-to-video` - $1.49 USDC - Animate a static image
 
 **Supported Chains:** Base, Polygon, Solana, BNB, Tempo (mainnet & testnet)
 

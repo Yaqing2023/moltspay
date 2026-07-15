@@ -1,7 +1,9 @@
 # WeChat + Balance Password-Free Payments (免密支付) — Design
 
+> ⚠️ **Status update (2.4.0).** This is the 2.3.0 design draft for the WeChat-funded balance flow, and it remains accurate for that flow. **Its security recommendations about `buyer_id` are outdated:** the "bearer `buyer_id`" risk it flags as a residual risk / recommended fast-follow was **closed in 2.4.0** — spending is now authorized by a per-request signature (`auth_mode: off` \| `shadow` \| `enforce`) with a WeChat-`openid` identity anchor. For the shipped authentication model, see **"Balance Authentication (2.4.0)"** in the README (`README.md`). Where this draft and that section disagree on identity/auth, the README is authoritative.
+
 > **Target**: `moltspay@2.3.0`
-> **Status**: Proposed (2026-07-12)
+> **Status**: Proposed (2026-07-12); auth section superseded by 2.4.0 (see banner above)
 > **Scope**: Fuse the WeChat Native scan-to-pay rail (2.1.0) with the custodial balance rail (2.2.0) so a buyer scans **once** to load a balance pack, then spends **password-free** from that balance until it runs low.
 > **Supersedes**: nothing — extends `WECHAT-RAIL-DESIGN.md` and `BALANCE-RAIL-DESIGN.md`; where either disagrees, this document is authoritative for the fused flow.
 > **Related**: `WECHAT-RAIL-DESIGN.md`, `BALANCE-RAIL-DESIGN.md`, `CHANGELOG.md` [2.1.0]/[2.2.0], the WeChat topup amount-spoofing fix (`fix(balance): credit WeChat-verified paid amount`).
@@ -193,7 +195,7 @@ Kept for operator/recovery use, already hardened to credit `payer_total` only (n
 
 1. **Amount integrity (structural)** — only `payer_total` from a **verified** source credits: callback (decrypt + platform-cert verify) or order-query (`trade_state === SUCCESS`). Client-declared amounts never touch the ledger. This closes the spoofing class by construction, not by check.
 2. **Buyer binding trust** — `attach.buyer_id` is set server-side at order creation and echoed by WeChat; the callback credits whatever `attach` says. Since the server minted `attach`, it is trustworthy for the callback path. (Do **not** let a client pass an arbitrary `buyer_id` into an *already-paid* order after the fact.)
-3. **`buyer_id` is a bearer identifier** — whoever holds it spends the balance. Password-free means balance sits pre-funded, enlarging the blast radius. **Recommendation: promote signed buyer tokens (Phase 2 in `BALANCE-RAIL-DESIGN.md`) to a fast-follow**, at least gating `POST /balance/topup/order` and deductions.
+3. **`buyer_id` is a bearer identifier** — whoever holds it spends the balance. Password-free means balance sits pre-funded, enlarging the blast radius. **Recommendation: promote signed buyer tokens (Phase 2 in `BALANCE-RAIL-DESIGN.md`) to a fast-follow**, at least gating `POST /balance/topup/order` and deductions. **→ Done in 2.4.0**: per-request signature auth (`auth_mode` off/shadow/enforce) + openid anchor closed this; see the README's "Balance Authentication (2.4.0)".
 4. **`auto_topup_max`** — bounds how much a (possibly compromised) client can pull from the user's WeChat without an explicit human pack choice. Amounts above it require deliberate `--pack` selection.
 5. **Limits** — single/daily deduction limits stay enforced on the spend side.
 6. **Public callback dependency** — `/wechat/notify` must be reachable over public HTTPS. The 2026-07-11 test found nginx returning 404 for `/balance` on the old GCE host; **verify nginx forwards `/wechat/notify` and `/balance*` before relying on the callback path** (polling-fallback covers the gap meanwhile).
@@ -238,7 +240,7 @@ Kept for operator/recovery use, already hardened to credit `payer_total` only (n
 
 ## 14. Open items
 
-- **Signed buyer tokens**: strongly recommended before wide password-free rollout (bearer `buyer_id` is the main residual risk).
+- **Signed buyer tokens**: strongly recommended before wide password-free rollout (bearer `buyer_id` is the main residual risk). **→ Shipped in 2.4.0** (per-request signature + openid anchor, `auth_mode` enforce); see the README's "Balance Authentication (2.4.0)".
 - **nginx**: confirm `/wechat/notify` + `/balance*` forward correctly on the current host (Tencent Cloud 硅谷 `43.162.105.191`, post-migration) before enabling callback-primary.
 - **Pack UX**: whether to let channels present multiple packs to the user or always auto-pick `default_pack`.
 
