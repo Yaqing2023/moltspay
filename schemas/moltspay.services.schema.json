@@ -180,6 +180,12 @@
               "type": "string",
               "pattern": "^\\d+(\\.\\d{1,2})?$",
               "description": "Ceiling on client auto-topup without explicit pack selection (2.3+). Must be >= the largest topup_pack."
+            },
+            "auth_mode": {
+              "type": "string",
+              "enum": ["off", "shadow", "enforce"],
+              "default": "off",
+              "description": "Balance spend authentication (2.4+). 'off': signature not checked (default, backward-compatible; buyer_id keeps bearer semantics). 'shadow': verify per-request signatures and log what would be denied, without blocking (use to confirm every client signs before tightening). 'enforce': reject unsigned/invalid/wrong-signer deductions with 401. The account's signer address is TOFU-bound on first signed use and anchored to the WeChat payer openid at top-up."
             }
           }
         }

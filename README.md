@@ -278,7 +278,7 @@ Servers advertising for the web need `cors` enabled; CLI callers are unaffected 
 
 **Security posture.** No private key ever enters browser memory. No filesystem access, no `~/.moltspay/` — the wallet is always external. The `signer` object the client receives only has permission to sign typed data and (for BNB) submit one `approve` transaction, which the user explicitly confirms in the wallet UI.
 
-**Reference demo.** `examples/web/` is a runnable React + Vite app that exercises every path above. `cd examples/web && npm install && npm run dev` — it connects to `https://moltspay.com/a/zen7` by default. See [`examples/web/README.md`](examples/web/README.md) for the full matrix of tested wallets + chains.
+**Reference demo.** `examples/web/` is a runnable React + Vite app that exercises every path above. `cd examples/web && npm install && npm run dev` — it connects to `https://moltspay.com/a/zen7` by default. See [`examples/web/README.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.0/examples/web/README.md) for the full matrix of tested wallets + chains.
 
 ## MCP Server (For AI Assistants)
 
@@ -1079,7 +1079,7 @@ npx moltspay wechat status mpay_sess_...
 npx moltspay wechat fulfill mpay_sess_...
 ```
 
-See [`examples/wechat-native-pay.ts`](examples/wechat-native-pay.ts) for a runnable scenario-A demo (mock by default; `WECHAT_REAL=1` hits the live gateway).
+See [`examples/wechat-native-pay.ts`](https://github.com/Yaqing2023/moltspay/blob/v2.4.0/examples/wechat-native-pay.ts) for a runnable scenario-A demo (mock by default; `WECHAT_REAL=1` hits the live gateway).
 
 > 🔐 **Keep keys safe.** The merchant private key and APIv3 key authorize collection on your merchant account. Store them outside version control and reference them by path.
 
