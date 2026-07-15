@@ -43,7 +43,7 @@ To adopt balance authentication on an existing deployment, stage it: set `auth_m
 
 **Scan once, then password-free.** Fuses the WeChat Native rail (2.1.0) and the custodial balance rail (2.2.0) into one flow: WeChat becomes a **balance funding source** (the buyer scans once to load a top-up pack) and the balance rail does the spending (subsequent purchases deduct server-side, no scan, no password). WeChat has no autonomous payer product, so "password-free" lives entirely on the balance-deduction side; the first purchase against an empty balance still requires one scan, but it buys a pack, not a single item.
 
-**No breaking changes.** The per-transaction WeChat rail and the manual balance top-up endpoint keep working; the fused flow is opt-in via config + client behavior. Design: [`docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md`](docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md) (supersedes the now-deprecated `WECHAT-RAIL-DESIGN.md` / `BALANCE-RAIL-DESIGN.md`).
+**No breaking changes.** The per-transaction WeChat rail and the manual balance top-up endpoint keep working; the fused flow is opt-in via config + client behavior. Design: [`docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.0/docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md) (supersedes the now-deprecated `WECHAT-RAIL-DESIGN.md` / `BALANCE-RAIL-DESIGN.md`).
 
 ### Added
 - **WeChat-funded balance top-up** — `POST /balance/topup/order` mints a buyer-bound WeChat Native order for a configured top-up pack and returns `{ code_url, out_trade_no, pack, expires_at }`. Buyer binding rides in the WeChat `attach` passthrough (`{ buyer_id, nonce }`), so an anonymous Native order credits the correct balance.
