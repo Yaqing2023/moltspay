@@ -7,7 +7,6 @@
 > - `~/clawd/docs/alipay-aipay-402-protocol.md` — server-side 402 protocol (sr007.com battle-tested reference implementation)
 > - `~/clawd/docs/alipay-skill-integration-guide.md` — client-side CLI onboarding flow (`alipay-bot` official)
 > - `./ALIPAY-INTEGRATION-PLAN.md` — execution checklist for this design (milestones + acceptance criteria)
-> - `../SDK_REFACTOR_DESIGN.md` — MoltsPay SDK architecture baseline
 > - `../src/facilitators/interface.ts` — Facilitator abstraction
 
 ---

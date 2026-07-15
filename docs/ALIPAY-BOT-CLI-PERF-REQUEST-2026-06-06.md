@@ -65,4 +65,4 @@ These only reduce the number of spawns; **the one unavoidable `402-buyer-pay` co
 
 ## Appendix
 
-Full profiler and timelines are in the moltspay repository: `scripts/cli-profile-hook.cjs`, `docs/ALIPAY-SLOWNESS-REPORT-2026-06-06.md`. Raw per-event JSON available on request.
+The profiler is in the moltspay repository: `scripts/cli-profile-hook.cjs`. Raw per-event JSON and timelines available on request.

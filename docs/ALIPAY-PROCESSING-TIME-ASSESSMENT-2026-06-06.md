@@ -3,7 +3,7 @@
 **Project**: moltspay Discord bot Alipay `/buy` latency
 **Date**: 2026-06-06
 **Method**: SDK structured timing logs + observation-only CLI profiler (`scripts/cli-profile-hook.cjs`, splitting into three buckets: child_process / undici(fetch) / event-loop stalls) + real production payment-flow capture
-**Related documents**: [ALIPAY-SLOWNESS-REPORT](./ALIPAY-SLOWNESS-REPORT-2026-06-06.md), [ALIPAY-BOT-CLI-PERF-REQUEST](./ALIPAY-BOT-CLI-PERF-REQUEST-2026-06-06.md)
+**Related documents**: [ALIPAY-BOT-CLI-PERF-REQUEST](./ALIPAY-BOT-CLI-PERF-REQUEST-2026-06-06.md)
 
 ---
 

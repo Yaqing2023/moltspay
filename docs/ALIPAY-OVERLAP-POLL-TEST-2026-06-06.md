@@ -35,7 +35,7 @@
 | 402-buyer-pay | 44600ms | ✅ | Inherent gateway stall (Rec #4, not changeable on the Node side) |
 | **`flow.pending`** | **82011ms** | | QR code available for display |
 
-Consistent with the three historical payments in [ALIPAY-LATENCY-REPORT.md](ALIPAY-LATENCY-REPORT.md) §3: `check-wallet` ~23s and `402-buyer-pay` ~45s are structural costs.
+Consistent with three earlier measured payments: `check-wallet` ~23s and `402-buyer-pay` ~45s are structural costs.
 
 ### 2.2 After the QR code (polling) — overlapping concurrency
 
