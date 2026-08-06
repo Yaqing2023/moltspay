@@ -25,9 +25,9 @@ MoltsPay enables agent-to-agent commerce using the [x402 protocol](https://www.x
 - **Payment Verification** - Automatic on-chain verification
 - **Secure Wallet** - Spending limits, whitelist, and audit logging
 - **Multi-chain** - Base, Polygon, Solana, BNB, Tempo (mainnet & testnet)
-- **Fiat Rail — Alipay (`2.0.0`)** - Accept CNY via Alipay AI Pay from China mainland merchants. CLI-only (Node), browser unsupported. See [`docs/ALIPAY-RAIL.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.0/docs/ALIPAY-RAIL.md)
-- **Fiat Rail — WeChat Pay (`2.1.0`)** - Accept CNY via WeChat Pay v3 Native (scan-to-pay). SDK-managed recoverable sessions persist QR/order context, poll in the background, and fulfill idempotently. See [`docs/WECHAT-RAIL-DESIGN.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.0/docs/WECHAT-RAIL-DESIGN.md)
-- **Balance Rail — Password-Free (`2.2.0`)** - Top up once, then pay with no signature or QR per transaction. Server-custodied SQLite ledger with atomic deducts, hard spending limits, and idempotent retries. See [`docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.0/docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md)
+- **Fiat Rail — Alipay (`2.0.0`)** - Accept CNY via Alipay AI Pay from China mainland merchants. CLI-only (Node), browser unsupported. See [`docs/ALIPAY-RAIL.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.1/docs/ALIPAY-RAIL.md)
+- **Fiat Rail — WeChat Pay (`2.1.0`)** - Accept CNY via WeChat Pay v3 Native (scan-to-pay). SDK-managed recoverable sessions persist QR/order context, poll in the background, and fulfill idempotently. See [`docs/WECHAT-RAIL-DESIGN.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.1/docs/WECHAT-RAIL-DESIGN.md)
+- **Balance Rail — Password-Free (`2.2.0`)** - Top up once, then pay with no signature or QR per transaction. Server-custodied SQLite ledger with atomic deducts, hard spending limits, and idempotent retries. See [`docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.1/docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md)
 - **Balance Identity & Authentication (`2.4.0`)** - The balance rail gets a real user: accounts are anchored to the WeChat payer's `openid` at top-up, and each deduction is authorized by a per-request signature (`auth_mode: off` | `shadow` | `enforce`). Knowing a `buyer_id` is no longer enough to spend — closes the bearer hole. See [Balance Authentication](#balance-authentication-240) below
 - **Agent-to-Agent** - Complete A2A payment flow support
 - **Multi-VM** - EVM chains + Solana (SVM) with unified API
@@ -278,7 +278,7 @@ Servers advertising for the web need `cors` enabled; CLI callers are unaffected 
 
 **Security posture.** No private key ever enters browser memory. No filesystem access, no `~/.moltspay/` — the wallet is always external. The `signer` object the client receives only has permission to sign typed data and (for BNB) submit one `approve` transaction, which the user explicitly confirms in the wallet UI.
 
-**Reference demo.** `examples/web/` is a runnable React + Vite app that exercises every path above. `cd examples/web && npm install && npm run dev` — it connects to `https://moltspay.com/a/zen7` by default. See [`examples/web/README.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.0/examples/web/README.md) for the full matrix of tested wallets + chains.
+**Reference demo.** `examples/web/` is a runnable React + Vite app that exercises every path above. `cd examples/web && npm install && npm run dev` — it connects to `https://moltspay.com/a/zen7` by default. See [`examples/web/README.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.1/examples/web/README.md) for the full matrix of tested wallets + chains.
 
 ## MCP Server (For AI Assistants)
 
@@ -322,7 +322,7 @@ Each host has its own config file for registering stdio MCP servers — check yo
 2. **Dry-run mode** — launch with `--dry-run` and payments return a preview instead of signing.
 3. **Confirmation gate** — set `MOLTSPAY_MCP_REQUIRE_CONFIRM=1` to require a second tool call (`confirmed: true`) for any payment exceeding `maxPerTx / 10`.
 
-Private keys and mnemonics are never exposed over MCP — wallet creation stays on the CLI (`npx moltspay init`) by design. See [`docs/MCP-USAGE.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.0/docs/MCP-USAGE.md) for full tool arguments and troubleshooting.
+Private keys and mnemonics are never exposed over MCP — wallet creation stays on the CLI (`npx moltspay init`) by design. See [`docs/MCP-USAGE.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.1/docs/MCP-USAGE.md) for full tool arguments and troubleshooting.
 
 ## Payment Protocols
 
@@ -955,7 +955,7 @@ npx moltspay pay https://server.com my-service --rail alipay --prompt "..."
 
 > 🔐 **Keep keys safe.** The RSA2 private key authorizes collection on your merchant account. Store the PEM files outside version control and reference them by path in the manifest.
 
-See [`docs/ALIPAY-RAIL.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.0/docs/ALIPAY-RAIL.md) for the full reference (402 flow, error codes, end-to-end example, and known issues).
+See [`docs/ALIPAY-RAIL.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.1/docs/ALIPAY-RAIL.md) for the full reference (402 flow, error codes, end-to-end example, and known issues).
 
 ## Fiat Rail (WeChat Pay / CNY)
 
@@ -963,7 +963,7 @@ Since **`2.1.0`**, MoltsPay supports a second **fiat payment rail via WeChat Pay
 
 Like `alipay`, `wechat` is a **fiat rail, not a blockchain**. The scheme is `wechatpay-native`, requests are signed with **SHA256-RSA** (`WECHATPAY2-SHA256-RSA2048`), and amounts are sent to WeChat in **fen** (the manifest still uses **yuan** decimal strings for consistency).
 
-> ⚠️ **Not a fully autonomous payer.** WeChat Pay has no agent-payment product equivalent to Alipay's `alipay-bot`. The flow is: the server issues a **payer-agnostic `code_url`** (Native, no `openid` — anyone can scan), the SDK client persists the session and polls, a human scans and pays, and the server verifies the order (`trade_state === SUCCESS`). It is **one code, one payment** — issue a new code to collect again. See [`docs/WECHAT-RAIL-DESIGN.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.0/docs/WECHAT-RAIL-DESIGN.md).
+> ⚠️ **Not a fully autonomous payer.** WeChat Pay has no agent-payment product equivalent to Alipay's `alipay-bot`. The flow is: the server issues a **payer-agnostic `code_url`** (Native, no `openid` — anyone can scan), the SDK client persists the session and polls, a human scans and pays, and the server verifies the order (`trade_state === SUCCESS`). It is **one code, one payment** — issue a new code to collect again. See [`docs/WECHAT-RAIL-DESIGN.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.1/docs/WECHAT-RAIL-DESIGN.md).
 
 ### Provider Setup (Selling in CNY)
 
@@ -1079,7 +1079,7 @@ npx moltspay wechat status mpay_sess_...
 npx moltspay wechat fulfill mpay_sess_...
 ```
 
-See [`examples/wechat-native-pay.ts`](https://github.com/Yaqing2023/moltspay/blob/v2.4.0/examples/wechat-native-pay.ts) for a runnable scenario-A demo (mock by default; `WECHAT_REAL=1` hits the live gateway).
+See [`examples/wechat-native-pay.ts`](https://github.com/Yaqing2023/moltspay/blob/v2.4.1/examples/wechat-native-pay.ts) for a runnable scenario-A demo (mock by default; `WECHAT_REAL=1` hits the live gateway).
 
 > 🔐 **Keep keys safe.** The merchant private key and APIv3 key authorize collection on your merchant account. Store them outside version control and reference them by path.
 
@@ -1089,7 +1089,7 @@ Since **`2.2.0`**, MoltsPay supports a third payment mode: a **custodial balance
 
 Unlike the other rails, nothing settles externally at purchase time: the ledger lives in SQLite on the provider server (Node's built-in `node:sqlite`, zero new dependencies). Enabling the rail requires **Node.js >= 22.5** on the server; servers that don't enable it keep the package's `node >= 18` floor.
 
-> ⚠️ **Custodial trust model.** Buyer funds are held by the provider. Since **`2.4.0`**, spending is authorized by a **per-request signature**, not a bare `buyer_id` — see [Balance Authentication](#balance-authentication-240) below. With `auth_mode: enforce`, knowing a `buyer_id` is not enough to spend. (`auth_mode` defaults to `off` for backward compatibility, where the id retains bearer semantics.) See [`docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.0/docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md).
+> ⚠️ **Custodial trust model.** Buyer funds are held by the provider. Since **`2.4.0`**, spending is authorized by a **per-request signature**, not a bare `buyer_id` — see [Balance Authentication](#balance-authentication-240) below. With `auth_mode: enforce`, knowing a `buyer_id` is not enough to spend. (`auth_mode` defaults to `off` for backward compatibility, where the id retains bearer semantics.) See [`docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.1/docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md).
 
 ### Balance Authentication (`2.4.0`)
 

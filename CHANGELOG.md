@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.4.1] - 2026-08-06
+
+**Install-time hardening — defense in depth.** No exploitable defect is fixed here and no runtime behavior changes. The SDK stops telling users to run `npx moltspay`, and the install-time attack surface is written down, so that downstream installers (notably the MoltsPay skill) can pin an exact version and install with `--ignore-scripts` instead of resolving a binary at run time.
+
+### Security
+- **CLI hints no longer suggest `npx`.** Every error message and doc comment the SDK prints now says `moltspay …` instead of `npx moltspay …`. `npx` resolves a command by PATH, then falls back to *fetching and executing* a package from the registry — the wrong instruction to hand someone who is one step away from initializing a wallet, and it quietly defeats a pinned local install. The hints now name the command only; how it got onto the machine is the installer's decision. Strings and comments only, no logic changed. The README quick-start still shows `npx moltspay` deliberately, since there is nothing installed yet at that point.
+- **Install-time attack surface documented** as issue 8 (HIGH, open) in [`docs/SECURITY.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.1/docs/SECURITY.md). Dependency install scripts run on the same machine that holds `~/.moltspay/wallet.json` and the balance signing key, which makes `npm install` a key-theft path rather than a hygiene concern. The write-up includes the trade-off: `--ignore-scripts` also suppresses this package's own postinstall, which fetches Alipay's `alipay-bot` CLI from a CDN (not on npm, so no lockfile hash can cover it). Installing that way leaves the Alipay rail needing a one-time manual `npx -y @alipay/agent-payment install-cli`; the crypto, WeChat, and balance rails are unaffected, and the runtime `ensureCli` gate fails loudly rather than silently.
+
+### Fixed
+- `scripts/postinstall.js` printed its install messages in Chinese; they are English now, matching the rest of the CLI output.
+
 ## [2.4.0] - 2026-07-14
 
 **The balance rail grows a user.** 2.2/2.3 made payments password-free but left the buyer as a bare string: anyone who knew a `buyer_id` could spend that balance (bearer semantics), and the same person writing it two ways (`real01` / `test-buyer-001`) split into two accounts. This release gives the balance rail a real identity — anchored to the WeChat payer's `openid` at top-up, and authorized by a per-request signature at spend — closing both holes. It also fixes the server's self-description (a discovering agent was being sent to the wrong URL and told the wrong price), and ships `moltspay transfer`.
@@ -43,7 +54,7 @@ To adopt balance authentication on an existing deployment, stage it: set `auth_m
 
 **Scan once, then password-free.** Fuses the WeChat Native rail (2.1.0) and the custodial balance rail (2.2.0) into one flow: WeChat becomes a **balance funding source** (the buyer scans once to load a top-up pack) and the balance rail does the spending (subsequent purchases deduct server-side, no scan, no password). WeChat has no autonomous payer product, so "password-free" lives entirely on the balance-deduction side; the first purchase against an empty balance still requires one scan, but it buys a pack, not a single item.
 
-**No breaking changes.** The per-transaction WeChat rail and the manual balance top-up endpoint keep working; the fused flow is opt-in via config + client behavior. Design: [`docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.0/docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md) (supersedes the now-deprecated `WECHAT-RAIL-DESIGN.md` / `BALANCE-RAIL-DESIGN.md`).
+**No breaking changes.** The per-transaction WeChat rail and the manual balance top-up endpoint keep working; the fused flow is opt-in via config + client behavior. Design: [`docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.1/docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md) (supersedes the now-deprecated `WECHAT-RAIL-DESIGN.md` / `BALANCE-RAIL-DESIGN.md`).
 
 ### Added
 - **WeChat-funded balance top-up** — `POST /balance/topup/order` mints a buyer-bound WeChat Native order for a configured top-up pack and returns `{ code_url, out_trade_no, pack, expires_at }`. Buyer binding rides in the WeChat `attach` passthrough (`{ buyer_id, nonce }`), so an anonymous Native order credits the correct balance.
