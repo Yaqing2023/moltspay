@@ -217,7 +217,7 @@ wechatCommand
   });
 
 /**
- * npx moltspay balance <query|topup|transactions|set-buyer>
+ * moltspay balance <query|topup|transactions|set-buyer>
  *
  * Custodial balance rail (2.2.0, password-free) management.
  * After a one-time top-up, `pay --rail balance` charges the prepaid

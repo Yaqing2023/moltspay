@@ -132,7 +132,7 @@ program
   });
 
 /**
- * npx moltspay start <paths...>
+ * moltspay start <paths...>
  * 
  * Start server from skill directories or manifest files.
  * 
@@ -173,7 +173,7 @@ program
   });
 
 /**
- * npx moltspay validate <path>
+ * moltspay validate <path>
  */
 program
   .command('validate <path>')
@@ -300,7 +300,7 @@ program
   });
 
 /**
- * npx moltspay transfer <to> <amount> [--token USDC|USDT] [--chain base] [--yes] [--json]
+ * moltspay transfer <to> <amount> [--token USDC|USDT] [--chain base] [--yes] [--json]
  *
  * Send USDC/USDT out of the wallet to any address (e.g. an exchange deposit
  * address). Thin wrapper over the SDK's Wallet.transfer(). EVM chains only;
@@ -348,7 +348,7 @@ program
 
     // Load wallet key
     const walletPath = join(options.configDir || DEFAULT_CONFIG_DIR, 'wallet.json');
-    if (!existsSync(walletPath)) fail('Wallet not initialized. Run: npx moltspay init');
+    if (!existsSync(walletPath)) fail('Wallet not initialized. Run: moltspay init');
     let privateKey: string | undefined;
     try {
       privateKey = JSON.parse(readFileSync(walletPath, 'utf-8')).privateKey;

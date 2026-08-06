@@ -71,8 +71,8 @@ export async function setupBNBApprovals(
       }
     } else {
       console.log(`   ⚠️  Need BNB for gas (~0.0005 BNB)`);
-      console.log(`   💡 Run: npx moltspay faucet --chain bnb_testnet`);
-      console.log(`   Then run: npx moltspay approve --chain ${chain} --spender ${spenderAddress}`);
+      console.log(`   💡 Run: moltspay faucet --chain bnb_testnet`);
+      console.log(`   Then run: moltspay approve --chain ${chain} --spender ${spenderAddress}`);
       return;
     }
   }

@@ -248,7 +248,7 @@ program
   });
 
 /**
- * npx moltspay stop
+ * moltspay stop
  * 
  * Stop the running MoltsPay server gracefully
  */
@@ -309,7 +309,7 @@ program
   });
 
 /**
- * npx moltspay pay <server> <service> <params>
+ * moltspay pay <server> <service> <params>
  * 
  * Pay for a service and get the result
  * 

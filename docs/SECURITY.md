@@ -4,16 +4,134 @@
 **Date:** 2026-02-19  
 **Analyst:** Zen7  
 
+**Updated:** 2026-08-06 - added issue 8 (install-time code execution), audited against v2.4.0
+
 ---
 
 ## Summary
 
 | Severity | Count | Status |
 |----------|-------|--------|
-| [HIGH] HIGH | 0 | [OK] Fixed in v0.8.12 |
+| [HIGH] HIGH | 1 | Open - see issue 8 |
 | [MED] MEDIUM | 3 | Should fix |
 | [LOW] LOW | 3 | Nice to have |
 | [OK] GOOD | 3 | No issues |
+
+Issues 1-7 cover the **runtime** attack surface (key storage, amount
+verification, transport). Issue 8 covers the **install-time** surface, which the
+original analysis did not examine.
+
+---
+
+## [HIGH] HIGH Severity Issues
+
+### 8. Install-Time Code Execution / Supply Chain (Distribution)
+
+**Location:**
+- `moltspay-skill/scripts/setup.sh:12` - `npm install -g moltspay`
+- `moltspay-skill/scripts/setup.js:36` - `run('npm install -g moltspay')`
+- `moltspay-skill/package.json` - `"postinstall": "node scripts/setup.js"`
+
+**Problem:**
+
+`npm install` does not merely download files. It executes the `preinstall` /
+`install` / `postinstall` scripts declared by **any** package in the resolved
+dependency tree, with the invoking user's privileges, *before* the tool is ever
+run. Installing moltspay v2.4.0 resolves **149 packages**; 3 of them declare
+install scripts (`bigint-buffer`, `bufferutil`, `utf-8-validate`), plus moltspay
+itself.
+
+Three factors compound here:
+
+1. **Unpinned.** The install requests `moltspay` with no version and no
+   lockfile, so npm resolves the whole tree fresh on every run. A maintainer
+   account compromise anywhere in those 149 packages is picked up
+   automatically, with no diff to review. (Prior art: `event-stream`,
+   `ua-parser-js`, `node-ipc`, `coa`/`rc`.)
+2. **Automatic.** `postinstall` in the skill's own `package.json` means the
+   global install fires during `npm install` of the skill. The operator never
+   sees a prompt; the only output is `[OK] moltspay installed`.
+3. **High-value target.** Unlike a typical library, this package's install
+   footprint sits next to spending authority. Code running as the installing
+   user can read:
+
+   | Path | Consequence |
+   |------|-------------|
+   | `~/.moltspay/wallet.json` | Private key for all 8 chains |
+   | `<configDir>/balance-identity.key` | Signs every custodial-balance deduction. Whoever holds it can drain every account this client is bound to. |
+   | `~/.git-credentials` | Plaintext VCS tokens if `helper = store` is configured |
+   | `~/.npmrc` | npm publish token -> attacker can ship a poisoned `moltspay`, propagating to every downstream install |
+
+**Aggravating factor - `alipay-bot` is outside lockfile integrity:**
+
+moltspay's own `scripts/postinstall.js` invokes
+`@alipay/agent-payment install-cli`, which downloads the `alipay-bot` binary
+from Alipay's CDN. `alipay-bot` is not on npm (Alipay distributes it directly,
+licensed UNLICENSED), so it **cannot** be a declared dependency and is
+therefore **not covered by `package-lock.json` integrity hashes**. This
+provisioning is legitimate and documented, but mechanically it is
+indistinguishable from a malicious postinstall, and no lockfile discipline
+constrains the bytes it fetches.
+
+**Secondary issue - PATH trust:**
+
+Both setup scripts gate on `command -v moltspay` / `which moltspay` and skip
+installation if anything by that name is already on `PATH`. That binary is then
+trusted and invoked as `moltspay init`, which generates a wallet. Any
+attacker-planted executable named `moltspay` earlier in `PATH` is silently
+adopted.
+
+**Fix:**
+
+Install locally, pinned, from a committed lockfile, with lifecycle scripts
+disabled, and invoke the local binary by explicit path:
+
+```jsonc
+// moltspay-skill/package.json
+{
+  "private": true,
+  "dependencies": { "moltspay": "2.4.0" }   // exact - not ^2.4.0, not latest
+}
+```
+
+```bash
+npm ci --prefix "$SKILL_DIR" --ignore-scripts --no-audit --no-fund
+"$SKILL_DIR/node_modules/.bin/moltspay" --help
+```
+
+Commit `package-lock.json`. Remove `postinstall` from the skill's
+`package.json` so provisioning is an explicit operator action.
+
+These are **two independent layers**, and both are required:
+
+| Control | Blocks |
+|---------|--------|
+| Exact version + committed lockfile | Ever *resolving* a poisoned release |
+| `npm ci` integrity hashes | Tampered bytes from a compromised registry/mirror |
+| `--ignore-scripts` | Poisoned code *executing*, even if it did get installed |
+| Local install (not `-g`) | Blast radius; also removes the `PATH` trust path above |
+
+The first two are "do not install the bad thing". The third is "if you did,
+do not run it".
+
+**Trade-off - Alipay rail requires manual provisioning:**
+
+With `--ignore-scripts`, the CDN fetch above does not happen at install time.
+Crypto, WeChat Pay, and balance rails are unaffected. The Alipay rail fails
+only at first use, and does not fail silently: the runtime `ensureCli` gate
+(`dist/index.js`) intercepts it and states the command to run:
+
+```bash
+npx -y @alipay/agent-payment install-cli
+```
+
+One-time, and deliberately explicit - the point is that the CDN download
+becomes a conscious, visible action rather than a side effect of
+`npm install`. `MOLTSPAY_SKIP_CLI_INSTALL=1` makes that intent explicit if
+lifecycle scripts are re-enabled later.
+
+**Status:** Open - operator-facing steps documented in
+`moltspay-skill/README.md` (Installation).
 
 ---
 
@@ -244,6 +362,9 @@ if (serverUrl.startsWith('http://') && !serverUrl.includes('localhost')) {
 1. [x] ~~Encrypt private keys at rest (or use keychain)~~ -> Using 0o600 permissions (like SSH)
 2. [x] ~~Set file permissions on wallet.json (0o600)~~ -> [OK] Fixed in v0.8.12
 3. [ ] Persist daily spending limits to disk
+10. [ ] Pin moltspay to an exact version, install locally from a committed
+    lockfile with `--ignore-scripts`, and drop `postinstall` from the skill
+    package (issue 8)
 
 ### Before Production Use (Should Have)
 4. [ ] Add local amount verification on server
@@ -264,7 +385,13 @@ if (serverUrl.startsWith('http://') && !serverUrl.includes('localhost')) {
 | `~/.moltspay/wallet.json` | 0o600 | 0o600 | [OK] Fixed |
 | `~/.moltspay/config.json` | 0o644 | 0o644 | [OK] OK |
 | `~/.moltspay/.env` | 0o600 | 0o600 | [OK] OK |
+| `<configDir>/balance-identity.key` | 0o600 | 0o600 | [OK] OK (auto-created, v2.4) |
+
+Note: file permissions protect these keys from *other users* on the machine.
+They do not protect against code running **as the owning user** - which is
+exactly what an install-time script is (issue 8).
 
 ---
 
-*Report generated: 2026-02-19*
+*Report generated: 2026-02-19*  
+*Issue 8 added: 2026-08-06*

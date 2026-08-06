@@ -92,7 +92,7 @@ function getCDPCredentials(config: CDPWalletConfig): {
  * export CDP_API_KEY_SECRET=your-key-secret
  * 
  * # Initialize
- * npx moltspay init --cdp --chain base
+ * moltspay init --cdp --chain base
  * ```
  */
 export async function initCDPWallet(config: CDPWalletConfig = {}): Promise<CDPInitResult> {
@@ -222,7 +222,7 @@ export class CDPWallet {
     // Load existing wallet
     const data = loadCDPWallet(config);
     if (!data) {
-      throw new Error('CDP wallet not initialized. Run: npx moltspay init --cdp');
+      throw new Error('CDP wallet not initialized. Run: moltspay init --cdp');
     }
     this.address = data.address;
   }

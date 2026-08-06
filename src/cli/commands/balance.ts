@@ -345,7 +345,7 @@ balanceCommand
   });
 
 /**
- * npx moltspay alipay <action> [args...]
+ * moltspay alipay <action> [args...]
  *
  * Thin pass-through to alipay-bot for first-time Alipay wallet setup (design
  * §5.2.9). Forwards stdout/stderr verbatim with the AIPAY_* env whitelist so

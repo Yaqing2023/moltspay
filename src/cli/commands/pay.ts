@@ -48,7 +48,7 @@ program
     // The fiat rails (Alipay/WeChat) are scan-to-pay and the balance rail is
     // prepaid — none of them need an EVM wallet.
     if (!useAlipay && !useWechat && !useBalance && !client.isInitialized) {
-      console.error('❌ Wallet not initialized. Run: npx moltspay init');
+      console.error('❌ Wallet not initialized. Run: moltspay init');
       process.exit(1);
     }
 
@@ -235,7 +235,7 @@ program
   });
 
 /**
- * npx moltspay wechat <start|status|fulfill|cancel|list>
+ * moltspay wechat <start|status|fulfill|cancel|list>
  *
  * Non-blocking, recoverable WeChat Pay Native session commands for channel
  * integrations. `pay --rail wechat` remains the interactive blocking wrapper.

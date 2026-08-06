@@ -200,7 +200,7 @@ export class BNBFacilitator extends BaseFacilitator {
       const allowance = await this.getAllowance(intent.from, serverAddress, intent.token, config.rpc);
       
       if (BigInt(allowance) < BigInt(intent.amount)) {
-        return { valid: false, error: 'Insufficient allowance. Run: npx moltspay init --chain bnb' };
+        return { valid: false, error: 'Insufficient allowance. Run: moltspay init --chain bnb' };
       }
 
       // Check balance

@@ -2,7 +2,7 @@
  * BNB PaymentIntent typed-data builder (pure).
  *
  * Used on BNB Smart Chain (mainnet 56, testnet 97) where the user has already
- * approved the MoltsPay spender contract (via `npx moltspay approve` on CLI,
+ * approved the MoltsPay spender contract (via `moltspay approve` on CLI,
  * or `client.approveBnb()` on Web) and now signs an EIP-712 intent that
  * authorizes a specific spender → payTo transfer for a specific service.
  *

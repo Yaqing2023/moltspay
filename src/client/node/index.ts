@@ -271,7 +271,7 @@ export class MoltsPayClient {
     }
 
     if (!this.wallet || !this.walletData) {
-      throw new Error('Client not initialized. Run: npx moltspay init');
+      throw new Error('Client not initialized. Run: moltspay init');
     }
 
     // Step 1: Discover service endpoint
@@ -1314,7 +1314,7 @@ export class MoltsPayClient {
             `❌ Insufficient tBNB for approval transaction\n\n` +
             `   Current tBNB: ${nativeBNB}\n` +
             `   Required:     ~0.001 tBNB\n\n` +
-            `   Get testnet tokens: npx moltspay faucet --chain bnb_testnet\n` +
+            `   Get testnet tokens: moltspay faucet --chain bnb_testnet\n` +
             `   (Gives USDC + tBNB for gas)`
           );
         } else {
@@ -1326,14 +1326,14 @@ export class MoltsPayClient {
             `   • Withdraw from Binance/exchange to your wallet\n` +
             `   • Most exchanges include BNB dust with withdrawals\n\n` +
             `   After funding, run:\n` +
-            `   npx moltspay approve --chain ${chainName} --spender ${spender}`
+            `   moltspay approve --chain ${chainName} --spender ${spender}`
           );
         }
       }
       
       throw new Error(
         `Insufficient allowance for ${spender.slice(0, 10)}...\n` +
-        `Run: npx moltspay approve --chain ${chainName} --spender ${spender}`
+        `Run: moltspay approve --chain ${chainName} --spender ${spender}`
       );
     }
     
@@ -1428,7 +1428,7 @@ export class MoltsPayClient {
     // Load Solana wallet
     const solanaWallet = loadSolanaWallet(this.configDir);
     if (!solanaWallet) {
-      throw new Error('No Solana wallet found. Run: npx moltspay init --chain solana_devnet');
+      throw new Error('No Solana wallet found. Run: moltspay init --chain solana_devnet');
     }
 
     const amount = Number(requirements.amount);
@@ -1865,7 +1865,7 @@ export class MoltsPayClient {
     } = {}
   ): Promise<any> {
     if (!this.wallet || !this.walletData) {
-      throw new Error('Client not initialized. Run: npx moltspay init');
+      throw new Error('Client not initialized. Run: moltspay init');
     }
 
     // Dynamic imports for ESM-only packages

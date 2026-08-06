@@ -25,7 +25,7 @@ import { DEFAULT_CONFIG_DIR, PID_FILE, GAS_SYMBOL, prompt, setupBNBApprovals, ch
 
 export function registerWallet(program: Command): void {
 /**
- * npx moltspay init
+ * moltspay init
  */
 program
   .command('init')
@@ -70,7 +70,7 @@ program
       
       if (chain === 'solana_devnet') {
         console.log('💡 Get testnet tokens:');
-        console.log('   npx moltspay faucet --chain solana_devnet\n');
+        console.log('   moltspay faucet --chain solana_devnet\n');
       } else {
         console.log(`💰 Fund your wallet with USDC on Solana to start (gasless - no SOL needed).\n`);
       }
@@ -117,7 +117,7 @@ program
     if (chain === 'bnb' || chain === 'bnb_testnet') {
       console.log('📋 Setting up BNB chain approvals...\n');
       console.log('   ℹ️  Using default spender. For other services, run:');
-      console.log(`   npx moltspay approve --chain ${chain} --spender <address>\n`);
+      console.log(`   moltspay approve --chain ${chain} --spender <address>\n`);
       const client = new MoltsPayClient({ configDir: options.configDir });
       await setupBNBApprovals(client, chain, BNB_SPENDER_ADDRESS, true); // true = sponsor gas
     }
@@ -126,7 +126,7 @@ program
   });
 
 /**
- * npx moltspay config
+ * moltspay config
  */
 program
   .command('config')
@@ -138,7 +138,7 @@ program
     const client = new MoltsPayClient({ configDir: options.configDir });
 
     if (!client.isInitialized) {
-      console.log('❌ Not initialized. Run: npx moltspay init');
+      console.log('❌ Not initialized. Run: moltspay init');
       return;
     }
 
@@ -179,7 +179,7 @@ program
   });
 
 /**
- * npx moltspay fund <amount>
+ * moltspay fund <amount>
  * 
  * Fund wallet with USDC via Coinbase Pay
  * US residents only, debit card or Apple Pay
@@ -210,7 +210,7 @@ program
       // Load Solana wallet
       const solanaWallet = loadSolanaWallet(options.configDir || DEFAULT_CONFIG_DIR);
       if (!solanaWallet) {
-        console.log('❌ No Solana wallet found. Run: npx moltspay init --chain solana');
+        console.log('❌ No Solana wallet found. Run: moltspay init --chain solana');
         return;
       }
       walletAddress = getSolanaAddress(options.configDir || DEFAULT_CONFIG_DIR) || '';
@@ -221,7 +221,7 @@ program
     } else {
       // EVM chains use the client wallet
       if (!client.isInitialized) {
-        console.log('❌ Not initialized. Run: npx moltspay init');
+        console.log('❌ Not initialized. Run: moltspay init');
         return;
       }
       walletAddress = client.address!;
@@ -233,7 +233,7 @@ program
       console.log(`   Wallet: ${walletAddress}`);
       console.log(`   Chain: Base Sepolia (testnet)\n`);
       console.log('💡 Use the MoltsPay faucet to get free testnet USDC:\n');
-      console.log('   npx moltspay faucet\n');
+      console.log('   moltspay faucet\n');
       console.log('   Or get from Circle Faucet: https://faucet.circle.com/\n');
       return;
     }
@@ -244,7 +244,7 @@ program
       console.log(`   Wallet: ${walletAddress}`);
       console.log(`   Chain: BNB Testnet\n`);
       console.log('💡 Use the MoltsPay faucet to get testnet USDC + tBNB:\n');
-      console.log('   npx moltspay faucet --chain bnb_testnet\n');
+      console.log('   moltspay faucet --chain bnb_testnet\n');
       console.log('   This gives you:\n');
       console.log('   • 1 USDC (testnet) for payments');
       console.log('   • 0.001 tBNB for gas (first approval tx)\n');
@@ -263,7 +263,7 @@ program
       console.log('      → After approval, all payments are gasless\n');
       console.log('   💡 Tip: Most exchanges include BNB dust when you withdraw to BNB Chain\n');
       console.log('   ─────────────────────────────────────────────────────────────');
-      console.log('   After funding, check status: npx moltspay status\n');
+      console.log('   After funding, check status: moltspay status\n');
       return;
     }
 
@@ -303,7 +303,7 @@ program
   });
 
 /**
- * npx moltspay approve
+ * moltspay approve
  * 
  * Approve a spender address for BNB chain payments (required before paying)
  */
@@ -328,7 +328,7 @@ program
     
     const client = new MoltsPayClient({ configDir: options.configDir });
     if (!client.isInitialized) {
-      console.log('❌ Wallet not initialized. Run: npx moltspay init --chain ' + chain);
+      console.log('❌ Wallet not initialized. Run: moltspay init --chain ' + chain);
       return;
     }
     
@@ -350,7 +350,7 @@ program
   });
 
 /**
- * npx moltspay faucet
+ * moltspay faucet
  * 
  * Request testnet tokens from faucets (Base Sepolia or Tempo Moderato)
  */
@@ -376,7 +376,7 @@ program
       if (!address) {
         address = getSolanaAddress(options.configDir);
         if (!address) {
-          console.log('❌ No Solana wallet found. Run: npx moltspay init --chain solana_devnet');
+          console.log('❌ No Solana wallet found. Run: moltspay init --chain solana_devnet');
           return;
         }
       }
@@ -433,7 +433,7 @@ program
       console.log('');
       if (usdcSuccess) {
         console.log('💡 Check your balance:');
-        console.log('   npx moltspay status\n');
+        console.log('   moltspay status\n');
       } else {
         console.log('❌ Faucet request failed. Try again in a few minutes.\n');
       }
@@ -446,7 +446,7 @@ program
       if (client.isInitialized) {
         address = client.address;
       } else {
-        console.log('❌ No wallet found. Either run "npx moltspay init" or provide --address');
+        console.log('❌ No wallet found. Either run "moltspay init" or provide --address');
         return;
       }
     }
@@ -484,7 +484,7 @@ program
             console.log(`     https://explore.testnet.tempo.xyz/tx/${tx.hash}`);
           }
           console.log('\n💡 Use these tokens to test MPP payments:');
-          console.log(`   npx moltspay pay <service-url> <service-id> --chain tempo_moderato\n`);
+          console.log(`   moltspay pay <service-url> <service-id> --chain tempo_moderato\n`);
         } else {
           console.log(`❌ ${result.error || 'Faucet request failed'}`);
           console.log('\n   Try again later or use Tempo Wallet: https://wallet.tempo.xyz\n');
@@ -539,7 +539,7 @@ program
           console.log(`   Faucet balance: ${result.faucet_balance} USDC`);
         }
         console.log('\n💡 Now you can test BNB payments:');
-        console.log(`   npx moltspay pay <service-url> <service-id> --chain bnb_testnet\n`);
+        console.log(`   moltspay pay <service-url> <service-id> --chain bnb_testnet\n`);
       } catch (error) {
         console.log(`❌ ${(error as Error).message}`);
         console.log('\n💡 Get tokens manually:');
@@ -584,7 +584,7 @@ program
         console.log(`   Explorer: ${result.explorer}`);
         console.log(`   Faucet balance: ${result.faucet_balance} USDC remaining\n`);
         console.log('💡 Use this USDC to test x402 payments:');
-        console.log(`   npx moltspay pay <service-url> <service-id> --chain base_sepolia\n`);
+        console.log(`   moltspay pay <service-url> <service-id> --chain base_sepolia\n`);
       } catch (error) {
         console.log(`❌ ${(error as Error).message}`);
       }
@@ -592,7 +592,7 @@ program
   });
 
 /**
- * npx moltspay status
+ * moltspay status
  */
 program
   .command('status')
@@ -606,7 +606,7 @@ program
       if (options.json) {
         console.log(JSON.stringify({ error: 'Not initialized' }));
       } else {
-        console.log('❌ Not initialized. Run: npx moltspay init');
+        console.log('❌ Not initialized. Run: moltspay init');
       }
       return;
     }
@@ -707,7 +707,7 @@ program
         if (bnbApprovalStatus) {
           if (!bnbApprovalStatus.spender) {
             console.log('     BNB:          ⚠️ No spender configured');
-            console.log('     └─ Run a payment first, or: npx moltspay approve --chain bnb --spender <address>');
+            console.log('     └─ Run a payment first, or: moltspay approve --chain bnb --spender <address>');
           } else {
             const status = bnbApprovalStatus.usdt && bnbApprovalStatus.usdc ? '✅' : '⚠️';
             const tokens = [
@@ -726,7 +726,7 @@ program
         if (bnbTestnetApprovalStatus) {
           if (!bnbTestnetApprovalStatus.spender) {
             console.log('     BNB Testnet:  ⚠️ No spender configured');
-            console.log('     └─ Run a payment first, or: npx moltspay approve --chain bnb_testnet --spender <address>');
+            console.log('     └─ Run a payment first, or: moltspay approve --chain bnb_testnet --spender <address>');
           } else {
             const status = bnbTestnetApprovalStatus.usdt && bnbTestnetApprovalStatus.usdc ? '✅' : '⚠️';
             const tokens = [
@@ -738,7 +738,7 @@ program
             // Show warning if no approval and low tBNB
             const tbnbNative = allBalances['bnb_testnet']?.native || 0;
             if (!bnbTestnetApprovalStatus.usdc && !bnbTestnetApprovalStatus.usdt && tbnbNative < 0.0005) {
-              console.log('     ⚠️  Need tBNB for approval. Run: npx moltspay faucet --chain bnb_testnet');
+              console.log('     ⚠️  Need tBNB for approval. Run: moltspay faucet --chain bnb_testnet');
             }
           }
         }
@@ -778,7 +778,7 @@ program
   });
 
 /**
- * npx moltspay list
+ * moltspay list
  * 
  * List transactions for the agent wallet using Blockscout APIs (free, no API key needed)
  */
@@ -793,7 +793,7 @@ program
     const client = new MoltsPayClient({ configDir: options.configDir });
 
     if (!client.isInitialized) {
-      console.log('❌ Not initialized. Run: npx moltspay init');
+      console.log('❌ Not initialized. Run: moltspay init');
       return;
     }
 
@@ -1049,6 +1049,6 @@ program
   });
 
 /**
- * npx moltspay services <url>
+ * moltspay services <url>
  */
 }

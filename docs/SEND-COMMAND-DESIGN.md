@@ -107,7 +107,7 @@ Verification gate: `typecheck` + tests; a dry `send --help` shows the command; a
 
 | Case | Message |
 |---|---|
-| Wallet not initialized | `Wallet not initialized. Run: npx moltspay init` |
+| Wallet not initialized | `Wallet not initialized. Run: moltspay init` |
 | Bad address | `Invalid destination address: <to>` |
 | Amount ≤ 0 / malformed | `Invalid amount: must be a positive number` |
 | Insufficient token balance | `Insufficient USDC on base: have X, need Y` |
