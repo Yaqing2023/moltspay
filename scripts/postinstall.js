@@ -45,19 +45,21 @@ const PROVISION_HINT = 'npx -y @alipay/agent-payment install-cli';
 
 function warnManual(reason) {
   console.warn(
-    `\n[moltspay] alipay-bot CLI 未能自动安装（${reason}）。\n` +
-      `           Alipay 支付轨在使用前需手动安装：\n` +
+    `\n[moltspay] Could not install the alipay-bot CLI automatically (${reason}).\n` +
+      `           The Alipay rail requires it. Install it manually before use:\n` +
       `             ${PROVISION_HINT}\n`,
   );
 }
 
 if (process.env.MOLTSPAY_SKIP_CLI_INSTALL === '1') {
-  console.log('[moltspay] MOLTSPAY_SKIP_CLI_INSTALL=1 — 跳过 alipay-bot 自动安装。');
-  console.log(`[moltspay] 需要时手动安装：${PROVISION_HINT}`);
+  console.log('[moltspay] MOLTSPAY_SKIP_CLI_INSTALL=1 — skipping the alipay-bot install.');
+  console.log(`[moltspay] Install it manually when needed: ${PROVISION_HINT}`);
   process.exit(0);
 }
 
-console.log('[moltspay] 正在从支付宝官方 CDN 安装 alipay-bot CLI（Alipay 支付轨所需）…');
+console.log(
+  "[moltspay] Installing the alipay-bot CLI from Alipay's official CDN (required by the Alipay rail)…",
+);
 
 // Prefer the helper we already pulled in as a declared dependency (no extra
 // network for the helper itself). Fall back to `npx` if it isn't resolvable
@@ -82,9 +84,9 @@ if (helperCli && fs.existsSync(helperCli)) {
 }
 
 if (!result || result.error || result.status !== 0) {
-  warnManual(result && result.error ? result.error.message : '离线或无法访问 *.alipay.com');
+  warnManual(result && result.error ? result.error.message : 'offline or *.alipay.com unreachable');
 } else {
-  console.log('[moltspay] alipay-bot CLI 安装完成。');
+  console.log('[moltspay] alipay-bot CLI installed.');
 }
 
 // Never block the install over an optional rail's provisioning.

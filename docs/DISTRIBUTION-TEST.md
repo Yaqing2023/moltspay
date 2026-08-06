@@ -92,9 +92,11 @@ npm install ~/moltspay/moltspay-1.7.0.tgz
 
 | Scenario | Command | Expected |
 |---|---|---|
-| Online, normal | `npm install <tgz>` | Prints banner → installs alipay-bot from the `*.alipay.com` CDN → "安装完成" (install complete) |
-| Offline / CDN unreachable | (with network down) `npm install <tgz>` | Does **not block** `npm install`; only prints the manual command `npx -y @alipay/agent-payment install-cli` |
-| Explicit skip | `MOLTSPAY_SKIP_CLI_INSTALL=1 npm install <tgz>` | Skips auto-install, prompts the manual command (for CI/sandbox) |
+| Online, normal | `npm install <tgz>` | Prints banner → installs alipay-bot from the `*.alipay.com` CDN → `[moltspay] alipay-bot CLI installed.` |
+| Offline / CDN unreachable | (with network down) `npm install <tgz>` | Does **not block** `npm install`; prints `[moltspay] Could not install the alipay-bot CLI automatically (…)` followed by the manual command `npx -y @alipay/agent-payment install-cli` |
+| Explicit skip | `MOLTSPAY_SKIP_CLI_INSTALL=1 npm install <tgz>` | `[moltspay] MOLTSPAY_SKIP_CLI_INSTALL=1 — skipping the alipay-bot install.` then the manual command (for CI/sandbox) |
+
+> Exit code is `0` in all three paths — provisioning an optional rail must never fail `npm install`.
 
 > alipay-bot (`0.3.x`) is not on npm, license `UNLICENSED`, distributed via the Alipay CDN; the only thing that goes into package.json is the installer `@alipay/agent-payment` (same model as Chromium under Puppeteer: downloaded at install time, never redistributed).
 
