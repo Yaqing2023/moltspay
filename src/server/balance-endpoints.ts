@@ -19,6 +19,7 @@ import {
   fromSat,
 } from '../facilitators/index.js';
 import { X402PaymentPayload, X402PaymentRequirements } from '../facilitators/interface.js';
+import { verifyOperator } from '../facilitators/balance/auth.js';
 import { verifyPayment as verifyOnChainPayment } from '../verify/index.js';
 import { ServicesManifest } from './types.js';
 import { X402_VERSION } from './internal.js';
@@ -35,6 +36,12 @@ export interface BalanceEndpointsDeps {
   manifest: ServicesManifest;
   balance: BalanceFacilitator;
   wechat: WechatFacilitator | null;
+  /**
+   * Shared operator secret gating the credit/reverse endpoints
+   * (`/balance/topup`, `/balance/refund`). `null` means unconfigured, and the
+   * endpoints then fail CLOSED (503) rather than accepting anonymous callers.
+   */
+  operatorKey: string | null;
   sendJson: (res: ServerResponse, status: number, data: any) => void;
   getOrCreatePendingWechatOrder: (
     cacheKey: string,
@@ -46,6 +53,28 @@ export interface BalanceEndpointsDeps {
 
 export class BalanceEndpoints {
   constructor(private readonly deps: BalanceEndpointsDeps) {}
+
+  /**
+   * Gate the operator-scoped credit/reverse endpoints. Returns true only when
+   * an operator key is configured AND the presented token matches it. On
+   * failure it has already written the response:
+   *   - 503 when no key is configured (endpoint disabled — fail closed)
+   *   - 401 when a key is configured but the token is missing/wrong
+   */
+  private requireOperator(operatorToken: string | undefined, res: ServerResponse): boolean {
+    const { operatorKey, sendJson } = this.deps;
+    if (!operatorKey) {
+      sendJson(res, 503, {
+        error: 'This endpoint is disabled: no balance operator key is configured on the server',
+      });
+      return false;
+    }
+    if (!verifyOperator(operatorKey, operatorToken)) {
+      sendJson(res, 401, { error: 'operator authentication required' });
+      return false;
+    }
+    return true;
+  }
 
   /** GET /balance?buyer_id= -- balance, limits, and today's spend. */
   handleQuery(url: URL, res: ServerResponse): void {
@@ -266,7 +295,8 @@ export class BalanceEndpoints {
    * gateway-confirmed payer_total (never the client-declared amount);
    * `alipay` is operator-trusted in this MVP. Idempotent on the external ref.
    */
-  async handleTopup(body: any, res: ServerResponse): Promise<void> {
+  async handleTopup(body: any, operatorToken: string | undefined, res: ServerResponse): Promise<void> {
+    if (!this.requireOperator(operatorToken, res)) return;
     const { manifest, balance, wechat, sendJson } = this.deps;
     const { buyer_id, rail, amount } = body || {};
     if (typeof buyer_id !== 'string' || !buyer_id) {
@@ -362,7 +392,8 @@ export class BalanceEndpoints {
   }
 
   /** POST /balance/refund -- reverse a deduct (operator/agent use). */
-  handleRefund(body: any, res: ServerResponse): void {
+  handleRefund(body: any, operatorToken: string | undefined, res: ServerResponse): void {
+    if (!this.requireOperator(operatorToken, res)) return;
     const { balance, sendJson } = this.deps;
     const { tx_id, reason } = body || {};
     if (typeof tx_id !== 'string' || !tx_id) {

@@ -14,9 +14,30 @@
  * @see ../../../docs/2026-07-13-wechat-fiat-auth-design.md
  */
 import { ethers } from 'ethers';
+import { timingSafeEqual } from 'node:crypto';
 
 /** Domain tag — separates these signatures from any other message a key signs. */
 export const BALANCE_AUTH_DOMAIN = 'moltspay-balance-auth:v1';
+
+/**
+ * Operator authentication for the balance *management* endpoints
+ * (`/balance/topup`, `/balance/refund`). These credit or reverse a balance
+ * without any per-user signature, so they are operator-scoped, not user-scoped:
+ * possession of a shared server secret is required.
+ *
+ * Fail-closed contract: when no operator key is configured the endpoints are
+ * DISABLED (the caller returns 503), never open. `verifyOperator` only ever
+ * returns true for a configured key plus a matching presented token.
+ *
+ * The comparison is constant-time to avoid leaking the key byte-by-byte.
+ */
+export function verifyOperator(configuredKey: string | null | undefined, presented: string | null | undefined): boolean {
+  if (!configuredKey || !presented) return false;
+  const a = Buffer.from(configuredKey, 'utf8');
+  const b = Buffer.from(presented, 'utf8');
+  if (a.length !== b.length) return false; // timingSafeEqual throws on length mismatch
+  return timingSafeEqual(a, b);
+}
 
 /** Accepted clock skew between client timestamp and server (replay window). */
 export const BALANCE_AUTH_MAX_SKEW_MS = 5 * 60 * 1000;

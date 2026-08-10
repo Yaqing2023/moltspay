@@ -191,6 +191,14 @@ export interface ProviderBalanceConfig {
   auto_topup_max?: string;
   /** User-auth rollout gate for deductions: `off` | `shadow` | `enforce`. Default `off`. */
   auth_mode?: 'off' | 'shadow' | 'enforce';
+  /**
+   * Shared operator secret gating the credit/reverse endpoints
+   * (`POST /balance/topup`, `POST /balance/refund`). These mint or reverse
+   * balance and are operator-only. May also be supplied via the
+   * `MOLTSPAY_BALANCE_OPERATOR_KEY` env var (env takes precedence). When
+   * neither is set, both endpoints are DISABLED (503) — fail closed.
+   */
+  operator_key?: string;
 }
 
 /**

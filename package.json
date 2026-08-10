@@ -1,6 +1,6 @@
 {
   "name": "moltspay",
-  "version": "2.4.1",
+  "version": "2.4.2",
   "description": "Payment infrastructure for AI Agents - Server & Client SDK",
   "keywords": [
     "ai-agent",

@@ -263,10 +263,21 @@ export class MoltsPayServer {
     if (providerBalance) {
       this.balanceFacilitator = this.registry.get('balance') as BalanceFacilitator;
       // WeChat is set up before balance, so wechatFacilitator is final here.
+      // Operator secret for the credit/reverse endpoints. Env wins over config;
+      // absent in both -> null -> those endpoints fail closed (503).
+      const balanceOperatorKey =
+        process.env.MOLTSPAY_BALANCE_OPERATOR_KEY || providerBalance.operator_key || null;
+      if (!balanceOperatorKey) {
+        console.warn(
+          '[MoltsPay] No balance operator key configured (provider.balance.operator_key ' +
+            'or MOLTSPAY_BALANCE_OPERATOR_KEY): POST /balance/topup and /balance/refund are DISABLED.',
+        );
+      }
       this.balanceEndpoints = new BalanceEndpoints({
         manifest: this.manifest,
         balance: this.balanceFacilitator,
         wechat: this.wechatFacilitator,
+        operatorKey: balanceOperatorKey,
         sendJson: (res, status, data) => this.sendJson(res, status, data),
         getOrCreatePendingWechatOrder: (cacheKey, logLabel, create) =>
           this.getOrCreatePendingWechatOrder(cacheKey, logLabel, create),
@@ -513,11 +524,11 @@ export class MoltsPayServer {
         }
         if (url.pathname === '/balance/topup' && req.method === 'POST') {
           const body = await this.readBody(req);
-          return await this.balanceEndpoints.handleTopup(body, res);
+          return await this.balanceEndpoints.handleTopup(body, this.operatorToken(req), res);
         }
         if (url.pathname === '/balance/refund' && req.method === 'POST') {
           const body = await this.readBody(req);
-          return this.balanceEndpoints.handleRefund(body, res);
+          return this.balanceEndpoints.handleRefund(body, this.operatorToken(req), res);
         }
         if (url.pathname === '/balance/transactions' && req.method === 'GET') {
           return this.balanceEndpoints.handleTransactions(url, res);
@@ -1897,6 +1908,23 @@ export class MoltsPayServer {
   private isTokenAccepted(config: ServiceConfig, token: string): boolean {
     const accepted = getAcceptedCurrencies(config);
     return accepted.includes(token);
+  }
+
+  /**
+   * Extract the operator secret from a request for the credit/reverse
+   * endpoints. Accepts `Authorization: Bearer <key>` or `X-Operator-Key: <key>`.
+   * Kept in the header (never the body) so the secret is not persisted or
+   * echoed into ledger descriptions/logs.
+   */
+  private operatorToken(req: IncomingMessage): string | undefined {
+    const auth = req.headers['authorization'];
+    if (typeof auth === 'string') {
+      const m = auth.match(/^Bearer\s+(.+)$/i);
+      if (m) return m[1].trim();
+    }
+    const x = req.headers['x-operator-key'];
+    if (typeof x === 'string' && x) return x.trim();
+    return undefined;
   }
 
   private async readBody(req: IncomingMessage): Promise<any> {

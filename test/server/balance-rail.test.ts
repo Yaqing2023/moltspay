@@ -26,13 +26,17 @@ interface Booted { server: MoltsPayServer; http: Server; port: number; }
 
 let failNextSkillCall = false;
 
+/** Operator secret the credit/reverse endpoints (/balance/topup,/refund) require. */
+const OPERATOR_KEY = 'test-operator-secret';
+const opHeaders = { 'Content-Type': 'application/json', Authorization: `Bearer ${OPERATOR_KEY}` };
+
 async function boot(dir: string): Promise<Booted> {
   const manifest = {
     provider: {
       name: 'balance-test',
       wallet: '0x1111111111111111111111111111111111111111',
       chains: [{ chain: 'base', tokens: ['USDC'] }, 'balance'],
-      balance: { db_path: ':memory:', currency: 'USD', single_limit: '5.00', daily_limit: '10.00' },
+      balance: { db_path: ':memory:', currency: 'USD', single_limit: '5.00', daily_limit: '10.00', operator_key: OPERATOR_KEY },
     },
     services: [
       {
@@ -60,6 +64,29 @@ async function boot(dir: string): Promise<Booted> {
   return { server, http, port: (http.address() as AddressInfo).port };
 }
 
+/** Same as boot() but WITHOUT an operator key, to exercise the fail-closed path. */
+async function bootNoOperator(dir: string): Promise<Booted> {
+  const manifest = {
+    provider: {
+      name: 'balance-test-noop',
+      wallet: '0x1111111111111111111111111111111111111111',
+      chains: [{ chain: 'base', tokens: ['USDC'] }, 'balance'],
+      balance: { db_path: ':memory:', currency: 'USD', single_limit: '5.00', daily_limit: '10.00' }, // no operator_key
+    },
+    services: [
+      { id: 'video-demo', name: 'Video Demo', price: 3.99, currency: 'USDC', input: {}, output: {}, balance: { price: '3.99' } },
+    ],
+  };
+  const manifestPath = path.join(dir, 'balance-noop.services.json');
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  const server = new MoltsPayServer(manifestPath, {});
+  server.skill('video-demo', async () => ({ url: 'https://example.com/v.mp4' }));
+  const handle = (server as any).handleRequest.bind(server);
+  const http = createServer((req, res) => handle(req, res));
+  await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve));
+  return { server, http, port: (http.address() as AddressInfo).port };
+}
+
 function xPaymentHeader(buyerId: string, requestId?: string): string {
   return Buffer.from(JSON.stringify({
     x402Version: 2,
@@ -74,13 +101,14 @@ describe('balance rail HTTP integration', () => {
   const base = () => `http://127.0.0.1:${b.port}`;
 
   beforeAll(async () => {
+    delete process.env.MOLTSPAY_BALANCE_OPERATOR_KEY; // config key must win deterministically
     b = await boot(mkdtempSync(path.join(tmpdir(), 'mp-balance-')));
   });
   afterAll(() => new Promise<void>((r) => b.http.close(() => r())));
 
   async function topup(buyerId: string, amount: string, ref: string) {
     const res = await fetch(`${base()}/balance/topup`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: opHeaders,
       body: JSON.stringify({ buyer_id: buyerId, rail: 'alipay', trade_no: ref, amount }),
     });
     return { status: res.status, body: await res.json() };
@@ -200,17 +228,66 @@ describe('balance rail HTTP integration', () => {
     const txs = await (await fetch(`${base()}/balance/transactions?buyer_id=buyer-2`)).json();
     const deduct = txs.transactions.find((t: any) => t.type === 'deduct');
     const r1 = await fetch(`${base()}/balance/refund`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: opHeaders,
       body: JSON.stringify({ tx_id: deduct.tx_id, reason: 'ops' }),
     });
     const b1 = await r1.json();
     expect(b1.success).toBe(true);
     const r2 = await fetch(`${base()}/balance/refund`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: opHeaders,
       body: JSON.stringify({ tx_id: deduct.tx_id, reason: 'ops again' }),
     });
     const b2 = await r2.json();
     expect(b2.replayed).toBe(true);
     expect(b2.balance).toBe(b1.balance); // refunded exactly once
+  });
+
+  // --- Operator-auth gate (regression guard for the 2026-08-10 balance-rail fix) ---
+
+  it('POST /balance/topup without operator auth is rejected (no minting)', async () => {
+    const before = await (await fetch(`${base()}/balance?buyer_id=attacker`)).json();
+    const res = await fetch(`${base()}/balance/topup`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, // no Authorization
+      body: JSON.stringify({ buyer_id: 'attacker', rail: 'alipay', trade_no: 'X', amount: '99999' }),
+    });
+    expect(res.status).toBe(401);
+    const after = await (await fetch(`${base()}/balance?buyer_id=attacker`)).json();
+    expect(after.balance).toBe(before.balance); // nothing was credited
+  });
+
+  it('POST /balance/topup with a wrong operator key is rejected', async () => {
+    const res = await fetch(`${base()}/balance/topup`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer wrong' },
+      body: JSON.stringify({ buyer_id: 'attacker', rail: 'alipay', trade_no: 'Y', amount: '1' }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it('POST /balance/refund without operator auth is rejected', async () => {
+    const txs = await (await fetch(`${base()}/balance/transactions?buyer_id=buyer-1`)).json();
+    const deduct = txs.transactions.find((t: any) => t.type === 'deduct');
+    const res = await fetch(`${base()}/balance/refund`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, // no Authorization
+      body: JSON.stringify({ tx_id: deduct?.tx_id ?? 'btx_x', reason: 'nope' }),
+    });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe('balance rail with no operator key configured (fail closed)', () => {
+  let b: Booted;
+  const base = () => `http://127.0.0.1:${b.port}`;
+  beforeAll(async () => {
+    delete process.env.MOLTSPAY_BALANCE_OPERATOR_KEY;
+    b = await bootNoOperator(mkdtempSync(path.join(tmpdir(), 'mp-balance-noop-')));
+  });
+  afterAll(() => new Promise<void>((r) => b.http.close(() => r())));
+
+  it('POST /balance/topup is disabled with 503 when no operator key is set', async () => {
+    const res = await fetch(`${base()}/balance/topup`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer anything' },
+      body: JSON.stringify({ buyer_id: 'x', rail: 'alipay', trade_no: 'Z', amount: '5' }),
+    });
+    expect(res.status).toBe(503);
   });
 });

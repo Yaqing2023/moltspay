@@ -43,12 +43,15 @@ function stubWechatFetch(realFetch: typeof fetch, paidFen: number): void {
   }) as any);
 }
 
+const OPERATOR_KEY = 'test-operator-secret';
+
 describe('WeChat topup amount spoofing -- regression', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'wechat-balance-topup-'));
   const realFetch = globalThis.fetch;
   let b: Booted;
 
   beforeAll(async () => {
+    delete process.env.MOLTSPAY_BALANCE_OPERATOR_KEY; // config key must win deterministically
     const kp = crypto.generateKeyPairSync('rsa', {
       modulusLength: 2048,
       privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
@@ -69,7 +72,7 @@ describe('WeChat topup amount spoofing -- regression', () => {
           private_key_path: keyPath,
           notify_url: 'https://example.com/wechat/notify',
         },
-        balance: { db_path: ':memory:', currency: 'USD', single_limit: '5.00', daily_limit: '10.00' },
+        balance: { db_path: ':memory:', currency: 'USD', single_limit: '5.00', daily_limit: '10.00', operator_key: OPERATOR_KEY },
       },
       services: [{ id: 'video-demo', name: 'Demo Video', price: 0.14, currency: 'USDC', input: {}, output: {} }],
     };
@@ -89,7 +92,8 @@ describe('WeChat topup amount spoofing -- regression', () => {
 
   async function topup(buyerId: string, amount: string, outTradeNo: string) {
     const res = await realFetch(`http://127.0.0.1:${b.port}/balance/topup`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPERATOR_KEY}` },
       body: JSON.stringify({ buyer_id: buyerId, rail: 'wechat', amount, out_trade_no: outTradeNo }),
     });
     return { status: res.status, body: await res.json() as any };

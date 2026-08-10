@@ -304,13 +304,24 @@ export class BalanceLedger {
     return { bound: true, conflict: false, existing: null };
   }
 
-  /** Sum of today's (UTC) completed deducts minus refunds issued against them. */
+  /**
+   * Sum of today's (UTC) deducts that are still standing (status='completed').
+   *
+   * Refunded deducts (status='refunded') are excluded, so a genuine
+   * service-failure refund frees that day's allowance. Critically, refunds are
+   * NOT counted as negative here: an earlier version summed
+   * `deduct - refund`, which let a refund *restore* the daily allowance and so
+   * made `daily_limit_sat` bypassable by spend→refund→spend. Counting only
+   * standing deducts closes that: the ceiling is on gross completed spend, and
+   * `/balance/refund` is operator-gated regardless.
+   */
   spentTodaySat(buyerId: string): number {
     const row = this.db
       .prepare(
-        `SELECT COALESCE(SUM(CASE type WHEN 'deduct' THEN amount_sat ELSE -amount_sat END), 0) AS spent
+        `SELECT COALESCE(SUM(amount_sat), 0) AS spent
          FROM ledger_transactions
-         WHERE buyer_id = ? AND type IN ('deduct','refund') AND date(created_at) = date('now')`
+         WHERE buyer_id = ? AND type = 'deduct' AND status = 'completed'
+           AND date(created_at) = date('now')`
       )
       .get(buyerId) as { spent: number };
     return Math.max(0, row.spent);
