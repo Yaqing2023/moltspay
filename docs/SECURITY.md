@@ -4,7 +4,8 @@
 **Date:** 2026-02-19  
 **Analyst:** Zen7  
 
-**Updated:** 2026-08-06 - added issue 8 (install-time code execution), audited against v2.4.0
+**Updated:** 2026-08-06 - added issue 8 (install-time code execution), audited against v2.4.0  
+**Updated:** 2026-08-10 - issue 8 remediated in `moltspay-skill` (e8952b9, 8da3b56); locations and status refreshed
 
 ---
 
@@ -12,7 +13,7 @@
 
 | Severity | Count | Status |
 |----------|-------|--------|
-| [HIGH] HIGH | 1 | Open - see issue 8 |
+| [HIGH] HIGH | 1 | Fixed - see issue 8 |
 | [MED] MEDIUM | 3 | Should fix |
 | [LOW] LOW | 3 | Nice to have |
 | [OK] GOOD | 3 | No issues |
@@ -25,14 +26,14 @@ original analysis did not examine.
 
 ## [HIGH] HIGH Severity Issues
 
-### 8. Install-Time Code Execution / Supply Chain (Distribution)
+### 8. Install-Time Code Execution / Supply Chain (Distribution) - FIXED in `moltspay-skill` 2026-08-06
 
-**Location:**
+**Location (as analyzed 2026-08-06, before remediation - these lines no longer exist):**
 - `moltspay-skill/scripts/setup.sh:12` - `npm install -g moltspay`
 - `moltspay-skill/scripts/setup.js:36` - `run('npm install -g moltspay')`
 - `moltspay-skill/package.json` - `"postinstall": "node scripts/setup.js"`
 
-**Problem:**
+**Problem (was):**
 
 `npm install` does not merely download files. It executes the `preinstall` /
 `install` / `postinstall` scripts declared by **any** package in the resolved
@@ -73,15 +74,15 @@ provisioning is legitimate and documented, but mechanically it is
 indistinguishable from a malicious postinstall, and no lockfile discipline
 constrains the bytes it fetches.
 
-**Secondary issue - PATH trust:**
+**Secondary issue - PATH trust (was):**
 
-Both setup scripts gate on `command -v moltspay` / `which moltspay` and skip
-installation if anything by that name is already on `PATH`. That binary is then
+Both setup scripts gated on `command -v moltspay` / `which moltspay` and skipped
+installation if anything by that name was already on `PATH`. That binary was then
 trusted and invoked as `moltspay init`, which generates a wallet. Any
-attacker-planted executable named `moltspay` earlier in `PATH` is silently
+attacker-planted executable named `moltspay` earlier in `PATH` would be silently
 adopted.
 
-**Fix:**
+**Fix (applied):**
 
 Install locally, pinned, from a committed lockfile, with lifecycle scripts
 disabled, and invoke the local binary by explicit path:
@@ -90,7 +91,7 @@ disabled, and invoke the local binary by explicit path:
 // moltspay-skill/package.json
 {
   "private": true,
-  "dependencies": { "moltspay": "2.4.0" }   // exact - not ^2.4.0, not latest
+  "dependencies": { "moltspay": "2.4.1" }   // exact - not ^2.4.1, not latest
 }
 ```
 
@@ -101,6 +102,26 @@ npm ci --prefix "$SKILL_DIR" --ignore-scripts --no-audit --no-fund
 
 Commit `package-lock.json`. Remove `postinstall` from the skill's
 `package.json` so provisioning is an explicit operator action.
+
+**Where this now lives** (`moltspay-skill` @ 8da3b56):
+
+| File | What it does now |
+|------|------------------|
+| `package.json` | `"private": true`, `"moltspay": "2.4.1"` exact, **no `postinstall`** - only an opt-in `"setup"` script |
+| `package-lock.json` | Committed, lockfileVersion 3, 233 entries / 213 packages actually installed - `npm ci` verifies integrity hashes against it |
+| `scripts/setup.sh:22-26` | `npm ci --prefix "$SKILL_DIR" --ignore-scripts --no-audit --no-fund`; install failure is fatal |
+| `scripts/setup.js:46-61` | Same via `spawnSync`; exits non-zero before any wallet state is touched |
+| `scripts/setup.sh:28` / `setup.js:63` | Gate on `[ ! -x "$MOLTSPAY" ]` / `fs.existsSync(MOLTSPAY)` - the **local path**, not `command -v` |
+| `README.md` (Installation) | Operator-facing steps + the control-rationale table |
+
+The `PATH` trust path is closed: no setup script consults `PATH` any more, and
+every helper refuses to run when `node_modules/.bin/moltspay` is absent rather
+than falling back to whatever `moltspay` it finds.
+
+**Residual risk (accepted):** `alipay-bot` is still fetched from Alipay's CDN
+outside lockfile integrity - see the trade-off below. It is now an explicit
+operator command instead of an install-time side effect, which is the mitigation,
+not an elimination.
 
 These are **two independent layers**, and both are required:
 
@@ -130,8 +151,10 @@ becomes a conscious, visible action rather than a side effect of
 `npm install`. `MOLTSPAY_SKIP_CLI_INSTALL=1` makes that intent explicit if
 lifecycle scripts are re-enabled later.
 
-**Status:** Open - operator-facing steps documented in
-`moltspay-skill/README.md` (Installation).
+**Status:** Fixed - `moltspay-skill` e8952b9 (local pinned install) and 8da3b56
+(pin 2.4.1). Operator-facing steps documented in `moltspay-skill/README.md`
+(Installation). Re-verify with §"Where this now lives" above after any change to
+`package.json` / `setup.sh` / `setup.js`.
 
 ---
 
