@@ -1,5 +1,35 @@
 # Changelog
 
+## [2.4.2] - 2026-08-11
+
+**Security release — the balance rail could be credited and reversed by anyone.** 2.4.0 gave the balance rail a full *spend* authentication path (per-request signature + TOFU-bound signer), but the *management* endpoints were never wired to any auth layer at all: `POST /balance/topup` and `POST /balance/refund` accepted anonymous callers. `auth_mode: enforce` did not help — it gates `/execute` deductions only. Three exploits followed, each confirmed live against the canary before the fix. **Upgrade if you run a server with `provider.balance` configured**; clients are unaffected.
+
+**Action required for balance operators.** Both endpoints now require an operator secret and **fail closed** without one — set `provider.balance.operator_key` (or `MOLTSPAY_BALANCE_OPERATOR_KEY`, which wins) before upgrading, or they return `503` and top-ups stop. The server logs a warning at startup when no key is configured. This is a deliberate breaking change on those two routes: an unauthenticated caller that used to succeed now gets `401`.
+
+### Security
+- **Unauthenticated minting (critical).** `POST /balance/topup` with `rail=alipay` credited any `buyer_id` any `amount` with no credential — the Alipay branch is operator-trusted by design and never consulted a gateway, and idempotency keyed off an attacker-chosen `trade_no`. Free balance, unbounded.
+- **Unauthenticated refund → permanently free service (critical).** `GET /balance/transactions` disclosed a completed deduct's `tx_id`, and `POST /balance/refund` reversed it with no credential: buy, read your own `tx_id`, refund it, repeat. The reversal also gave back the day's spent allowance, so `daily_limit_sat` fell with it.
+- **Crypto top-up front-running (critical).** `rail=crypto` verified the on-chain recipient and amount but not the *payer*, so any caller who saw a settling transaction could claim someone else's funds into their own `buyer_id`.
+- **Fix — operator authentication on the credit/reverse endpoints.** `verifyOperator()` (`src/facilitators/balance/auth.ts`) does a constant-time shared-secret comparison; `/balance/topup` and `/balance/refund` now demand the token via `Authorization: Bearer <key>` or `X-Operator-Key: <key>`. Header only, never the body, so the secret is not persisted into ledger descriptions or echoed in logs. Unconfigured ⇒ `503` (disabled), configured + missing/wrong token ⇒ `401`. No new cryptography: the operator tier reuses existing primitives and sits alongside — not in place of — the per-user signature on deductions.
+- **Scope of the fix.** The operator gate is what closes all three: minting and refund need the secret, and crypto top-up claims are now restricted to the operator rather than the public. Payer-address verification on the crypto rail (so an operator cannot mis-attribute a payment either) remains open, as do the `auth_mode` default and the read-path items below.
+
+### Fixed
+- **`daily_limit_sat` was bypassable by spend → refund → spend.** `spentTodaySat()` summed `deduct - refund`, so every reversal restored that day's allowance. It now sums only *standing* deducts (`type='deduct' AND status='completed'`); refunded deducts drop out (a genuine service-failure refund still frees its allowance), but refunds are no longer counted as negative spend. The ceiling is now on gross completed spend.
+
+### Added
+- **`provider.balance.operator_key`** (`ProviderBalanceConfig`) — the shared operator secret. `MOLTSPAY_BALANCE_OPERATOR_KEY` overrides it.
+
+### Known limitations
+- **The read path is still unauthenticated.** `GET /balance` and `GET /balance/transactions` disclose balance, limits, and transaction ids to anyone who knows a `buyer_id`. With `/balance/refund` gated, this is disclosure rather than a spend path, but it is the remaining half of the same problem and needs client-side owner-read signing to close.
+- **`provider.balance.auth_mode` still defaults to `off`**, where a bare `buyer_id` retains bearer semantics for deductions. New balance deployments should set `enforce`.
+
+### Migration from 2.4.1
+1. Generate a secret (`openssl rand -hex 32`) and set `provider.balance.operator_key`, or export `MOLTSPAY_BALANCE_OPERATOR_KEY`.
+2. Update any operator tooling that calls `/balance/topup` or `/balance/refund` to send `Authorization: Bearer <key>`.
+3. Restart and confirm the startup warning is gone; an unauthenticated `POST /balance/topup` must return `401`.
+
+No client-side changes. Passwordless signed deductions, the WeChat-funded top-up flow (`/balance/topup/order` → `topup-confirm`), and every non-balance rail are untouched.
+
 ## [2.4.1] - 2026-08-06
 
 **Install-time hardening — defense in depth.** No exploitable defect is fixed here and no runtime behavior changes. The SDK stops telling users to run `npx moltspay`, and the install-time attack surface is written down, so that downstream installers (notably the MoltsPay skill) can pin an exact version and install with `--ignore-scripts` instead of resolving a binary at run time.

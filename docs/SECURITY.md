@@ -5,7 +5,8 @@
 **Analyst:** Zen7  
 
 **Updated:** 2026-08-06 - added issue 8 (install-time code execution), audited against v2.4.0  
-**Updated:** 2026-08-10 - issue 8 remediated in `moltspay-skill` (e8952b9, 8da3b56); locations and status refreshed
+**Updated:** 2026-08-10 - issue 8 remediated in `moltspay-skill` (e8952b9, 8da3b56); locations and status refreshed  
+**Updated:** 2026-08-11 - added issues 9-12 (balance-rail management endpoints); 9-11 fixed in v2.4.2 (`0704d22`), 12 open
 
 ---
 
@@ -13,14 +14,97 @@
 
 | Severity | Count | Status |
 |----------|-------|--------|
+| [CRIT] CRITICAL | 3 | Fixed in v2.4.2 - see issues 9-11 |
 | [HIGH] HIGH | 1 | Fixed - see issue 8 |
-| [MED] MEDIUM | 3 | Should fix |
+| [MED] MEDIUM | 4 | Should fix |
 | [LOW] LOW | 3 | Nice to have |
 | [OK] GOOD | 3 | No issues |
 
 Issues 1-7 cover the **runtime** attack surface (key storage, amount
 verification, transport). Issue 8 covers the **install-time** surface, which the
-original analysis did not examine.
+original analysis did not examine. Issues 9-12 cover the **balance rail's
+management endpoints**, added in 2.2-2.4 and outside the scope of both earlier
+passes; the full write-up is
+[`docs/2026-08-07-balance-rail-security-review.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.2/docs/2026-08-07-balance-rail-security-review.md)
+in the docs repo.
+
+---
+
+## [CRIT] CRITICAL Severity Issues - FIXED in v2.4.2
+
+The balance rail shipped a complete **spend** authentication path in 2.4.0
+(per-request EIP-191 signature, TOFU-bound signer, `auth_mode` gate) and no
+**manage** authentication whatsoever. `POST /balance/topup` and
+`POST /balance/refund` were routed straight into their handlers with no caller
+check (`src/server/index.ts`, pre-2.4.2 lines 502-525). `auth_mode: enforce` was
+no defense: it guards `/execute` deductions only. All three below were confirmed
+exploitable against the live canary before the fix.
+
+### 9. Unauthenticated Minting (Server) - FIXED in v2.4.2
+
+**Location:** `src/server/balance-endpoints.ts` - `handleTopup()`, `rail=alipay` branch
+
+**Problem (was):** the Alipay top-up branch is operator-trusted by design — it
+credits on the caller's word without consulting a gateway. With no caller
+authentication, any anonymous request credited any `buyer_id` any `amount`.
+Idempotency keyed off `trade_no`, which the attacker also chose, so the mint was
+repeatable. Unbounded free balance.
+
+### 10. Unauthenticated Refund → Permanently Free Service (Server) - FIXED in v2.4.2
+
+**Location:** `src/server/balance-endpoints.ts` - `handleRefund()`; `src/facilitators/balance/ledger.ts` - `spentTodaySat()`
+
+**Problem (was):** `GET /balance/transactions` disclosed a completed deduct's
+`tx_id`, and `POST /balance/refund` reversed it with no credential. Buy a
+service, read your own `tx_id`, refund it, repeat — the service is free forever.
+Compounding it, `spentTodaySat()` summed `deduct - refund`, so each reversal also
+gave back the day's allowance and `daily_limit_sat` fell with it.
+
+### 11. Crypto Top-Up Front-Running (Server) - FIXED in v2.4.2
+
+**Location:** `src/server/balance-endpoints.ts` - `handleTopup()`, `rail=crypto` branch
+
+**Problem (was):** the crypto branch verified the on-chain recipient and amount
+but never the **payer**. Anyone who observed a settling transaction could submit
+it under their own `buyer_id` and take the credit.
+
+### Fix Applied (all three)
+
+```typescript
+// src/facilitators/balance/auth.ts - constant-time shared-secret check
+export function verifyOperator(configuredKey, presented): boolean {
+  if (!configuredKey || !presented) return false;
+  const a = Buffer.from(configuredKey, 'utf8');
+  const b = Buffer.from(presented, 'utf8');
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+// src/server/balance-endpoints.ts - both endpoints gate on it, and fail CLOSED
+private requireOperator(operatorToken, res): boolean {
+  if (!operatorKey) { sendJson(res, 503, {...}); return false; }   // unconfigured -> disabled
+  if (!verifyOperator(operatorKey, operatorToken)) { sendJson(res, 401, {...}); return false; }
+  return true;
+}
+```
+
+- Token travels in `Authorization: Bearer <key>` or `X-Operator-Key`, header only,
+  so it is never persisted into ledger descriptions or echoed in logs.
+- Key source: `provider.balance.operator_key` or `MOLTSPAY_BALANCE_OPERATOR_KEY`
+  (env wins). Absent in both ⇒ the endpoints are disabled, never open.
+- `spentTodaySat()` now sums only standing deducts
+  (`type='deduct' AND status='completed'`), closing the daily-limit bypass.
+- No new cryptography — the operator tier sits alongside, not in place of, the
+  per-user deduction signature.
+
+**Status:** [OK] Fixed in v2.4.2 - regression guards in
+`test/server/balance-rail.test.ts` (unauthenticated topup/refund ⇒ 401, wrong key
+⇒ 401, unconfigured ⇒ 503); re-verified end-to-end on the canary.
+
+**Residual:** payer-address verification on the crypto rail is still absent, so
+issue 11 is closed against the public but not against a mis-attributing operator.
+
+---
 
 ---
 
@@ -295,6 +379,30 @@ spawn('sh', ['-c', service.command], { ... });
    const [cmd, ...args] = service.command.split(' ');
    spawn(cmd, args, { ... });
    ```
+
+---
+
+### 12. Balance Read Path Is Unauthenticated (Server)
+
+**Location:** `src/server/balance-endpoints.ts` - `handleQuery()`, `handleTransactions()`
+
+**Problem:** `GET /balance?buyer_id=` and `GET /balance/transactions?buyer_id=`
+return the balance, the configured limits, today's spend, and the full
+transaction list — including `tx_id` values — to anyone who knows or guesses a
+`buyer_id`. There is no signature check on either route.
+
+**Impact:** disclosure of another user's funding and spending history. Before
+v2.4.2 this was also the first half of issue 10 (read a `tx_id`, then refund it);
+with `/balance/refund` now operator-gated it no longer chains into a spend, which
+is why this is MEDIUM rather than CRITICAL.
+
+**Fix (not yet implemented):** owner-read signing — extend the 2.4.0 auth module
+with an owner domain (`buildOwnerMessage` / `verifyOwnerAuth`, mirroring
+`buildDeductMessage` / `verifyDeductAuth`), require it on both read routes, and
+authorize against the account's bound `signer_address`. Needs a matching client
+change, so it is a release of its own rather than a patch.
+
+**Status:** Open as of v2.4.2.
 
 ---
 
