@@ -17,7 +17,7 @@ interface X402PaymentPayload {
 ```
 
 Flow:
-1. Client runs `npx moltspay pay --chain base_sepolia ...`
+1. Client runs `moltspay pay --chain base_sepolia ...`
 2. Payment header includes `network: "eip155:84532"`
 3. Server reads `payment.network` -> verifies on that chain
 4. No `USE_MAINNET` env var needed on provider side
@@ -84,15 +84,15 @@ POST /faucet
 
 ```bash
 # Request testnet USDC
-npx moltspay faucet
+moltspay faucet
 
 # Or specify address
-npx moltspay faucet --address 0x...
+moltspay faucet --address 0x...
 ```
 
 The CLI will:
 1. Check if wallet exists (`~/.moltspay/wallet.json`)
-2. If not, prompt to run `npx moltspay init --chain base_sepolia` first
+2. If not, prompt to run `moltspay init --chain base_sepolia` first
 3. Request from faucet endpoint
 4. Show balance after
 
@@ -127,8 +127,8 @@ The CLI will:
 
 **Usage:**
 ```bash
-npx moltspay faucet                    # Use your wallet
-npx moltspay faucet --address 0x...    # Specify address
+moltspay faucet                    # Use your wallet
+moltspay faucet --address 0x...    # Specify address
 ```
 
 ### Phase 4: Documentation (TODO)
@@ -141,7 +141,7 @@ npx moltspay faucet --address 0x...    # Specify address
 
 ```bash
 # Create dedicated faucet wallet
-npx moltspay init --chain base_sepolia --name faucet
+moltspay init --chain base_sepolia --name faucet
 
 # Fund from Circle testnet faucet:
 # https://faucet.circle.com/

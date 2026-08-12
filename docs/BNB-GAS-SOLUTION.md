@@ -110,7 +110,7 @@ You need ~0.001 BNB (~$0.60) for the first approval.
 After approval, all payments are gasless.
 
 To get BNB:
-- Testnet: npx moltspay faucet --chain bnb_testnet
+- Testnet: moltspay faucet --chain bnb_testnet
 - Mainnet: Withdraw from Binance/exchange
 ```
 
@@ -139,16 +139,16 @@ To get BNB:
 ## Testing Plan
 
 ### Testnet
-1. `npx moltspay faucet --chain bnb_testnet`
+1. `moltspay faucet --chain bnb_testnet`
    - Expect: Receive USDC + tBNB
-2. `npx moltspay status`
+2. `moltspay status`
    - Expect: See BNB balance
-3. `npx moltspay pay --chain bnb_testnet ...`
+3. `moltspay pay --chain bnb_testnet ...`
    - Expect: Approval succeeds, payment completes
 
 ### Mainnet (manual)
 1. Fund wallet with USDC + BNB from exchange
-2. `npx moltspay status` shows balances
+2. `moltspay status` shows balances
 3. First payment triggers approval (uses BNB)
 4. Subsequent payments are gasless
 

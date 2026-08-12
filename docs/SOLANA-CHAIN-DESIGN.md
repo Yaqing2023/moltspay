@@ -745,14 +745,14 @@ describe('Solana Support', () => {
 export MOLTSPAY_CHAIN=solana_devnet
 
 # Initialize Solana wallet
-npx moltspay init --chain solana
+moltspay init --chain solana
 
 # Check status
-npx moltspay status
+moltspay status
 # Should show Solana address and balance
 
 # Request devnet SOL (for gas)
-npx moltspay faucet --chain solana_devnet
+moltspay faucet --chain solana_devnet
 ```
 
 ## File Checklist

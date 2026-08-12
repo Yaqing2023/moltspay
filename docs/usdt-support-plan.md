@@ -85,8 +85,8 @@ base: {
 - Add `--token` flag to pay command
 - Update status command to show all balances
 ```bash
-npx moltspay pay https://example.com service-id --token usdt --prompt "..."
-npx moltspay status  # shows: USDC: $50.00 | USDT: $25.00
+moltspay pay https://example.com service-id --token usdt --prompt "..."
+moltspay status  # shows: USDC: $50.00 | USDT: $25.00
 ```
 
 **File: `src/types/index.ts`**

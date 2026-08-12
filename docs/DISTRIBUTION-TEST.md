@@ -106,8 +106,8 @@ npm install ~/moltspay/moltspay-1.7.0.tgz
 
 ```bash
 node -e "require('moltspay'); console.log('require ok')"   # entry point usable
-npx moltspay --help
-npx moltspay --version                                     # expect 1.7.0
+moltspay --help
+moltspay --version                                     # expect 1.7.0
 ```
 
 The Alipay rail additionally needs `alipay-bot` on the PATH (usually `~/.local/bin`, not on the default PATH):

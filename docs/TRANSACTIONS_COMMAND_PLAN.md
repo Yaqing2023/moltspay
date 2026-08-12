@@ -18,7 +18,7 @@ Combine on-chain USDC transfers and x402 service purchases into one unified comm
 ## Command Design
 
 ```bash
-npx moltspay transactions [options]
+moltspay transactions [options]
 
 Options:
   --days <n>        Days to look back (default: 7)

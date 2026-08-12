@@ -43,7 +43,7 @@ This work is **purely additive**. Upgrading from `moltspay@1.5.x` to `1.6.0` wit
 | Surface | Impact |
 |---------|--------|
 | `MoltsPayClient` public API (constructor, methods, return shapes, error messages) | None |
-| `npx moltspay init / fund / pay / status / approve / faucet / services` | None |
+| `moltspay init / fund / pay / status / approve / faucet / services` | None |
 | `~/.moltspay/wallet.json`, `config.json`, `spending.json`, `wallet-solana.json` | Format unchanged, location unchanged |
 | `import { MoltsPayClient } from 'moltspay'` | Continues to work |
 | `import { MoltsPayClient } from 'moltspay/client'` | Continues to work (subpath retained, re-routed to Node implementation internally) |

@@ -70,7 +70,7 @@
 
 ```bash
 # Check balances across chains
-npx moltspay status
+moltspay status
 # Output:
 # Wallet: 0xABC123...
 # Balances:
@@ -78,13 +78,13 @@ npx moltspay status
 #   Polygon:  25.00 USDC, 15.00 USDT
 
 # Pay with specific chain
-npx moltspay pay https://example.com service-id \
+moltspay pay https://example.com service-id \
   --chain polygon \
   --token USDC \
   --prompt "hello"
 
 # Auto-select cheapest chain with sufficient balance
-npx moltspay pay https://example.com service-id \
+moltspay pay https://example.com service-id \
   --auto-chain \
   --prompt "hello"
 ```

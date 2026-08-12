@@ -13,7 +13,7 @@ MPP, Solana, BNB) are handled by the SDK.
 Create a wallet first with the existing CLI:
 
 ```bash
-npx moltspay init
+moltspay init
 ```
 
 This writes `~/.moltspay/wallet.json`, `config.json`, and
@@ -24,11 +24,11 @@ Set spending limits you're comfortable letting an AI agent spend
 autonomously:
 
 ```bash
-npx moltspay config --max-per-tx 2 --max-per-day 10
+moltspay config --max-per-tx 2 --max-per-day 10
 ```
 
-Fund the wallet with real USDC (`npx moltspay fund 5`) or grab testnet
-USDC (`npx moltspay faucet`) before trying `moltspay_pay`.
+Fund the wallet with real USDC (`moltspay fund 5`) or grab testnet
+USDC (`moltspay faucet`) before trying `moltspay_pay`.
 
 ## Claude Desktop
 
@@ -98,7 +98,7 @@ top of the MCP host's own tool-approval prompt:
 
 1. **SDK spending limits.** `MoltsPayClient.pay()` enforces `maxPerTx`
    and `maxPerDay` server-side before signing. Configured via
-   `moltspay_config` or `npx moltspay config`.
+   `moltspay_config` or `moltspay config`.
 2. **Dry-run mode.** Start the server with `--dry-run` and
    `moltspay_pay` returns the intended payment without signing. Good
    for first-time setup and demos.
@@ -108,11 +108,11 @@ top of the MCP host's own tool-approval prompt:
    `confirmed: true`, forcing a second tool call the user can refuse.
 
 None of the tools expose the private key or mnemonic. Wallet creation is
-intentionally not an MCP tool — use `npx moltspay init`.
+intentionally not an MCP tool — use `moltspay init`.
 
 ## Troubleshooting
 
-**"MoltsPay wallet not found."** — Run `npx moltspay init` before
+**"MoltsPay wallet not found."** — Run `moltspay init` before
 launching the MCP server. Check that `~/.moltspay/wallet.json` exists.
 
 **"Server accepts: base_sepolia, polygon — please specify: --chain …"** —

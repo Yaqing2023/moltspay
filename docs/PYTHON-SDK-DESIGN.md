@@ -133,7 +133,7 @@ print(f"Max per tx: {limits.max_per_tx}")
 print(f"Max per day: {limits.max_per_day}")
 print(f"Spent today: {limits.spent_today}")
 
-# Limits are set via CLI (npx moltspay config)
+# Limits are set via CLI (moltspay config)
 ```
 
 ---
@@ -265,8 +265,8 @@ client.set_limits(max_per_tx=10, max_per_day=100)
 **Option B: Use existing Node.js wallet**
 ```bash
 # If you already have a wallet from Node CLI
-npx moltspay init --chain base
-npx moltspay config --max-per-tx 10
+moltspay init --chain base
+moltspay config --max-per-tx 10
 ```
 
 ```python

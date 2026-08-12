@@ -25,10 +25,7 @@ MoltsPay enables agent-to-agent commerce using the [x402 protocol](https://www.x
 - **Payment Verification** - Automatic on-chain verification
 - **Secure Wallet** - Spending limits, whitelist, and audit logging
 - **Multi-chain** - Base, Polygon, Solana, BNB, Tempo (mainnet & testnet)
-- **Fiat Rail — Alipay (`2.0.0`)** - Accept CNY via Alipay AI Pay from China mainland merchants. CLI-only (Node), browser unsupported. See [`docs/ALIPAY-RAIL.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.2/docs/ALIPAY-RAIL.md)
-- **Fiat Rail — WeChat Pay (`2.1.0`)** - Accept CNY via WeChat Pay v3 Native (scan-to-pay). SDK-managed recoverable sessions persist QR/order context, poll in the background, and fulfill idempotently. See [`docs/WECHAT-RAIL-DESIGN.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.2/docs/WECHAT-RAIL-DESIGN.md)
-- **Balance Rail — Password-Free (`2.2.0`)** - Top up once, then pay with no signature or QR per transaction. Server-custodied SQLite ledger with atomic deducts, hard spending limits, and idempotent retries. See [`docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.2/docs/WECHAT-BALANCE-PASSWORDLESS-DESIGN.md)
-- **Balance Identity & Authentication (`2.4.0`)** - The balance rail gets a real user: accounts are anchored to the WeChat payer's `openid` at top-up, and each deduction is authorized by a per-request signature (`auth_mode: off` | `shadow` | `enforce`). Knowing a `buyer_id` is no longer enough to spend — closes the bearer hole. See [Balance Authentication](#balance-authentication-240) below
+- **Fiat & Balance Rails** - Accept fiat through Alipay and WeChat Pay, plus a password-free prepaid balance
 - **Agent-to-Agent** - Complete A2A payment flow support
 - **Multi-VM** - EVM chains + Solana (SVM) with unified API
 - **MCP Server** - Expose wallet + payments to Claude Desktop, Cursor, and other MCP hosts
@@ -38,6 +35,8 @@ MoltsPay enables agent-to-agent commerce using the [x402 protocol](https://www.x
 ```bash
 npm install moltspay@latest
 ```
+
+Once installed, `moltspay` in the examples below means the local binary — `node_modules/.bin/moltspay`, or whatever your package runner puts on `PATH`. The Quick Start and the Zen7 example still show `npx moltspay` because nothing is installed yet at that point; everywhere else, prefer the installed binary. `npx` resolves a name through `PATH` and otherwise fetches and executes a package from the registry, which defeats a pinned local install.
 
 ## Quick Start
 
@@ -291,9 +290,9 @@ It is a thin wrapper around `MoltsPayClient` — wallet custody, spending limits
 **1. Create a wallet and set spending limits** (the MCP server refuses to start without a wallet):
 
 ```bash
-npx moltspay init
-npx moltspay config --max-per-tx 2 --max-per-day 10
-npx moltspay fund 5    # or: npx moltspay faucet for testnet
+moltspay init
+moltspay config --max-per-tx 2 --max-per-day 10
+moltspay fund 5    # or: moltspay faucet for testnet
 ```
 
 **2. Point your MCP host at the `moltspay-mcp` binary over stdio:**
@@ -322,7 +321,7 @@ Each host has its own config file for registering stdio MCP servers — check yo
 2. **Dry-run mode** — launch with `--dry-run` and payments return a preview instead of signing.
 3. **Confirmation gate** — set `MOLTSPAY_MCP_REQUIRE_CONFIRM=1` to require a second tool call (`confirmed: true`) for any payment exceeding `maxPerTx / 10`.
 
-Private keys and mnemonics are never exposed over MCP — wallet creation stays on the CLI (`npx moltspay init`) by design. See [`docs/MCP-USAGE.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.2/docs/MCP-USAGE.md) for full tool arguments and troubleshooting.
+Private keys and mnemonics are never exposed over MCP — wallet creation stays on the CLI (`moltspay init`) by design. See [`docs/MCP-USAGE.md`](https://github.com/Yaqing2023/moltspay/blob/v2.4.2/docs/MCP-USAGE.md) for full tool arguments and troubleshooting.
 
 ## Payment Protocols
 
@@ -336,6 +335,9 @@ MoltsPay supports multiple payment protocols, each optimized for different chain
 | MPP | Tempo | Gas-free native | HTTP 402 + WWW-Authenticate |
 | x402 + Alipay | Alipay | No blockchain gas | HTTP 402 + Alipay AI Pay proof |
 | x402 + WeChat Pay | WeChat Pay Native | No blockchain gas | HTTP 402 + scan-to-pay QR, poll-based verify |
+| Balance | — (custodial ledger) | No blockchain gas | HTTP 402 + prepaid balance deduct, password-free |
+
+The last three settle in fiat or from a prepaid balance rather than on-chain, and each has its own section below with setup and buyer usage: [Alipay](#fiat-rail-alipay--cny) (`2.0.0`), [WeChat Pay](#fiat-rail-wechat-pay--cny) (`2.1.0`), [Balance](#balance-rail-password-free-payments) (`2.2.0`, identity and per-request signatures since `2.4.0`).
 
 ### How x402 Protocol Works
 
@@ -498,7 +500,7 @@ Accept payments on multiple chains by specifying a `chains` array:
 
 Clients can then choose which chain to pay on:
 ```bash
-npx moltspay pay https://server.com service-id --chain polygon --prompt "..."
+moltspay pay https://server.com service-id --chain polygon --prompt "..."
 ```
 
 If no `--chain` is specified, the client uses the first chain in the provider's list.
@@ -506,7 +508,7 @@ If no `--chain` is specified, the client uses the first chain in the provider's 
 ### Validate Your Config
 
 ```bash
-npx moltspay validate ./my-skill
+moltspay validate ./my-skill
 ```
 
 ## Server Setup
@@ -534,7 +536,7 @@ CDP_API_KEY_SECRET=your-secret
 
 **4. Start server:**
 ```bash
-npx moltspay start ./my-skill --port 3000
+moltspay start ./my-skill --port 3000
 ```
 
 Server does NOT need a private key - the x402 facilitator handles settlement.
@@ -561,87 +563,87 @@ To accept testnet payments, add `base_sepolia` to your chains array:
 }
 ```
 
-Clients can then pay using `--chain base_sepolia` and get free testnet USDC via `npx moltspay faucet`.
+Clients can then pay using `--chain base_sepolia` and get free testnet USDC via `moltspay faucet`.
 
 ## CLI Reference
 
 ```bash
 # === Client Commands ===
-npx moltspay init                    # Create wallet (EVM + Solana)
-npx moltspay fund <amount>           # Fund wallet via Coinbase (US)
-npx moltspay faucet                  # Get free testnet USDC (Base Sepolia)
-npx moltspay faucet --chain solana_devnet   # Get Solana devnet USDC
-npx moltspay faucet --chain bnb_testnet     # Get BNB testnet USDC + tBNB
-npx moltspay faucet --chain tempo_moderato  # Get Tempo testnet tokens
-npx moltspay status                  # Check balance (all chains)
-npx moltspay transfer <to> <amount>  # Transfer USDC/USDT out to any address (e.g. an exchange)
-npx moltspay config                  # Update limits
-npx moltspay services <url>          # List provider's services
-npx moltspay pay <url> <service>     # Pay and execute service
+moltspay init                    # Create wallet (EVM + Solana)
+moltspay fund <amount>           # Fund wallet via Coinbase (US)
+moltspay faucet                  # Get free testnet USDC (Base Sepolia)
+moltspay faucet --chain solana_devnet   # Get Solana devnet USDC
+moltspay faucet --chain bnb_testnet     # Get BNB testnet USDC + tBNB
+moltspay faucet --chain tempo_moderato  # Get Tempo testnet tokens
+moltspay status                  # Check balance (all chains)
+moltspay transfer <to> <amount>  # Transfer USDC/USDT out to any address (e.g. an exchange)
+moltspay config                  # Update limits
+moltspay services <url>          # List provider's services
+moltspay pay <url> <service>     # Pay and execute service
 
 # === Transfer / Withdraw (2.4.0) ===
 # Move USDC/USDT out of your wallet to any address (e.g. an exchange deposit address).
-npx moltspay transfer <to> <amount>                       # 5 USDC on Base (default), interactive confirm
-npx moltspay transfer <to> 10 --token USDT --chain bnb     # USDT on BNB Chain
-npx moltspay transfer <to> 5 --chain polygon --yes --json  # non-interactive (agents/scripts)
+moltspay transfer <to> <amount>                       # 5 USDC on Base (default), interactive confirm
+moltspay transfer <to> 10 --token USDT --chain bnb     # USDT on BNB Chain
+moltspay transfer <to> 5 --chain polygon --yes --json  # non-interactive (agents/scripts)
 # EVM chains only (base/polygon/bnb/...); a normal on-chain transfer, so the wallet needs a
 # little native gas (ETH/BNB/POL). The transfer network must match the receiver's deposit network.
 
 # === Service Discovery ===
-npx moltspay services                           # List all from registry
-npx moltspay services https://provider.com      # List from specific provider
-npx moltspay services -q "video"                # Search by keyword
-npx moltspay services --max-price 1.00          # Filter by max price
-npx moltspay services --type api_service        # Filter by type
-npx moltspay services --tag ai                  # Filter by tag
-npx moltspay services --json                    # Output as JSON
+moltspay services                           # List all from registry
+moltspay services https://provider.com      # List from specific provider
+moltspay services -q "video"                # Search by keyword
+moltspay services --max-price 1.00          # Filter by max price
+moltspay services --type api_service        # Filter by type
+moltspay services --tag ai                  # Filter by tag
+moltspay services --json                    # Output as JSON
 
 # === Pay with Chain Selection ===
-npx moltspay pay <url> <service> --chain base          # Pay on Base (default)
-npx moltspay pay <url> <service> --chain polygon       # Pay on Polygon
-npx moltspay pay <url> <service> --chain base_sepolia  # Pay on Base testnet
-npx moltspay pay <url> <service> --chain solana        # Pay on Solana
-npx moltspay pay <url> <service> --chain solana_devnet # Pay on Solana devnet
-npx moltspay pay <url> <service> --chain bnb           # Pay on BNB
-npx moltspay pay <url> <service> --chain bnb_testnet   # Pay on BNB testnet
-npx moltspay pay <url> <service> --chain tempo_moderato # Pay on Tempo
-npx moltspay pay <url> <service> --rail alipay         # Pay with Alipay AI Pay
-npx moltspay pay <url> <service> --rail wechat         # Pay with WeChat Pay Native QR
-npx moltspay pay <url> <service> --rail balance        # Pay password-free from prepaid balance
+moltspay pay <url> <service> --chain base          # Pay on Base (default)
+moltspay pay <url> <service> --chain polygon       # Pay on Polygon
+moltspay pay <url> <service> --chain base_sepolia  # Pay on Base testnet
+moltspay pay <url> <service> --chain solana        # Pay on Solana
+moltspay pay <url> <service> --chain solana_devnet # Pay on Solana devnet
+moltspay pay <url> <service> --chain bnb           # Pay on BNB
+moltspay pay <url> <service> --chain bnb_testnet   # Pay on BNB testnet
+moltspay pay <url> <service> --chain tempo_moderato # Pay on Tempo
+moltspay pay <url> <service> --rail alipay         # Pay with Alipay AI Pay
+moltspay pay <url> <service> --rail wechat         # Pay with WeChat Pay Native QR
+moltspay pay <url> <service> --rail balance        # Pay password-free from prepaid balance
 
 # === BNB One-Time Approve ===
 # BNB payments need a one-time spender approval first (the spender comes from the 402 response).
-npx moltspay approve --spender <address> --chain bnb   # Approve, then `pay --chain bnb` is gasless
-npx moltspay approve --spender <address>               # --chain defaults to bnb_testnet
+moltspay approve --spender <address> --chain bnb   # Approve, then `pay --chain bnb` is gasless
+moltspay approve --spender <address>               # --chain defaults to bnb_testnet
 
 # === WeChat Recoverable Sessions ===
-npx moltspay wechat start <url> <service> --prompt "..."   # Start order, return QR metadata immediately
-npx moltspay wechat status <session-or-out_trade_no>        # Query/recover a pending session
-npx moltspay wechat fulfill <session-or-out_trade_no>       # Idempotently fulfill if paid
-npx moltspay wechat cancel <session-or-out_trade_no>        # Mark local session cancelled
-npx moltspay wechat list                                   # List persisted WeChat sessions
+moltspay wechat start <url> <service> --prompt "..."   # Start order, return QR metadata immediately
+moltspay wechat status <session-or-out_trade_no>        # Query/recover a pending session
+moltspay wechat fulfill <session-or-out_trade_no>       # Idempotently fulfill if paid
+moltspay wechat cancel <session-or-out_trade_no>        # Mark local session cancelled
+moltspay wechat list                                   # List persisted WeChat sessions
 
 # === Custodial Balance (Password-Free) ===
-npx moltspay balance set-buyer <id>                        # Persist the buyer id (account label)
-npx moltspay balance query <url>                           # Balance, limits, today's spend, bound signer/openid
-npx moltspay balance transactions <url>                    # Ledger history, newest first
-npx moltspay balance topup <url> <amount> --rail crypto --tx-hash 0x...   # Credit from a settled payment (crypto/wechat/alipay)
+moltspay balance set-buyer <id>                        # Persist the buyer id (account label)
+moltspay balance query <url>                           # Balance, limits, today's spend, bound signer/openid
+moltspay balance transactions <url>                    # Ledger history, newest first
+moltspay balance topup <url> <amount> --rail crypto --tx-hash 0x...   # Credit from a settled payment (crypto/wechat/alipay)
 
 # --- Identity & auth (2.4.0) ---
-npx moltspay balance whoami [url]                          # Show local signer address (and, vs a server, the account's bound signer/openid)
-npx moltspay balance bind <url>                            # Bind the local signer to an account (runs a minimal top-up to establish identity)
+moltspay balance whoami [url]                          # Show local signer address (and, vs a server, the account's bound signer/openid)
+moltspay balance bind <url>                            # Bind the local signer to an account (runs a minimal top-up to establish identity)
 
 # --- Recoverable WeChat-funded top-up (for chat agents; non-blocking) ---
-npx moltspay balance topup-order <url> --pack 2.00         # Mint a WeChat pack order, emit the QR, exit immediately
-npx moltspay balance topup-confirm <out_trade_no>          # Confirm + credit a pending order later (idempotent on out_trade_no)
-npx moltspay balance topup-status <out_trade_no>           # Query one pending order
-npx moltspay balance topup-list                            # List pending top-up orders
-npx moltspay balance topup-pack <url>                      # Blocking variant: mint pack, wait for the scan, credit inline
+moltspay balance topup-order <url> --pack 2.00         # Mint a WeChat pack order, emit the QR, exit immediately
+moltspay balance topup-confirm <out_trade_no>          # Confirm + credit a pending order later (idempotent on out_trade_no)
+moltspay balance topup-status <out_trade_no>           # Query one pending order
+moltspay balance topup-list                            # List pending top-up orders
+moltspay balance topup-pack <url>                      # Blocking variant: mint pack, wait for the scan, credit inline
 
 # === Server Commands ===
-npx moltspay start <skill-dir>       # Start server
-npx moltspay stop                    # Stop server
-npx moltspay validate <path>         # Validate manifest
+moltspay start <skill-dir>       # Start server
+moltspay stop                    # Stop server
+moltspay validate <path>         # Validate manifest
 
 # === Options ===
 --port <port>                        # Server port (default 3000)
@@ -711,10 +713,10 @@ interface PayOptions {
 
 ```bash
 # Standard format (uses { params: { prompt } })
-npx moltspay pay https://server.com text-to-video --prompt "a cat dancing"
+moltspay pay https://server.com text-to-video --prompt "a cat dancing"
 
 # Custom format (uses rawData, sends at top level)
-npx moltspay pay https://server.com translate --data '{"text": "Hello", "target_lang": "es"}'
+moltspay pay https://server.com translate --data '{"text": "Hello", "target_lang": "es"}'
 ```
 
 ### Server
@@ -803,16 +805,16 @@ Solana uses the **SolanaFacilitator** with SPL token transfers. Key differences:
 
 ```bash
 # Initialize includes Solana wallet automatically
-npx moltspay init
+moltspay init
 
 # Check Solana balance
-npx moltspay status
+moltspay status
 
 # Get free devnet USDC
-npx moltspay faucet --chain solana_devnet
+moltspay faucet --chain solana_devnet
 
 # Pay on Solana
-npx moltspay pay https://server.com service-id --chain solana --prompt "test"
+moltspay pay https://server.com service-id --chain solana --prompt "test"
 ```
 
 **USDC Addresses:**
@@ -832,18 +834,18 @@ BNB uses the **BNBFacilitator** with a pre-approval flow. Since CDP doesn't supp
 
 ```bash
 # Get free testnet USDC + tBNB for gas
-npx moltspay faucet --chain bnb_testnet
+moltspay faucet --chain bnb_testnet
 
 # One-time approve (required before the first BNB payment).
 # The spender address comes from the server's 402 response; a first `pay` also
 # prints it if you haven't approved yet.
-npx moltspay approve --spender 0xSPENDER --chain bnb_testnet
+moltspay approve --spender 0xSPENDER --chain bnb_testnet
 
 # Pay on BNB (client pays no gas after the approve!)
-npx moltspay pay https://server.com service-id --chain bnb_testnet --prompt "test"
+moltspay pay https://server.com service-id --chain bnb_testnet --prompt "test"
 
 # Check BNB balance
-npx moltspay status
+moltspay status
 ```
 
 **Important:** BNB tokens use 18 decimals (not 6 like Base/Polygon).
@@ -864,13 +866,13 @@ Tempo Moderato is a gas-free testnet that supports the **MPP (Machine Payments P
 
 ```bash
 # Get free Tempo testnet tokens
-npx moltspay faucet --chain tempo_moderato
+moltspay faucet --chain tempo_moderato
 
 # Pay on Tempo (gas-free!)
-npx moltspay pay https://server.com service-id --chain tempo_moderato --prompt "test"
+moltspay pay https://server.com service-id --chain tempo_moderato --prompt "test"
 
 # Check Tempo balance
-npx moltspay status
+moltspay status
 ```
 
 **Explorer:** https://explore.testnet.tempo.xyz
@@ -945,12 +947,12 @@ npx -y @alipay/agent-payment install-cli
 alipay-bot --version          # expect >= 0.3.15
 
 # One-time: open & authorize the Alipay wallet (scan the returned QR in the app)
-npx moltspay alipay apply
-npx moltspay alipay bind -c "<auth-code>"
-npx moltspay alipay check
+moltspay alipay apply
+moltspay alipay bind -c "<auth-code>"
+moltspay alipay check
 
 # Pay a service in CNY
-npx moltspay pay https://server.com my-service --rail alipay --prompt "..."
+moltspay pay https://server.com my-service --rail alipay --prompt "..."
 ```
 
 > 🔐 **Keep keys safe.** The RSA2 private key authorizes collection on your merchant account. Store the PEM files outside version control and reference them by path in the manifest.
@@ -1074,9 +1076,9 @@ console.log(session.paymentSessionId, session.outTradeNo);
 CLI recoverable flow:
 
 ```bash
-npx moltspay wechat start https://server.com my-service --prompt "hello" --json
-npx moltspay wechat status mpay_sess_...
-npx moltspay wechat fulfill mpay_sess_...
+moltspay wechat start https://server.com my-service --prompt "hello" --json
+moltspay wechat status mpay_sess_...
+moltspay wechat fulfill mpay_sess_...
 ```
 
 See [`examples/wechat-native-pay.ts`](https://github.com/Yaqing2023/moltspay/blob/v2.4.2/examples/wechat-native-pay.ts) for a runnable scenario-A demo (mock by default; `WECHAT_REAL=1` hits the live gateway).
@@ -1165,10 +1167,10 @@ Set the ledger currency to `CNY` (WeChat `payer_total` credits 1:1 as fen — no
 Top-ups are confirmed by **polling the WeChat order query** (`trade_state === SUCCESS`) and credited idempotently on `out_trade_no`. The async callback webhook (`POST /wechat/notify`) is **not implemented yet** — polling is the only confirmation path today, which is safe but adds latency. Configure `platform_public_key_path` regardless: it makes the server verify WeChat's response signatures, which is what makes the `payer.openid` behind balance identity trustworthy. Usage — a single `pay` command:
 
 ```bash
-npx moltspay balance set-buyer my-buyer-id
+moltspay balance set-buyer my-buyer-id
 # First purchase: prints a pack QR, waits for the scan, credits, completes.
 # Later purchases: password-free, no QR — deducted from the balance.
-npx moltspay pay https://server.com my-service '{"prompt":"hello"}'
+moltspay pay https://server.com my-service '{"prompt":"hello"}'
 ```
 
 ### Money-Safety Design
@@ -1256,19 +1258,19 @@ curl -X POST https://your-server/balance/topup \
 ```bash
 # One-time: persist your buyer id (account label). Under auth_mode=enforce, spending also
 # requires the bound signing key — see "Balance Authentication" above.
-npx moltspay balance set-buyer my-buyer-id
+moltspay balance set-buyer my-buyer-id
 
 # Top up once, via any settled rail
-npx moltspay balance topup https://server.com 10.00 --rail crypto --tx-hash 0xabc... --chain base
-npx moltspay balance topup https://server.com 10.00 --rail wechat --out-trade-no MP1719...
-npx moltspay balance topup https://server.com 10.00 --rail alipay --trade-no 2026...
+moltspay balance topup https://server.com 10.00 --rail crypto --tx-hash 0xabc... --chain base
+moltspay balance topup https://server.com 10.00 --rail wechat --out-trade-no MP1719...
+moltspay balance topup https://server.com 10.00 --rail alipay --trade-no 2026...
 
 # Then pay password-free — no wallet, no QR
-npx moltspay pay https://server.com my-service '{"prompt":"hello"}' --rail balance
+moltspay pay https://server.com my-service '{"prompt":"hello"}' --rail balance
 
 # Check balance and history
-npx moltspay balance query https://server.com
-npx moltspay balance transactions https://server.com
+moltspay balance query https://server.com
+moltspay balance transactions https://server.com
 ```
 
 SDK equivalent:
