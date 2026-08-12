@@ -618,8 +618,7 @@ moltspay approve --spender <address>               # --chain defaults to bnb_tes
 
 # === WeChat Recoverable Sessions ===
 moltspay wechat start <url> <service> --prompt "..."   # Start order, return QR metadata immediately
-moltspay wechat status <session-or-out_trade_no>        # Query/recover a pending session
-moltspay wechat fulfill <session-or-out_trade_no>       # Idempotently fulfill if paid
+moltspay wechat status <session-or-out_trade_no>        # Query/recover; on SUCCESS this also fulfills (alias: fulfill)
 moltspay wechat cancel <session-or-out_trade_no>        # Mark local session cancelled
 moltspay wechat list                                   # List persisted WeChat sessions
 
@@ -1025,7 +1024,7 @@ Add `"wechat"` to `chains`, configure `provider.wechat` with your merchant crede
 2. The SDK client persists a payment session before surfacing the QR. A channel runtime can show the returned PNG/`MEDIA` image and continue independently of the original tool call.
 3. A human scans and pays. The Native `code_url` is a QR payload, not a normal HTTPS checkout link.
 4. The SDK client polls by re-requesting `/execute` with an `X-Payment` payload echoing `out_trade_no`; the server verifies via order query and, on `SUCCESS`, runs the skill and confirms settlement.
-5. If the process is interrupted, the session can be resumed by `payment_session_id` or `out_trade_no`; `fulfill` is idempotent and returns the stored result once completed.
+5. If the process is interrupted, the session can be resumed by `payment_session_id` or `out_trade_no`. Querying a session is what fulfills it: a `SUCCESS` order stores the result body and completes the session, and querying a completed session returns that stored body without another request — so the resume step is idempotent however many times you run it.
 
 ### Buyer SDK Usage
 
@@ -1077,8 +1076,7 @@ CLI recoverable flow:
 
 ```bash
 moltspay wechat start https://server.com my-service --prompt "hello" --json
-moltspay wechat status mpay_sess_...
-moltspay wechat fulfill mpay_sess_...
+moltspay wechat status mpay_sess_...   # repeat until it reports completed; this is the fulfill step
 ```
 
 See [`examples/wechat-native-pay.ts`](https://github.com/Yaqing2023/moltspay/blob/v2.4.2/examples/wechat-native-pay.ts) for a runnable scenario-A demo (mock by default; `WECHAT_REAL=1` hits the live gateway).

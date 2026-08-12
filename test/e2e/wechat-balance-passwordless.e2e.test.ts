@@ -108,7 +108,7 @@ describe('E2E: WeChat-funded password-free balance payment', () => {
 
     // The skill ran, so the password-free retry succeeded after funding.
     expect(result).toEqual({ pong: 'ok' });
-    expect(onTopupRequired).toHaveBeenCalledWith('20.00', 'weixin://wxpay/bizpayurl?pr=E2E');
+    expect(onTopupRequired).toHaveBeenCalledWith('20.00', 'weixin://wxpay/bizpayurl?pr=E2E', expect.stringMatching(/^WX/));
     expect(onTopupCredited).toHaveBeenCalledWith('20.00');
 
     // Ledger reflects 20.00 funded minus the 3.99 deduct.

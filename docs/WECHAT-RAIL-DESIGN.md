@@ -211,8 +211,7 @@ const session = await client.startWechatPayment(serverUrl, service, params, {
   onWechatPaymentFailed: async (failed) => {},
 });
 
-await client.getWechatPaymentStatus(session.paymentSessionId);
-await client.fulfillWechatPayment(session.paymentSessionId);
+await client.getWechatPaymentStatus(session.paymentSessionId); // query == fulfill
 client.cancelWechatPayment(session.paymentSessionId);
 client.listWechatPaymentSessions();
 ```
@@ -372,7 +371,7 @@ export function isWechatChainId(id: string): id is typeof WECHAT_CHAIN_ID {
 - `start402(opts)` validates `extra.code_url` / `extra.out_trade_no`, persists the session, calls `onPaymentPending`, and returns immediately.
 - `status(identifier)` reloads a session by `payment_session_id` or `out_trade_no`, replays `/execute` with `X-Payment`, and stores `pending` / `completed` / `expired` / `failed`.
 - `pollSession(identifier)` repeatedly calls `status()` until terminal state.
-- `fulfill(identifier)` is idempotent: completed sessions return stored `resultBody`; otherwise it performs one status check.
+- `status(identifier)` is the fulfillment step and is idempotent: completed/cancelled sessions return the stored `resultBody` without a request, and a `SUCCESS` order stores the body and completes the session. `fulfill(identifier)` is a deprecated alias for it.
 - `cancel(identifier)` marks the local session cancelled.
 - `listSessions()` lists persisted sessions newest first.
 
@@ -388,13 +387,12 @@ moltspay pay <url> <service> --rail wechat --prompt "..."
 
 # Recoverable non-blocking session commands for skill/channel integrations.
 moltspay wechat start <url> <service> --prompt "..."
-moltspay wechat status <payment_session_id|out_trade_no>
-moltspay wechat fulfill <payment_session_id|out_trade_no>
+moltspay wechat status <payment_session_id|out_trade_no>   # alias: fulfill
 moltspay wechat cancel <payment_session_id|out_trade_no>
 moltspay wechat list
 ```
 
-`wechat start` writes a PNG QR, emits `MEDIA: <path>`, and exits immediately. `status` / `fulfill` can resume after exec timeout, process restart, or user/channel recovery.
+`wechat start` writes a PNG QR, emits `MEDIA: <path>`, and exits immediately. `status` (aliased as `fulfill`) can resume after exec timeout, process restart, or user/channel recovery.
 
 ### 5.9 Config example `moltspay.services.json`
 ```json

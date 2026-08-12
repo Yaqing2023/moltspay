@@ -144,29 +144,14 @@ function printWechatSession(session: any, json: boolean): void {
 
 wechatCommand
   .command('status <identifier>')
-  .description('Query and recover a WeChat payment session by session id or out_trade_no')
+  .alias('fulfill')
+  .description('Query/recover a session by session id or out_trade_no; on SUCCESS this is also what fulfills it (alias: fulfill)')
   .option('--config-dir <dir>', 'Config directory with wallet.json', DEFAULT_CONFIG_DIR)
   .option('--json', 'Output raw JSON only')
   .action(async (identifier, options) => {
     try {
       const client = new MoltsPayClient({ configDir: options.configDir });
       printWechatSession(await client.getWechatPaymentStatus(identifier), options.json);
-    } catch (err: any) {
-      if (options.json) console.log(JSON.stringify({ error: err.message }));
-      else console.error(`❌ Error: ${err.message}`);
-      process.exit(1);
-    }
-  });
-
-wechatCommand
-  .command('fulfill <identifier>')
-  .description('Idempotently fulfill a paid WeChat payment session')
-  .option('--config-dir <dir>', 'Config directory with wallet.json', DEFAULT_CONFIG_DIR)
-  .option('--json', 'Output raw JSON only')
-  .action(async (identifier, options) => {
-    try {
-      const client = new MoltsPayClient({ configDir: options.configDir });
-      printWechatSession(await client.fulfillWechatPayment(identifier), options.json);
     } catch (err: any) {
       if (options.json) console.log(JSON.stringify({ error: err.message }));
       else console.error(`❌ Error: ${err.message}`);

@@ -76,7 +76,7 @@ describe('balance rail password-free orchestration', () => {
     });
 
     expect(result).toEqual({ pong: 'ok' });
-    expect(onTopupRequired).toHaveBeenCalledWith('20.00', 'weixin://PACK');
+    expect(onTopupRequired).toHaveBeenCalledWith('20.00', 'weixin://PACK', 'WXpack01');
     expect(onTopupCredited).toHaveBeenCalledWith('20.00');
     expect(executeHits).toBe(2); // failed once, retried once after credit
   });

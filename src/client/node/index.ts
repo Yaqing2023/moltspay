@@ -118,8 +118,10 @@ export interface PayOptions {
   topupPack?: string;
   /** Balance rail: poll interval while waiting for the top-up scan (default 2000ms). */
   topupPollIntervalMs?: number;
-  /** Balance rail: called when a top-up pack QR must be shown (scan once). */
-  onTopupRequired?: (pack: string, codeUrl: string) => void;
+  /** Balance rail: called when a top-up pack QR must be shown (scan once).
+   *  `outTradeNo` identifies the order — name any file written from `codeUrl`
+   *  after it, since two orders for the same pack would otherwise collide. */
+  onTopupRequired?: (pack: string, codeUrl: string, outTradeNo: string) => void;
   /** Balance rail: called after the top-up is credited (new balance). */
   onTopupCredited?: (balance: string) => void;
 }
@@ -745,7 +747,7 @@ export class MoltsPayClient {
         buyerId,
         context: { service },
       });
-      options.onTopupRequired?.(order.pack, order.codeUrl);
+      options.onTopupRequired?.(order.pack, order.codeUrl, order.outTradeNo);
       return {
         status: 'topup_required',
         out_trade_no: order.outTradeNo,
@@ -760,7 +762,7 @@ export class MoltsPayClient {
       buyerId,
       pollIntervalMs: options.topupPollIntervalMs,
       signal: options.signal,
-      onCodeUrl: (pack, codeUrl) => options.onTopupRequired?.(pack, codeUrl),
+      onCodeUrl: (pack, codeUrl, outTradeNo) => options.onTopupRequired?.(pack, codeUrl, outTradeNo),
     });
     options.onTopupCredited?.(credited.balance);
 
@@ -896,11 +898,11 @@ export class MoltsPayClient {
       buyerId?: string;
       pollIntervalMs?: number;
       signal?: AbortSignal;
-      onCodeUrl?: (pack: string, codeUrl: string) => void;
+      onCodeUrl?: (pack: string, codeUrl: string, outTradeNo: string) => void;
     } = {},
   ): Promise<{ balance: string; outTradeNo: string; txId?: string }> {
     const order = await this.createBalanceTopupOrder(serverUrl, { pack: opts.pack, buyerId: opts.buyerId });
-    opts.onCodeUrl?.(order.pack, order.codeUrl);
+    opts.onCodeUrl?.(order.pack, order.codeUrl, order.outTradeNo);
 
     const interval = opts.pollIntervalMs ?? 2000;
     const deadline = Date.now() + order.maxTimeoutSeconds * 1000;
@@ -1117,14 +1119,18 @@ export class MoltsPayClient {
     return session;
   }
 
-  /** Query a persisted WeChat session once. */
+  /**
+   * Query a persisted WeChat session once. This is also the fulfillment step:
+   * on a 200 it stores the result body and marks the session completed, and a
+   * completed session returns that stored body without another request.
+   */
   async getWechatPaymentStatus(identifier: string): Promise<WechatPaymentSession> {
     return new WechatClient({ configDir: this.configDir }).status(identifier);
   }
 
-  /** Idempotently fulfill a paid WeChat session, returning stored or fetched result. */
+  /** @deprecated Alias for {@link getWechatPaymentStatus} — querying is what fulfills. */
   async fulfillWechatPayment(identifier: string): Promise<WechatPaymentSession> {
-    return new WechatClient({ configDir: this.configDir }).fulfill(identifier);
+    return this.getWechatPaymentStatus(identifier);
   }
 
   /** Mark a local WeChat session as cancelled. */

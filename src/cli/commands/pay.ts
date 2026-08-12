@@ -187,9 +187,9 @@ program
         // commander sets options.autoTopup=false for --no-auto-topup.
         autoTopup: options.autoTopup,
         topupMode: options.topupMode,
-        onTopupRequired: (pack: string, codeUrl: string) => {
+        onTopupRequired: (pack: string, codeUrl: string, outTradeNo: string) => {
           if (!options.json) {
-            const qrPath = writeQRCodePng(codeUrl, { filename: `wechat-topup-${pack}.png` });
+            const qrPath = writeQRCodePng(codeUrl, { filename: `wechat-topup-${outTradeNo}.png` });
             process.stdout.write(`\n💳 Insufficient balance. Scan with WeChat to top up ${pack}:\n`);
             process.stdout.write(`MEDIA: ${qrPath}\n`);
             void printQRCode(codeUrl);

@@ -107,9 +107,9 @@ balanceCommand
       const result = await client.topupBalancePack(server, {
         pack: options.pack,
         buyerId: options.buyer,
-        onCodeUrl: (pack: string, codeUrl: string) => {
+        onCodeUrl: (pack: string, codeUrl: string, outTradeNo: string) => {
           if (!options.json) {
-            const qrPath = writeQRCodePng(codeUrl, { filename: `wechat-bind-${pack}.png` });
+            const qrPath = writeQRCodePng(codeUrl, { filename: `wechat-bind-${outTradeNo}.png` });
             process.stdout.write(`\n💳 Scan with WeChat to bind (top up ${pack}):\n`);
             process.stdout.write(`MEDIA: ${qrPath}\n`);
             void printQRCode(codeUrl);
@@ -179,9 +179,9 @@ balanceCommand
       const result = await client.topupBalancePack(server, {
         pack: options.pack,
         buyerId: options.buyer,
-        onCodeUrl: (pack: string, codeUrl: string) => {
+        onCodeUrl: (pack: string, codeUrl: string, outTradeNo: string) => {
           if (!options.json) {
-            const qrPath = writeQRCodePng(codeUrl, { filename: `wechat-topup-${pack}.png` });
+            const qrPath = writeQRCodePng(codeUrl, { filename: `wechat-topup-${outTradeNo}.png` });
             process.stdout.write(`\n💳 Scan with WeChat to top up ${pack}:\n`);
             process.stdout.write(`MEDIA: ${qrPath}\n`);
             void printQRCode(codeUrl);
@@ -218,7 +218,7 @@ balanceCommand
       if (options.json) {
         console.log(JSON.stringify({ status: 'topup_required', out_trade_no: order.outTradeNo, code_url: order.codeUrl, pack: order.pack, server_url: server }));
       } else {
-        const qrPath = writeQRCodePng(order.codeUrl, { filename: `wechat-topup-${order.pack}.png` });
+        const qrPath = writeQRCodePng(order.codeUrl, { filename: `wechat-topup-${order.outTradeNo}.png` });
         process.stdout.write(`\n💳 Scan with WeChat to top up ${order.pack}:\n`);
         process.stdout.write(`MEDIA: ${qrPath}\n`);
         void printQRCode(order.codeUrl);

@@ -104,7 +104,7 @@ describe('recoverable balance top-up', () => {
 
     expect(result.status).toBe('topup_required');
     expect(result.out_trade_no).toBe('WXrec3');
-    expect(onTopupRequired).toHaveBeenCalledWith('2.00', 'weixin://P');
+    expect(onTopupRequired).toHaveBeenCalledWith('2.00', 'weixin://P', 'WXrec3');
     // Manual mode never polls confirm.
     expect(calls.some(c => c.endsWith('/balance/topup/confirm'))).toBe(false);
     // Session persisted for later recovery.

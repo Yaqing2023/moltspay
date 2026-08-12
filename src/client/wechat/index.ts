@@ -237,10 +237,12 @@ export class WechatClient {
     });
   }
 
-  /** `fulfill` is an idempotent status check: paid sessions return stored body. */
+  /**
+   * @deprecated Exactly equivalent to {@link status}, which already returns the
+   * stored body for completed/cancelled sessions and stores + completes the
+   * session on a 200. Kept as an alias for callers written against 2.1.0.
+   */
   async fulfill(identifier: string): Promise<WechatPaymentSession> {
-    const session = this.loadSession(identifier);
-    if (session.status === 'completed') return session;
     return this.status(identifier);
   }
 
