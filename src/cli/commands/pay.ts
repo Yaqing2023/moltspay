@@ -34,6 +34,7 @@ program
   .option('--chain <chain>', 'Chain to pay on (base, polygon, base_sepolia, tempo_moderato, solana, or solana_devnet).')
   .option('--rail <rail>', 'Payment rail: a chain name, "alipay" (CNY via alipay-bot), "wechat" (CNY via WeChat Native, scan to pay), or "balance" (password-free, prepaid custodial balance)')
   .option('--buyer <id>', 'Buyer id for --rail balance (defaults to the persisted one)')
+  .option('--task <id>', '--rail balance: commerce task scope; the charge is capped by the task budget registered for (buyer, task)')
   .option('--pack <amount>', '--rail balance: top-up pack to scan when the balance is short (defaults to the server pack)')
   .option('--no-auto-topup', '--rail balance: fail on an insufficient balance instead of prompting a top-up')
   .option('--topup-mode <mode>', '--rail balance: "auto" (block through the scan, default) or "manual" (create order, show QR, exit for later confirm)', 'auto')
@@ -183,6 +184,7 @@ program
         rail: 'balance',
         rawData: useRawData,
         buyerId: options.buyer,
+        taskId: options.task,
         topupPack: options.pack,
         // commander sets options.autoTopup=false for --no-auto-topup.
         autoTopup: options.autoTopup,

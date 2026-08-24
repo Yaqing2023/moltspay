@@ -100,6 +100,7 @@ export {
   BalanceAuthMode,
   BalanceAuthFields,
   verifyDeductAuth,
+  verifyOperator,
   buildDeductMessage,
   BALANCE_AUTH_DOMAIN,
   BALANCE_AUTH_MAX_SKEW_MS,

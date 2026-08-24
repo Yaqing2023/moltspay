@@ -37,6 +37,7 @@ async function boot(dir: string): Promise<Booted> {
       wallet: '0x1111111111111111111111111111111111111111',
       chains: [{ chain: 'base', tokens: ['USDC'] }, 'balance'],
       balance: { db_path: ':memory:', currency: 'USD', single_limit: '5.00', daily_limit: '10.00', operator_key: OPERATOR_KEY },
+      audit: { dir: path.join(dir, 'audit') },
     },
     services: [
       {
@@ -87,12 +88,16 @@ async function bootNoOperator(dir: string): Promise<Booted> {
   return { server, http, port: (http.address() as AddressInfo).port };
 }
 
-function xPaymentHeader(buyerId: string, requestId?: string): string {
+function xPaymentHeader(buyerId: string, requestId?: string, taskId?: string): string {
   return Buffer.from(JSON.stringify({
     x402Version: 2,
     scheme: 'balance',
     network: 'balance',
-    payload: { buyer_id: buyerId, ...(requestId ? { request_id: requestId } : {}) },
+    payload: {
+      buyer_id: buyerId,
+      ...(requestId ? { request_id: requestId } : {}),
+      ...(taskId ? { task_id: taskId } : {}),
+    },
   })).toString('base64');
 }
 
@@ -240,6 +245,109 @@ describe('balance rail HTTP integration', () => {
     const b2 = await r2.json();
     expect(b2.replayed).toBe(true);
     expect(b2.balance).toBe(b1.balance); // refunded exactly once
+  });
+
+  // --- Per-task budget (commerce layer, stage 1) ---
+
+  it('caps spend on a task at its operator-registered budget across 402 calls', async () => {
+    // Fund the buyer well above the task budget so the task ceiling — not the
+    // wallet balance or daily limit — is what bites.
+    await topup('task-buyer', '10.00', 'TRADE-TASK-1');
+    // Operator registers a 5.00 budget for the task (payer cannot set this).
+    const reg = await fetch(`${base()}/balance/task-budget`, {
+      method: 'POST', headers: opHeaders,
+      body: JSON.stringify({ buyer_id: 'task-buyer', task_id: 'research-1', budget: '5.00' }),
+    });
+    expect(reg.status).toBe(200);
+    expect((await reg.json()).budget).toBe('5.00');
+
+    // First 3.99 charge fits (spent 3.99 <= 5.00).
+    const first = await fetch(`${base()}/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-payment': xPaymentHeader('task-buyer', 'task-req-1', 'research-1') },
+      body: JSON.stringify({ service: 'video-demo', params: {} }),
+    });
+    expect(first.status).toBe(200);
+
+    // Second 3.99 would push the task to 7.98 > 5.00 → rejected on task budget,
+    // even though the wallet (6.01 left) and daily limit (10.00) still allow it.
+    const second = await fetch(`${base()}/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-payment': xPaymentHeader('task-buyer', 'task-req-2', 'research-1') },
+      body: JSON.stringify({ service: 'video-demo', params: {} }),
+    });
+    expect(second.status).toBe(402);
+    const err = await second.json();
+    expect(err.code ?? err.error).toMatch(/task_budget|task budget/i);
+
+    // The budget endpoint reflects spent 3.99 / remaining 1.01.
+    const q = await (await fetch(`${base()}/balance/task-budget?buyer_id=task-buyer&task_id=research-1`)).json();
+    expect(q.budget).toBe('5.00');
+    expect(q.spent).toBe('3.99');
+    expect(q.remaining).toBe('1.01');
+
+    // The deduct tx carries the task_id for audit.
+    const txs = await (await fetch(`${base()}/balance/transactions?buyer_id=task-buyer`)).json();
+    expect(txs.transactions.some((t: any) => t.type === 'deduct' && t.task_id === 'research-1')).toBe(true);
+  });
+
+  it('POST /balance/task-budget without operator auth is rejected', async () => {
+    const res = await fetch(`${base()}/balance/task-budget`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, // no Authorization
+      body: JSON.stringify({ buyer_id: 'task-buyer', task_id: 'sneaky', budget: '999' }),
+    });
+    expect(res.status).toBe(401);
+    const q = await (await fetch(`${base()}/balance/task-budget?buyer_id=task-buyer&task_id=sneaky`)).json();
+    expect(q.budget).toBeNull(); // nothing was registered
+  });
+
+  // --- Commerce audit trail (commerce layer, stage 2) ---
+
+  it('records a queryable, tamper-evident audit entry for a settled payment', async () => {
+    await topup('audit-buyer', '10.00', 'TRADE-AUDIT-1');
+    const exec = await fetch(`${base()}/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-payment': xPaymentHeader('audit-buyer', 'audit-req-1', 'audit-task-1') },
+      body: JSON.stringify({ service: 'video-demo', params: {} }),
+    });
+    expect(exec.status).toBe(200);
+
+    // Query the audit trail (operator-gated) by task.
+    const res = await fetch(`${base()}/audit?task_id=audit-task-1`, { headers: opHeaders });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.integrity_ok).toBe(true);
+    expect(body.entries.length).toBe(1);
+    const e = body.entries[0];
+    expect(e.action).toBe('payment_settled');
+    expect(e.verification_status).toBe('fulfilled');
+    expect(e.service_id).toBe('video-demo');
+    expect(e.task_id).toBe('audit-task-1');
+    expect(e.agent_id).toBe('audit-buyer');
+    expect(e.payment_channel).toBe('balance');
+    expect(e.amount).toBe(3.99);
+    expect(typeof e.result_hash).toBe('string');
+    expect(typeof e.hash).toBe('string');
+  });
+
+  it('records a refund audit entry when the skill fails', async () => {
+    await topup('audit-buyer-2', '10.00', 'TRADE-AUDIT-2');
+    failNextSkillCall = true; // next video-demo call throws → charge is refunded
+    const exec = await fetch(`${base()}/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-payment': xPaymentHeader('audit-buyer-2', 'audit-req-2', 'audit-task-2') },
+      body: JSON.stringify({ service: 'video-demo', params: {} }),
+    });
+    expect(exec.status).toBe(500);
+    const res = await fetch(`${base()}/audit?task_id=audit-task-2&action=payment_refunded`, { headers: opHeaders });
+    const body = await res.json();
+    expect(body.entries.length).toBe(1);
+    expect(body.entries[0].verification_status).toBe('refunded');
+  });
+
+  it('GET /audit without operator auth is rejected', async () => {
+    const res = await fetch(`${base()}/audit?task_id=audit-task-1`); // no Authorization
+    expect(res.status).toBe(401);
   });
 
   // --- Operator-auth gate (regression guard for the 2026-08-10 balance-rail fix) ---

@@ -81,6 +81,13 @@ export interface PayOptions {
    * Falls back to the persisted `config.buyerId`. Bearer semantics.
    */
   buyerId?: string;
+  /**
+   * Commerce task scope (balance rail). Carried in the X-Payment payload so the
+   * server can cap this charge under a per-task budget registered for
+   * (buyerId, taskId). The budget is server-side; sending taskId only selects
+   * which ceiling applies, it cannot raise one.
+   */
+  taskId?: string;
   /** Alipay: surfaced once the payment URL + tradeNo are known. */
   onPaymentPending?: (info: { paymentUrl: string; shortenUrl?: string; tradeNo: string }) => void;
   /** Alipay: forward CLI output to the user verbatim (line by line). */
@@ -803,7 +810,12 @@ export class MoltsPayClient {
       x402Version: 2,
       scheme: BALANCE_RAIL,
       network: BALANCE_RAIL,
-      payload: { buyer_id: buyerId, request_id: requestId, auth: { timestamp, signature } },
+      payload: {
+        buyer_id: buyerId,
+        request_id: requestId,
+        ...(options.taskId ? { task_id: options.taskId } : {}),
+        auth: { timestamp, signature },
+      },
     })).toString('base64');
 
     const res = await fetch(executeUrl, {

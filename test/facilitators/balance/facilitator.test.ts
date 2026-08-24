@@ -124,6 +124,56 @@ describe('BalanceLedger', () => {
     expect(third.error).toBe('exceeds_daily_limit');
   });
 
+  it('caps gross spend on a task at its registered per-task budget', () => {
+    l.topup({ buyerId: 'b1', amountSat: 10_000, externalRef: '0xaaa' });
+    l.setTaskBudget('b1', 'task-1', 300); // $3.00 for this task
+    expect(l.deduct({ buyerId: 'b1', amountSat: 200, taskId: 'task-1' }).success).toBe(true);
+    const over = l.deduct({ buyerId: 'b1', amountSat: 200, taskId: 'task-1' });
+    expect(over.success).toBe(false);
+    expect(over.error).toBe('exceeds_task_budget');
+    expect(over.limitSat).toBe(300);
+    // a smaller charge that still fits the remaining $1.00 goes through
+    expect(l.deduct({ buyerId: 'b1', amountSat: 100, taskId: 'task-1' }).success).toBe(true);
+    expect(l.spentOnTaskSat('b1', 'task-1')).toBe(300);
+  });
+
+  it('per-task budgets are independent and unbudgeted tasks are uncapped', () => {
+    l.topup({ buyerId: 'b1', amountSat: 10_000, externalRef: '0xaaa' });
+    l.setTaskBudget('b1', 'task-1', 100);
+    // task-2 has no budget → only single/daily limits apply
+    expect(l.deduct({ buyerId: 'b1', amountSat: 400, taskId: 'task-2' }).success).toBe(true);
+    // task-1's ceiling is untouched by task-2 spend
+    expect(l.deduct({ buyerId: 'b1', amountSat: 200, taskId: 'task-1' }).error).toBe('exceeds_task_budget');
+    // deducts with no taskId are never task-capped
+    expect(l.deduct({ buyerId: 'b1', amountSat: 100 }).success).toBe(true);
+  });
+
+  it('refunding a task deduct frees that task budget (no spend→refund→spend inflation)', () => {
+    l.topup({ buyerId: 'b1', amountSat: 10_000, externalRef: '0xaaa' });
+    l.setTaskBudget('b1', 'task-1', 300);
+    const d = l.deduct({ buyerId: 'b1', amountSat: 300, taskId: 'task-1' });
+    expect(l.deduct({ buyerId: 'b1', amountSat: 1, taskId: 'task-1' }).error).toBe('exceeds_task_budget');
+    l.refund(d.txId!, 'skill_failed');
+    expect(l.spentOnTaskSat('b1', 'task-1')).toBe(0); // freed, not counted negative
+    expect(l.deduct({ buyerId: 'b1', amountSat: 300, taskId: 'task-1' }).success).toBe(true);
+  });
+
+  it('setTaskBudget upserts and rejects non-positive budgets', () => {
+    l.setTaskBudget('b1', 'task-1', 100);
+    expect(l.getTaskBudgetSat('b1', 'task-1')).toBe(100);
+    l.setTaskBudget('b1', 'task-1', 250); // upsert
+    expect(l.getTaskBudgetSat('b1', 'task-1')).toBe(250);
+    expect(l.getTaskBudgetSat('b1', 'no-such-task')).toBeNull();
+    expect(() => l.setTaskBudget('b1', 'task-1', 0)).toThrow();
+  });
+
+  it('records task_id on the deduct transaction', () => {
+    l.topup({ buyerId: 'b1', amountSat: 1000, externalRef: '0xaaa' });
+    const d = l.deduct({ buyerId: 'b1', amountSat: 100, taskId: 'task-1' });
+    const row = l.listTransactions('b1').find(t => t.id === d.txId)!;
+    expect(row.task_id).toBe('task-1');
+  });
+
   it('refund reverses a deduct and restores daily headroom', () => {
     l.topup({ buyerId: 'b1', amountSat: 10_000, externalRef: '0xaaa' });
     const d = l.deduct({ buyerId: 'b1', amountSat: 500 });

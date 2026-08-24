@@ -119,3 +119,35 @@ export type {
   FacilitatorFee,
   CDPFacilitatorConfig,
 } from './facilitators/index.js';
+
+// Commerce layer (commerce-core): spend policy + human approval + 402 middleware
+export {
+  PolicyEngine,
+  ApprovalStore,
+  CommerceMiddleware,
+  PAYMENT_HEADER,
+  PaymentDeniedError,
+  ApprovalRequiredError,
+  ApprovalRejectedError,
+} from './commerce/index.js';
+export type {
+  CommercePolicyConfig,
+  ProviderPolicy,
+  PolicyBudgets,
+  ApprovalThresholds,
+  PaymentIntent,
+  PolicyAction,
+  PolicyDecision,
+  ApprovalRequest,
+  ApprovalRequestInput,
+  ApprovalStatus,
+  ApprovalListener,
+  ResolveResult,
+  PaymentQuote,
+  PaymentProof,
+  PaymentExecutor,
+  CommerceContext,
+  CommerceMiddlewareConfig,
+} from './commerce/index.js';
+export { AuditLog } from './audit/AuditLog.js';
+export type { AuditEntry } from './audit/AuditLog.js';

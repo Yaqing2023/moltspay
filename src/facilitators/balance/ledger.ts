@@ -57,6 +57,12 @@ export interface LedgerTxRow {
   description: string | null;
   /** Client-supplied idempotency key (deducts). Unique when present. */
   request_id: string | null;
+  /**
+   * Commerce task this deduct belongs to (deducts only). Lets spend be summed
+   * per task and capped by a registered per-task budget. Null for deducts made
+   * outside any task scope. @see task_budgets / setTaskBudget
+   */
+  task_id: string | null;
   /** External settlement reference: on-chain tx hash / Alipay or WeChat trade no. */
   external_ref: string | null;
   /** For refunds: the deduct row being reversed. */
@@ -70,7 +76,8 @@ export type DeductErrorCode =
   | 'buyer_not_active'
   | 'insufficient_balance'
   | 'exceeds_single_limit'
-  | 'exceeds_daily_limit';
+  | 'exceeds_daily_limit'
+  | 'exceeds_task_budget';
 
 export interface DeductResult {
   success: boolean;
@@ -89,6 +96,12 @@ export interface DeductOpts {
   amountSat: number;
   /** Idempotency key; a replay returns the original tx without deducting. */
   requestId?: string;
+  /**
+   * Commerce task scope. When set and a per-task budget is registered for
+   * (buyerId, taskId), the deduct is capped by that budget (gross completed
+   * spend on the task). Recorded on the tx either way.
+   */
+  taskId?: string;
   service?: string;
   description?: string;
 }
@@ -190,6 +203,7 @@ export class BalanceLedger {
         service TEXT,
         description TEXT,
         request_id TEXT,
+        task_id TEXT,
         external_ref TEXT,
         refunds_tx_id TEXT,
         status TEXT NOT NULL DEFAULT 'completed',
@@ -203,6 +217,16 @@ export class BalanceLedger {
         ON ledger_transactions(refunds_tx_id) WHERE refunds_tx_id IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_ledger_buyer_time
         ON ledger_transactions(buyer_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_ledger_buyer_task
+        ON ledger_transactions(buyer_id, task_id) WHERE task_id IS NOT NULL;
+      CREATE TABLE IF NOT EXISTS task_budgets (
+        buyer_id TEXT NOT NULL REFERENCES buyers(buyer_id),
+        task_id TEXT NOT NULL,
+        budget_sat INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (buyer_id, task_id)
+      );
       CREATE TABLE IF NOT EXISTS ledger_meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -218,6 +242,14 @@ export class BalanceLedger {
     }
     if (!cols.includes('wechat_openid')) {
       this.db.exec('ALTER TABLE buyers ADD COLUMN wechat_openid TEXT');
+    }
+
+    // Migration: add task_id to pre-existing ledger_transactions (per-task
+    // budget). ALTER ... ADD COLUMN is not idempotent, so guard on columns.
+    const txCols = (this.db.prepare('PRAGMA table_info(ledger_transactions)').all() as { name: string }[])
+      .map(c => c.name);
+    if (!txCols.includes('task_id')) {
+      this.db.exec('ALTER TABLE ledger_transactions ADD COLUMN task_id TEXT');
     }
 
     // Record and enforce the ledger's quote currency. The minor unit (`*_sat`)
@@ -328,10 +360,58 @@ export class BalanceLedger {
   }
 
   /**
-   * Read-only deduction precheck (the rail's `verify`). Never mutates.
-   * Returns the same error codes `deduct` would.
+   * Register (or update) a per-task spending budget for a buyer, integer cents.
+   * The budget is set out-of-band by the commerce policy / authorize step, NOT
+   * by the payer at deduct time — that is what keeps the ceiling un-bypassable
+   * by the agent model. Creates the buyer if absent. Returns the stored budget.
    */
-  checkDeduct(buyerId: string, amountSat: number): DeductResult {
+  setTaskBudget(buyerId: string, taskId: string, budgetSat: number): { budgetSat: number } {
+    if (!Number.isInteger(budgetSat) || budgetSat <= 0) {
+      throw new Error(`task budget budgetSat must be a positive integer, got ${budgetSat}`);
+    }
+    this.getOrCreateBuyer(buyerId);
+    this.db
+      .prepare(
+        `INSERT INTO task_budgets (buyer_id, task_id, budget_sat)
+         VALUES (?, ?, ?)
+         ON CONFLICT(buyer_id, task_id)
+         DO UPDATE SET budget_sat = excluded.budget_sat, updated_at = datetime('now')`
+      )
+      .run(buyerId, taskId, budgetSat);
+    return { budgetSat };
+  }
+
+  /** Registered per-task budget in cents, or null if none set. */
+  getTaskBudgetSat(buyerId: string, taskId: string): number | null {
+    const row = this.db
+      .prepare(`SELECT budget_sat FROM task_budgets WHERE buyer_id = ? AND task_id = ?`)
+      .get(buyerId, taskId) as { budget_sat: number } | undefined;
+    return row ? row.budget_sat : null;
+  }
+
+  /**
+   * Gross standing spend on a task (completed deducts only, like
+   * {@link spentTodaySat}). Refunded deducts are excluded, so a genuine
+   * service-failure refund frees that task's allowance; refunds are never
+   * counted negative, so spend→refund→spend cannot inflate the ceiling.
+   */
+  spentOnTaskSat(buyerId: string, taskId: string): number {
+    const row = this.db
+      .prepare(
+        `SELECT COALESCE(SUM(amount_sat), 0) AS spent
+         FROM ledger_transactions
+         WHERE buyer_id = ? AND task_id = ? AND type = 'deduct' AND status = 'completed'`
+      )
+      .get(buyerId, taskId) as { spent: number };
+    return Math.max(0, row.spent);
+  }
+
+  /**
+   * Read-only deduction precheck (the rail's `verify`). Never mutates.
+   * Returns the same error codes `deduct` would. When `taskId` is given and a
+   * per-task budget is registered, the task ceiling is enforced too.
+   */
+  checkDeduct(buyerId: string, amountSat: number, taskId?: string): DeductResult {
     const buyer = this.getBuyer(buyerId);
     if (!buyer) return { success: false, error: 'buyer_not_found' };
     if (buyer.status !== 'active') return { success: false, error: 'buyer_not_active' };
@@ -341,6 +421,12 @@ export class BalanceLedger {
     const spent = this.spentTodaySat(buyerId);
     if (spent + amountSat > buyer.daily_limit_sat) {
       return { success: false, error: 'exceeds_daily_limit', limitSat: buyer.daily_limit_sat };
+    }
+    if (taskId) {
+      const taskBudget = this.getTaskBudgetSat(buyerId, taskId);
+      if (taskBudget !== null && this.spentOnTaskSat(buyerId, taskId) + amountSat > taskBudget) {
+        return { success: false, error: 'exceeds_task_budget', limitSat: taskBudget };
+      }
     }
     if (buyer.balance_sat < amountSat) {
       return { success: false, error: 'insufficient_balance', balanceSat: buyer.balance_sat };
@@ -369,7 +455,7 @@ export class BalanceLedger {
 
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      const check = this.checkDeduct(opts.buyerId, opts.amountSat);
+      const check = this.checkDeduct(opts.buyerId, opts.amountSat, opts.taskId);
       if (!check.success) {
         this.db.exec('ROLLBACK');
         return check;
@@ -390,10 +476,10 @@ export class BalanceLedger {
       const txId = `btx_${randomUUID()}`;
       this.db
         .prepare(
-          `INSERT INTO ledger_transactions (id, buyer_id, type, amount_sat, service, description, request_id)
-           VALUES (?, ?, 'deduct', ?, ?, ?, ?)`
+          `INSERT INTO ledger_transactions (id, buyer_id, type, amount_sat, service, description, request_id, task_id)
+           VALUES (?, ?, 'deduct', ?, ?, ?, ?, ?)`
         )
-        .run(txId, opts.buyerId, opts.amountSat, opts.service ?? null, opts.description ?? null, opts.requestId ?? null);
+        .run(txId, opts.buyerId, opts.amountSat, opts.service ?? null, opts.description ?? null, opts.requestId ?? null, opts.taskId ?? null);
       this.db.exec('COMMIT');
       const buyer = this.getBuyer(opts.buyerId)!;
       return { success: true, txId, balanceSat: buyer.balance_sat };

@@ -39,9 +39,14 @@ import {
   BALANCE_SCHEME,
   extractBalancePayload,
   verifyDeductAuth,
+  verifyOperator,
 } from '../facilitators/index.js';
 import { toPem } from '../facilitators/alipay/encoding.js';
 import { BalanceEndpoints } from './balance-endpoints.js';
+import { AuditLog } from '../audit/AuditLog.js';
+import { TaskBudgetMeter } from '../commerce/budget/TaskBudgetMeter.js';
+import { FulfillmentPolicy } from '../commerce/policy/FulfillmentPolicy.js';
+import { ApprovalStore, type ApprovalStatus } from '../commerce/policy/ApprovalStore.js';
 import { isAlipayChainId, isWechatChainId, isBalanceChainId } from '../chains/index.js';
 import {
   ServicesManifest,
@@ -85,6 +90,37 @@ export class MoltsPayServer {
   /** Custodial balance facilitator instance, set when `provider.balance` is configured (2.2.0). */
   private balanceFacilitator: BalanceFacilitator | null = null;
   private balanceEndpoints: BalanceEndpoints | null = null;
+  /**
+   * Commerce audit trail. Always present (in-memory) so payments are queryable
+   * within the process; persists to disk when `provider.audit.dir` is set.
+   */
+  private auditLog: AuditLog = new AuditLog();
+  /**
+   * Earn-side fulfillment policy (commerce layer). null → serve every paid
+   * request (default). Set when `provider.fulfillment` is configured; consulted
+   * before charging so a denied buyer / underpriced request is never settled.
+   */
+  private fulfillmentPolicy: FulfillmentPolicy | null = null;
+  /**
+   * Earn-side approval store. Holds fulfillments that `FulfillmentPolicy`
+   * flagged `require_approval` until the seller approves/rejects them via the
+   * operator-gated `/fulfillment/approvals` endpoints. In-memory (per-process),
+   * symmetric to the spend-side approval hold.
+   */
+  private readonly approvalStore = new ApprovalStore();
+  /**
+   * Operator secret gating sensitive read/write endpoints (balance credit /
+   * reverse, task-budget register, audit query). `null` → those endpoints fail
+   * closed (503). Mirrors the key handed to {@link BalanceEndpoints}.
+   */
+  private commerceOperatorKey: string | null = null;
+  /**
+   * Rail-agnostic per-task budget meter. Enforces a task's total-spend ceiling
+   * across every rail (USDC / Alipay / WeChat / balance) from one store. Lazily
+   * created on first use so servers with no balance/commerce config pay nothing.
+   */
+  private taskBudget: TaskBudgetMeter | null = null;
+  private taskBudgetDbPath: string = ':memory:';
   /**
    * Pending WeChat Native order cache — the double-charge fix.
    *
@@ -267,6 +303,7 @@ export class MoltsPayServer {
       // absent in both -> null -> those endpoints fail closed (503).
       const balanceOperatorKey =
         process.env.MOLTSPAY_BALANCE_OPERATOR_KEY || providerBalance.operator_key || null;
+      this.commerceOperatorKey = balanceOperatorKey;
       if (!balanceOperatorKey) {
         console.warn(
           '[MoltsPay] No balance operator key configured (provider.balance.operator_key ' +
@@ -285,6 +322,48 @@ export class MoltsPayServer {
       });
       console.log(`[MoltsPay] Custodial balance rail enabled (ledger ${providerBalance.db_path})`);
     }
+
+    // ── Commerce audit trail: persist to disk when provider.audit.dir is set ──
+    const auditDir = this.manifest.provider.audit?.dir;
+    if (auditDir) {
+      const baseDir = path.dirname(servicesPath);
+      const resolved = path.isAbsolute(auditDir) ? auditDir : path.resolve(baseDir, auditDir);
+      this.auditLog = new AuditLog(resolved);
+      console.log(`[MoltsPay] Commerce audit trail persisting to ${resolved}`);
+    }
+
+    // ── Earn-side fulfillment policy: buyer allow/deny, min-price, approval ──
+    if (this.manifest.provider.fulfillment) {
+      this.fulfillmentPolicy = new FulfillmentPolicy(this.manifest.provider.fulfillment);
+      console.log('[MoltsPay] Fulfillment policy enabled (earn side)');
+    }
+
+    // ── Cross-rail task budget meter: one budget per task, across all rails ──
+    // Explicit config wins; else sit next to the balance ledger file (so budgets
+    // persist with it); else in-memory (per-process).
+    const baseDir = path.dirname(servicesPath);
+    const configuredMeterDb = this.manifest.provider.commerce?.task_budget_db;
+    if (configuredMeterDb) {
+      this.taskBudgetDbPath = path.isAbsolute(configuredMeterDb)
+        ? configuredMeterDb
+        : path.resolve(baseDir, configuredMeterDb);
+    } else if (providerBalance && providerBalance.db_path && providerBalance.db_path !== ':memory:') {
+      const balPath = path.isAbsolute(providerBalance.db_path)
+        ? providerBalance.db_path
+        : path.resolve(baseDir, providerBalance.db_path);
+      this.taskBudgetDbPath = path.join(path.dirname(balPath), 'task-budgets.db');
+    } else {
+      this.taskBudgetDbPath = ':memory:';
+    }
+
+    // Commerce operator key: independent of the balance rail so a crypto-only
+    // server can still register task budgets / read audit. Env wins, then
+    // provider.commerce, then provider.balance (back-compat).
+    this.commerceOperatorKey =
+      process.env.MOLTSPAY_BALANCE_OPERATOR_KEY ||
+      this.manifest.provider.commerce?.operator_key ||
+      this.manifest.provider.balance?.operator_key ||
+      null;
 
     // Get primary facilitator for logging
     const primaryFacilitator = this.registry.get(facilitatorConfig.primary);
@@ -535,6 +614,28 @@ export class MoltsPayServer {
         }
       }
 
+      // Cross-rail task budget (commerce layer): register (operator) / query.
+      if (url.pathname === '/balance/task-budget' && req.method === 'POST') {
+        const body = await this.readBody(req);
+        return this.handleSetTaskBudget(body, req, res);
+      }
+      if (url.pathname === '/balance/task-budget' && req.method === 'GET') {
+        return this.handleTaskBudgetQuery(url, res);
+      }
+
+      // Commerce audit trail query (operator-gated: may span buyers/tasks).
+      if (url.pathname === '/audit' && req.method === 'GET') {
+        return this.handleAuditQuery(url, req, res);
+      }
+
+      // Earn-side fulfillment approvals (operator-gated).
+      if (url.pathname === '/fulfillment/approvals' && req.method === 'GET') {
+        return this.handleFulfillmentList(url, req, res);
+      }
+      if (url.pathname.startsWith('/fulfillment/approvals/') && req.method === 'POST') {
+        return await this.handleFulfillmentResolve(url, req, res);
+      }
+
       if (url.pathname === '/execute' && req.method === 'POST') {
         const body = await this.readBody(req);
         const paymentHeader = req.headers[PAYMENT_HEADER] as string | undefined;
@@ -764,7 +865,7 @@ export class MoltsPayServer {
         network: ALIPAY_NETWORK,
         payload: proofHeader,
       };
-      return this.handleAlipayExecute(skill, params || {}, alipayPayment, res);
+      return this.handleAlipayExecute(skill, params || {}, alipayPayment, res, body?.task_id);
     }
 
     // If no payment header, return 402 with payment requirements
@@ -787,10 +888,10 @@ export class MoltsPayServer {
     const payScheme = payment.accepted?.scheme || payment.scheme;
     const payNetwork = payment.accepted?.network || payment.network;
     if (payScheme === ALIPAY_SCHEME || (payNetwork ? isAlipayChainId(payNetwork) : false)) {
-      return this.handleAlipayExecute(skill, params || {}, payment, res);
+      return this.handleAlipayExecute(skill, params || {}, payment, res, body?.task_id);
     }
     if (payScheme === WECHAT_SCHEME || (payNetwork ? isWechatChainId(payNetwork) : false)) {
-      return this.handleWechatExecute(skill, params || {}, payment, res);
+      return this.handleWechatExecute(skill, params || {}, payment, res, body?.task_id);
     }
     if (payScheme === BALANCE_SCHEME || (payNetwork ? isBalanceChainId(payNetwork) : false)) {
       return this.handleBalanceExecute(skill, params || {}, payment, res);
@@ -831,6 +932,53 @@ export class MoltsPayServer {
     }
     console.log(`[MoltsPay] Verified by ${verifyResult.facilitator}`);
 
+    // Cross-rail task budget (commerce layer): a direct-pay charge counts
+    // against the SAME per-task budget as balance/fiat. task_id rides in the
+    // request body; the reservation is released if the skill or settlement
+    // fails. Idempotent on the payment header so a retry never double-reserves.
+    const directTaskId = typeof body.task_id === 'string' && body.task_id ? body.task_id : undefined;
+    // Use the service's configured price (human decimal), NOT requirements.amount
+    // — the latter is in token base units (e.g. 6-decimal USDC) on the crypto rail.
+    const directAmountSat = this.parseAmountToSat(skill.config.price);
+    const directReserveRef = paymentHeader
+      ? `direct:${crypto.createHash('sha256').update(paymentHeader).digest('hex').slice(0, 32)}`
+      : undefined;
+
+    // Earn-side fulfillment gate (commerce layer): decide BEFORE reserving,
+    // executing, or settling. Buyer identity = the x402 payer address.
+    if (this.fulfillmentPolicy && directAmountSat !== null) {
+      const directBuyerId = (payment as any)?.payload?.authorization?.from as string | undefined;
+      const directFulfill = await this.evaluateFulfillment({
+        buyerId: directBuyerId,
+        serviceId: service,
+        amountSat: directAmountSat,
+        amountMajor: directAmountSat / 100,
+        channel: paymentToken ? `${paymentToken.toLowerCase()}_${paymentNetwork}` : paymentNetwork,
+        currency: paymentToken,
+        taskId: directTaskId,
+        requestId: directReserveRef,
+      });
+      if (directFulfill) return this.sendJson(res, directFulfill.status, directFulfill.body);
+    }
+
+    if (directTaskId && directAmountSat !== null && directReserveRef) {
+      const rsv = this.getTaskBudgetMeter().reserve({
+        taskId: directTaskId,
+        amountSat: directAmountSat,
+        ref: directReserveRef,
+        rail: paymentToken ? `${paymentToken.toLowerCase()}_${paymentNetwork}` : paymentNetwork,
+      });
+      if (!rsv.ok) {
+        return this.sendJson(res, 402, {
+          error: `Amount exceeds the task budget of ${(rsv.budgetSat! / 100).toFixed(2)}`,
+          code: 'exceeds_task_budget',
+        });
+      }
+    }
+    const releaseDirectReservation = () => {
+      if (directTaskId && directReserveRef) this.getTaskBudgetMeter().release(directReserveRef);
+    };
+
     // For Solana: settle FIRST (blockhash expires quickly ~60s)
     // For EVM: pay-for-success (execute first, settle after)
     const isSolana = isSolanaNetwork(paymentNetwork);
@@ -843,6 +991,7 @@ export class MoltsPayServer {
         console.log(`[MoltsPay] Payment settled by ${settlement.facilitator}: ${settlement.transaction || 'pending'}`);
       } catch (err: any) {
         console.error('[MoltsPay] Solana settlement failed:', err.message);
+        releaseDirectReservation();
         return this.sendJson(res, 402, {
           error: 'Payment settlement failed',
           message: err.message,
@@ -863,6 +1012,19 @@ export class MoltsPayServer {
       ]);
     } catch (err: any) {
       console.error('[MoltsPay] Skill execution failed:', err.message);
+      // Skill failed → free the task-budget reservation (the task is not billed
+      // for a failure), regardless of rail settle semantics below.
+      releaseDirectReservation();
+      await this.recordCommerceAudit({
+        action: 'payment_refunded',
+        verification_status: isSolana ? 'failed' : 'refunded',
+        service_id: service,
+        amount: directAmountSat !== null ? directAmountSat / 100 : skill.config.price,
+        channel: paymentToken ? `${paymentToken.toLowerCase()}_${paymentNetwork}` : paymentNetwork,
+        currency: paymentToken,
+        taskId: directTaskId,
+        reason: `skill_failed: ${err.message}`.slice(0, 200),
+      });
       // For Solana: payment already settled, skill failed - no refund (user accepted risk)
       // For EVM: payment not settled yet, user keeps their money
       return this.sendJson(res, 500, {
@@ -887,6 +1049,7 @@ export class MoltsPayServer {
       // Match Solana semantics: settle failure → 402, do NOT claim payment
       // succeeded. Skill was already executed; provider absorbs the cost.
       if (!settlement?.success) {
+        releaseDirectReservation();
         return this.sendJson(res, 402, {
           error: 'Payment settlement failed',
           message: settlement?.error || 'Settlement returned no success state',
@@ -908,6 +1071,18 @@ export class MoltsPayServer {
         JSON.stringify(responsePayload)
       ).toString('base64');
     }
+
+    await this.recordCommerceAudit({
+      action: 'payment_settled',
+      verification_status: 'fulfilled',
+      payment_id: settlement?.transaction,
+      service_id: service,
+      amount: directAmountSat !== null ? directAmountSat / 100 : skill.config.price,
+      channel: paymentToken ? `${paymentToken.toLowerCase()}_${paymentNetwork}` : paymentNetwork,
+      currency: paymentToken,
+      taskId: directTaskId,
+      result,
+    });
 
     this.sendJson(res, 200, {
       success: true,
@@ -931,7 +1106,8 @@ export class MoltsPayServer {
     skill: RegisteredSkill,
     params: Record<string, any>,
     payment: X402PaymentPayload,
-    res: ServerResponse
+    res: ServerResponse,
+    taskId?: string
   ): Promise<void> {
     if (!this.alipayFacilitator) {
       return this.sendJson(res, 402, { error: 'Alipay rail not configured on this server' });
@@ -971,6 +1147,12 @@ export class MoltsPayServer {
       ]);
     } catch (err: any) {
       console.error('[MoltsPay] Skill execution failed:', err.message);
+      await this.recordCommerceAudit({
+        action: 'payment_refunded', verification_status: 'failed',
+        service_id: skill.id, amount: Number(skill.config.alipay?.price_cny ?? 0),
+        channel: 'alipay', currency: 'CNY', taskId,
+        reason: `skill_failed: ${err.message}`.slice(0, 200),
+      });
       return this.sendJson(res, 500, {
         error: 'Service execution failed',
         message: err.message,
@@ -1000,6 +1182,13 @@ export class MoltsPayServer {
         facilitator: settlement.facilitator,
       })).toString('base64');
     }
+
+    await this.recordCommerceAudit({
+      action: 'payment_settled', verification_status: 'fulfilled',
+      payment_id: settlement.transaction, service_id: skill.id,
+      amount: Number(skill.config.alipay?.price_cny ?? 0),
+      channel: 'alipay', currency: 'CNY', taskId, result,
+    });
 
     this.sendJson(res, 200, {
       success: true,
@@ -1049,7 +1238,8 @@ export class MoltsPayServer {
     skill: RegisteredSkill,
     params: Record<string, any>,
     payment: X402PaymentPayload,
-    res: ServerResponse
+    res: ServerResponse,
+    taskId?: string
   ): Promise<void> {
     if (!this.wechatFacilitator) {
       return this.sendJson(res, 402, { error: 'WeChat rail not configured on this server' });
@@ -1101,6 +1291,12 @@ export class MoltsPayServer {
       ]);
     } catch (err: any) {
       console.error('[MoltsPay] Skill execution failed:', err.message);
+      await this.recordCommerceAudit({
+        action: 'payment_refunded', verification_status: 'failed',
+        service_id: skill.id, amount: Number(skill.config.wechat?.price_cny ?? 0),
+        channel: 'wechat', currency: 'CNY', taskId,
+        reason: `skill_failed: ${err.message}`.slice(0, 200),
+      });
       return this.sendJson(res, 500, {
         error: 'Service execution failed',
         message: err.message,
@@ -1130,6 +1326,13 @@ export class MoltsPayServer {
         facilitator: settlement.facilitator,
       })).toString('base64');
     }
+
+    await this.recordCommerceAudit({
+      action: 'payment_settled', verification_status: 'fulfilled',
+      payment_id: settlement.transaction, service_id: skill.id,
+      amount: Number(skill.config.wechat?.price_cny ?? 0),
+      channel: 'wechat', currency: 'CNY', taskId, result,
+    });
 
     this.sendJson(res, 200, {
       success: true,
@@ -1310,11 +1513,55 @@ export class MoltsPayServer {
       }
     }
 
+    // Commerce correlation for the audit trail: who/what this spend is for.
+    const balPayload = extractBalancePayload(payment);
+    const amountNum = Number(requirements.amount);
+
+    // ── Earn-side fulfillment policy: decide BEFORE charging (symmetric to the
+    // payer-side spend policy). deny / pending-approval → refuse before deduct,
+    // so no money moves and no refund is needed. ──
+    const balFulfill = await this.evaluateFulfillment({
+      buyerId: balPayload?.buyer_id,
+      serviceId: skill.id,
+      amountSat: Math.round(amountNum * 100),
+      amountMajor: amountNum,
+      channel: 'balance',
+      currency: this.balanceFacilitator.currency,
+      taskId: balPayload?.task_id,
+      requestId: balPayload?.request_id,
+    });
+    if (balFulfill) return this.sendJson(res, balFulfill.status, { ...balFulfill.body, facilitator: 'balance' });
+
+    // Cross-rail task budget: reserve BEFORE charging. A budget breach is
+    // refused here (nothing is deducted); the reservation is released if the
+    // deduct fails or the skill errors. request_id keys idempotency so a retry
+    // never double-reserves.
+    const balReserveRef = balPayload?.request_id ? `balance:${balPayload.request_id}` : undefined;
+    if (balPayload?.task_id) {
+      const amountSat = Math.round(amountNum * 100);
+      const rsv = this.getTaskBudgetMeter().reserve({
+        taskId: balPayload.task_id,
+        amountSat,
+        ref: balReserveRef ?? `balance:${crypto.randomUUID()}`,
+        rail: 'balance',
+        scope: balPayload.buyer_id,
+      });
+      if (!rsv.ok) {
+        return this.sendJson(res, 402, {
+          error: `Amount exceeds the task budget of ${(rsv.budgetSat! / 100).toFixed(2)}`,
+          code: 'exceeds_task_budget',
+          facilitator: 'balance',
+        });
+      }
+    }
+
     // Atomic deduct (settle). checkDeduct runs inside the same transaction,
     // so a separate verify() call here would only add a TOCTOU window.
     console.log(`[MoltsPay] Deducting balance for ${skill.id}...`);
     const settlement = await this.balanceFacilitator.settle(payment, requirements);
     if (!settlement.success) {
+      // The charge never happened → free the task-budget reservation.
+      if (balPayload?.task_id && balReserveRef) this.getTaskBudgetMeter().release(balReserveRef);
       return this.sendJson(res, 402, {
         error: `Balance deduction failed: ${settlement.error}`,
         code: settlement.status,
@@ -1344,6 +1591,23 @@ export class MoltsPayServer {
       } else {
         console.log(`[MoltsPay] Balance refunded (tx ${refund.txId})`);
       }
+      // Free the task-budget reservation for this failed charge.
+      if (balPayload?.task_id && balPayload?.request_id) {
+        this.getTaskBudgetMeter().release(`balance:${balPayload.request_id}`);
+      }
+      await this.recordCommerceAudit({
+        action: 'payment_refunded',
+        verification_status: refund.success ? 'refunded' : 'failed',
+        payment_id: settlement.transaction,
+        service_id: skill.id,
+        amount: amountNum,
+        channel: 'balance',
+        currency: this.balanceFacilitator.currency,
+        buyerId: balPayload?.buyer_id,
+        taskId: balPayload?.task_id,
+        requestId: balPayload?.request_id,
+        reason: `skill_failed: ${err.message}`.slice(0, 200),
+      });
       return this.sendJson(res, 500, {
         error: 'Service execution failed',
         message: err.message,
@@ -1359,11 +1623,165 @@ export class MoltsPayServer {
         facilitator: 'balance',
       })).toString('base64'),
     };
+    await this.recordCommerceAudit({
+      action: 'payment_settled',
+      verification_status: 'fulfilled',
+      payment_id: settlement.transaction,
+      service_id: skill.id,
+      amount: amountNum,
+      channel: 'balance',
+      currency: this.balanceFacilitator.currency,
+      buyerId: balPayload?.buyer_id,
+      taskId: balPayload?.task_id,
+      requestId: balPayload?.request_id,
+      result,
+    });
+
     this.sendJson(res, 200, {
       success: true,
       result,
       payment: { transaction: settlement.transaction, status: 'fulfilled', facilitator: 'balance' },
     }, responseHeaders);
+  }
+
+  /**
+   * Record one commerce spend to the audit trail. Never throws into the money
+   * path — an audit write failure is logged, not surfaced, so it can neither
+   * block a delivery nor trigger a refund of an already-fulfilled service.
+   */
+  private async recordCommerceAudit(opts: {
+    action: string;
+    verification_status: string;
+    payment_id?: string;
+    service_id: string;
+    amount: number;
+    /** Rail label: 'balance' | 'usdc_base' | 'alipay' | 'wechat' | … */
+    channel: string;
+    currency?: string;
+    buyerId?: string;
+    taskId?: string;
+    requestId?: string;
+    result?: unknown;
+    reason?: string;
+  }): Promise<void> {
+    try {
+      const result_hash =
+        opts.result !== undefined
+          ? crypto.createHash('sha256').update(JSON.stringify(opts.result)).digest('hex')
+          : undefined;
+      await this.auditLog.log({
+        action: opts.action,
+        request_id: opts.requestId,
+        agent_id: opts.buyerId, // the payer / spending agent
+        task_id: opts.taskId,
+        service_id: opts.service_id,
+        provider_id: this.manifest.provider.name,
+        payment_id: opts.payment_id,
+        payment_channel: opts.channel,
+        amount: opts.amount,
+        currency: opts.currency,
+        verification_status: opts.verification_status,
+        result_hash,
+        reason: opts.reason,
+      });
+    } catch (err: any) {
+      console.error(`[MoltsPay] Commerce audit write failed (non-fatal): ${err.message}`);
+    }
+  }
+
+  /**
+   * Earn-side fulfillment gate (commerce layer). Consulted before charging on
+   * every rail. Returns `null` to proceed, or a `{ status, body }` to respond
+   * with instead:
+   *   - `deny`             → 403, recorded to the audit trail.
+   *   - `require_approval` → parks the request in {@link approvalStore} and
+   *     returns 402 `fulfillment_pending_approval`. Once the seller approves via
+   *     `/fulfillment/approvals/:id/approve`, a retry with the SAME request_id
+   *     resumes and this returns `null` (proceed); a reject returns 403.
+   * Symmetric to the payer-side spend policy; reused by the balance and direct
+   * (x402) rails.
+   */
+  private async evaluateFulfillment(opts: {
+    buyerId?: string;
+    serviceId: string;
+    amountSat: number;
+    amountMajor: number;
+    channel: string;
+    currency?: string;
+    taskId?: string;
+    requestId?: string;
+  }): Promise<{ status: number; body: any } | null> {
+    if (!this.fulfillmentPolicy) return null;
+    const decision = this.fulfillmentPolicy.decide({
+      buyerId: opts.buyerId,
+      serviceId: opts.serviceId,
+      amountSat: opts.amountSat,
+    });
+    if (decision.action === 'fulfill') return null;
+
+    if (decision.action === 'deny') {
+      await this.recordCommerceAudit({
+        action: 'fulfillment_denied',
+        verification_status: 'unverified',
+        service_id: opts.serviceId,
+        amount: opts.amountMajor,
+        channel: opts.channel,
+        currency: opts.currency,
+        buyerId: opts.buyerId,
+        taskId: opts.taskId,
+        requestId: opts.requestId,
+        reason: `${decision.code}: ${decision.reason ?? ''}`.slice(0, 200),
+      });
+      return {
+        status: 403,
+        body: { error: `Fulfillment denied: ${decision.reason ?? decision.code}`, code: decision.code ?? 'fulfillment_denied' },
+      };
+    }
+
+    // require_approval → park for human sign-off, or resume once resolved. The
+    // approval is keyed by (buyer, service, request_id) so a retry after
+    // approval matches the same parked request.
+    const key = `${(opts.buyerId ?? '').toLowerCase()}|${opts.serviceId}|${opts.requestId ?? ''}`;
+    const existing = this.approvalStore.list().find(r => (r.metadata as any)?.fulfillmentKey === key);
+    if (existing) {
+      if (existing.status === 'approved') return null; // seller signed off → proceed
+      if (existing.status === 'rejected') {
+        return { status: 403, body: { error: 'Fulfillment rejected by seller', code: 'fulfillment_rejected', approvalId: existing.id } };
+      }
+      return { status: 402, body: { error: 'Fulfillment pending seller approval', code: 'fulfillment_pending_approval', approvalId: existing.id } };
+    }
+    const parked = await this.approvalStore.request({
+      serviceId: opts.serviceId,
+      amountSat: opts.amountSat,
+      currency: opts.currency,
+      taskId: opts.taskId,
+      requester: opts.buyerId,
+      metadata: { fulfillmentKey: key, side: 'earn' },
+    });
+    await this.recordCommerceAudit({
+      action: 'fulfillment_pending',
+      verification_status: 'unverified',
+      service_id: opts.serviceId,
+      amount: opts.amountMajor,
+      channel: opts.channel,
+      currency: opts.currency,
+      buyerId: opts.buyerId,
+      taskId: opts.taskId,
+      requestId: opts.requestId,
+      reason: `approval ${parked.id}`,
+    });
+    return { status: 402, body: { error: 'Fulfillment pending seller approval', code: 'fulfillment_pending_approval', approvalId: parked.id } };
+  }
+
+  /** Lazily open the cross-rail task budget meter (see {@link taskBudgetDbPath}). */
+  private getTaskBudgetMeter(): TaskBudgetMeter {
+    if (!this.taskBudget) {
+      this.taskBudget = new TaskBudgetMeter(this.taskBudgetDbPath);
+      if (this.taskBudgetDbPath !== ':memory:') {
+        console.log(`[MoltsPay] Task budget meter at ${this.taskBudgetDbPath}`);
+      }
+    }
+    return this.taskBudget;
   }
 
   /** The balance rail's requirements for a service (price defaults to `config.price`). */
@@ -1591,14 +2009,20 @@ export class MoltsPayServer {
       }
     }
 
-    // Alipay fiat rail (2.0.0): append the alipay x402 entry when configured.
-    const alipayChallenge = await this.buildAlipayChallenge(config);
+    // Alipay fiat rail (2.0.0): append the alipay x402 entry when configured and
+    // the earn-side fulfillment policy would auto-fulfill (fiat has no refund).
+    const alipayChallenge = this.fiatFulfillable(config, config.alipay?.price_cny)
+      ? await this.buildAlipayChallenge(config)
+      : null;
     if (alipayChallenge) {
       accepts.push(alipayChallenge.accepts);
     }
 
-    // WeChat fiat rail (2.1.0): append the wechat x402 entry when configured.
-    const wechatChallenge = await this.buildWechatChallenge(config, params);
+    // WeChat fiat rail (2.1.0): append the wechat x402 entry when configured and
+    // the earn-side fulfillment policy would auto-fulfill (fiat has no refund).
+    const wechatChallenge = this.fiatFulfillable(config, config.wechat?.price_cny)
+      ? await this.buildWechatChallenge(config, params)
+      : null;
     if (wechatChallenge) {
       accepts.push(wechatChallenge.accepts);
     }
@@ -1688,6 +2112,23 @@ export class MoltsPayServer {
    * Return 402 with x402 payment requirements (v2 format)
    * Includes requirements for all chains and all accepted currencies
    */
+  /**
+   * Earn-side fulfillment gate for the FIAT rails (Alipay / WeChat). Those
+   * facilitators have NO refund path, so by the time a proof is verified the
+   * buyer has already paid at the gateway — a post-payment deny would strand
+   * their money. We therefore decide BEFORE creating the gateway order: a fiat
+   * challenge is only offered when the policy would auto-fulfill this request.
+   * Anything the policy would deny / hold for approval / price below floor is
+   * withheld from fiat, so the buyer falls back to the balance/crypto rails
+   * (which refuse before charging or hold safely). Buyer allow/deny is not
+   * applied here — fiat has no persistent payer identity at challenge time.
+   */
+  private fiatFulfillable(config: ServiceConfig, priceCny: string | undefined): boolean {
+    if (!this.fulfillmentPolicy) return true;
+    const amountSat = Math.round(Number(priceCny ?? 0) * 100);
+    return this.fulfillmentPolicy.decide({ serviceId: config.id, amountSat }).action === 'fulfill';
+  }
+
   private async sendPaymentRequired(config: ServiceConfig, res: ServerResponse, params?: Record<string, any>): Promise<void> {
     const acceptedTokens = getAcceptedCurrencies(config);
     const providerChains = this.getProviderChains();
@@ -1703,14 +2144,20 @@ export class MoltsPayServer {
       }
     }
 
-    // Alipay fiat rail (2.0.0): append the alipay x402 entry when configured.
-    const alipayChallenge = await this.buildAlipayChallenge(config);
+    // Alipay fiat rail (2.0.0): append the alipay x402 entry when configured and
+    // the earn-side fulfillment policy would auto-fulfill (fiat has no refund).
+    const alipayChallenge = this.fiatFulfillable(config, config.alipay?.price_cny)
+      ? await this.buildAlipayChallenge(config)
+      : null;
     if (alipayChallenge) {
       accepts.push(alipayChallenge.accepts);
     }
 
-    // WeChat fiat rail (2.1.0): append the wechat x402 entry when configured.
-    const wechatChallenge = await this.buildWechatChallenge(config, params);
+    // WeChat fiat rail (2.1.0): append the wechat x402 entry when configured and
+    // the earn-side fulfillment policy would auto-fulfill (fiat has no refund).
+    const wechatChallenge = this.fiatFulfillable(config, config.wechat?.price_cny)
+      ? await this.buildWechatChallenge(config, params)
+      : null;
     if (wechatChallenge) {
       accepts.push(wechatChallenge.accepts);
     }
@@ -1916,6 +2363,148 @@ export class MoltsPayServer {
    * Kept in the header (never the body) so the secret is not persisted or
    * echoed into ledger descriptions/logs.
    */
+  /** Parse a decimal money string/number to integer minor units, or null if invalid. */
+  private parseAmountToSat(amount: unknown): number | null {
+    const s = typeof amount === 'number' ? amount.toFixed(2) : String(amount).trim();
+    if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
+    const [whole, frac = ''] = s.split('.');
+    const sat = parseInt(whole, 10) * 100 + parseInt(frac.padEnd(2, '0') || '0', 10);
+    return sat > 0 ? sat : null;
+  }
+
+  /**
+   * POST /balance/task-budget — register / update a cross-rail task budget.
+   * Operator-gated: the budget is set out-of-band by the commerce policy, never
+   * by the payer, so an agent cannot raise its own ceiling. The budget applies
+   * to `task_id` across ALL rails. Body: `{ task_id, budget, buyer_id? }`.
+   */
+  private handleSetTaskBudget(body: any, req: IncomingMessage, res: ServerResponse): void {
+    if (!this.commerceOperatorKey) {
+      return this.sendJson(res, 503, { error: 'This endpoint is disabled: no operator key is configured on the server' });
+    }
+    if (!verifyOperator(this.commerceOperatorKey, this.operatorToken(req))) {
+      return this.sendJson(res, 401, { error: 'operator authentication required' });
+    }
+    const { task_id, budget } = body || {};
+    if (typeof task_id !== 'string' || !task_id) {
+      return this.sendJson(res, 400, { error: 'task_id is required' });
+    }
+    const budgetSat = this.parseAmountToSat(budget);
+    if (budgetSat === null) {
+      return this.sendJson(res, 400, { error: 'budget must be a positive decimal with <= 2 places' });
+    }
+    this.getTaskBudgetMeter().setBudget(task_id, budgetSat);
+    this.sendJson(res, 200, {
+      success: true,
+      task_id,
+      budget: (budgetSat / 100).toFixed(2),
+      currency: this.balanceFacilitator?.currency ?? 'USD',
+    });
+  }
+
+  /**
+   * GET /balance/task-budget?task_id= — report a task's budget and gross spend
+   * across all rails. Read-only; not operator-gated. (`buyer_id` accepted but
+   * ignored: budgets are task-scoped, unified across rails.)
+   */
+  private handleTaskBudgetQuery(url: URL, res: ServerResponse): void {
+    const taskId = url.searchParams.get('task_id');
+    if (!taskId) {
+      return this.sendJson(res, 400, { error: 'task_id query parameter is required' });
+    }
+    const meter = this.getTaskBudgetMeter();
+    const budgetSat = meter.getBudgetSat(taskId);
+    const spentSat = meter.spentSat(taskId);
+    this.sendJson(res, 200, {
+      task_id: taskId,
+      budget: budgetSat === null ? null : (budgetSat / 100).toFixed(2),
+      spent: (spentSat / 100).toFixed(2),
+      remaining: budgetSat === null ? null : (Math.max(0, budgetSat - spentSat) / 100).toFixed(2),
+      currency: this.balanceFacilitator?.currency ?? 'USD',
+    });
+  }
+
+  /**
+   * GET /audit?task_id=&agent_id=&action=&limit= — query the commerce audit
+   * trail. Operator-gated because a spend record can span buyers/tasks. Fails
+   * closed (503) when no operator key is configured. Returns newest-first.
+   */
+  private handleAuditQuery(url: URL, req: IncomingMessage, res: ServerResponse): void {
+    if (!this.commerceOperatorKey) {
+      return this.sendJson(res, 503, {
+        error: 'This endpoint is disabled: no operator key is configured on the server',
+      });
+    }
+    if (!verifyOperator(this.commerceOperatorKey, this.operatorToken(req))) {
+      return this.sendJson(res, 401, { error: 'operator authentication required' });
+    }
+    const filter: Record<string, string> = {};
+    for (const key of ['task_id', 'agent_id', 'service_id', 'action', 'request_id', 'verification_status']) {
+      const v = url.searchParams.get(key);
+      if (v) filter[key] = v;
+    }
+    const limit = Math.min(parseInt(url.searchParams.get('limit') || '50', 10) || 50, 500);
+    const all = this.auditLog.search(filter);
+    const integrity = this.auditLog.verify();
+    // Newest-first, capped.
+    const entries = all.slice(-limit).reverse();
+    this.sendJson(res, 200, {
+      count: entries.length,
+      total: all.length,
+      integrity_ok: integrity.valid,
+      integrity_errors: integrity.errors,
+      entries,
+    });
+  }
+
+  /**
+   * GET /fulfillment/approvals?status=pending — list earn-side fulfillments held
+   * for seller sign-off. Operator-gated; fails closed (503) with no operator key.
+   */
+  private handleFulfillmentList(url: URL, req: IncomingMessage, res: ServerResponse): void {
+    if (!this.commerceOperatorKey) {
+      return this.sendJson(res, 503, { error: 'This endpoint is disabled: no operator key is configured on the server' });
+    }
+    if (!verifyOperator(this.commerceOperatorKey, this.operatorToken(req))) {
+      return this.sendJson(res, 401, { error: 'operator authentication required' });
+    }
+    const statusParam = url.searchParams.get('status') as ApprovalStatus | null;
+    const approvals = this.approvalStore
+      .list(statusParam ?? undefined)
+      .filter(r => (r.metadata as any)?.side === 'earn');
+    this.sendJson(res, 200, { count: approvals.length, approvals });
+  }
+
+  /**
+   * POST /fulfillment/approvals/:id/approve|reject — resolve a held fulfillment.
+   * Operator-gated. Optional JSON body: { approver?, reason? }. After approve,
+   * the buyer's retry with the same request_id proceeds to charge + deliver.
+   */
+  private async handleFulfillmentResolve(url: URL, req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!this.commerceOperatorKey) {
+      return this.sendJson(res, 503, { error: 'This endpoint is disabled: no operator key is configured on the server' });
+    }
+    if (!verifyOperator(this.commerceOperatorKey, this.operatorToken(req))) {
+      return this.sendJson(res, 401, { error: 'operator authentication required' });
+    }
+    // /fulfillment/approvals/:id/:action
+    const parts = url.pathname.split('/').filter(Boolean); // ['fulfillment','approvals',':id',':action']
+    const id = parts[2];
+    const action = parts[3];
+    if (!id || (action !== 'approve' && action !== 'reject')) {
+      return this.sendJson(res, 404, { error: 'Unknown action; use /fulfillment/approvals/:id/approve|reject' });
+    }
+    const body = await this.readBody(req).catch(() => ({}));
+    const result = action === 'approve'
+      ? this.approvalStore.approve(id, body?.approver, body?.reason)
+      : this.approvalStore.reject(id, body?.approver, body?.reason);
+    if (!result.ok) {
+      const status = result.error === 'not_found' ? 404 : 409;
+      return this.sendJson(res, status, { error: result.error, approval: result.request });
+    }
+    this.sendJson(res, 200, { ok: true, approval: result.request });
+  }
+
   private operatorToken(req: IncomingMessage): string | undefined {
     const auth = req.headers['authorization'];
     if (typeof auth === 'string') {

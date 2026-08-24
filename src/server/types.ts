@@ -159,6 +159,49 @@ export interface ProviderConfig {
    * (node:sqlite); the server rejects start otherwise.
    */
   balance?: ProviderBalanceConfig;
+  /**
+   * Commerce audit trail (commerce layer). When `dir` is set, every balance
+   * payment is appended as a hash-chained JSON line under that directory so
+   * spends can be explained and verified after the fact. Omit to keep the
+   * audit log in-memory only (still queryable within the process).
+   */
+  audit?: ProviderAuditConfig;
+  /**
+   * Commerce layer config: the rail-agnostic per-task budget meter. When set,
+   * per-task budgets are enforced across ALL rails (USDC / fiat / balance) from
+   * one authoritative store.
+   */
+  commerce?: ProviderCommerceConfig;
+  /**
+   * Earn-side fulfillment policy (commerce layer). When set, the server decides
+   * whether to serve each PAID request — buyer allow/deny, min-price floor,
+   * auto-fulfill vs approval — before charging, symmetric to the payer-side
+   * spend policy. Enforced on the custodial balance rail (MVP); other rails
+   * reuse the same primitive as follow-up. Amounts are integer minor units.
+   */
+  fulfillment?: import('../commerce/policy/FulfillmentPolicy.js').FulfillmentPolicyConfig;
+}
+
+/** Provider-level commerce audit configuration (commerce layer). */
+export interface ProviderAuditConfig {
+  /** Directory for `audit_<date>.jsonl` files. Relative paths resolve against the manifest dir. */
+  dir?: string;
+}
+
+/** Provider-level commerce (task budget) configuration. */
+export interface ProviderCommerceConfig {
+  /**
+   * SQLite path for the cross-rail task budget meter. Relative paths resolve
+   * against the manifest dir. Defaults to a sibling of the balance ledger when
+   * that is a file, else ':memory:' (per-process, not persisted).
+   */
+  task_budget_db?: string;
+  /**
+   * Operator secret gating budget registration and audit reads. Falls back to
+   * `provider.balance.operator_key` / `MOLTSPAY_BALANCE_OPERATOR_KEY`. Lets a
+   * crypto-only server (no balance rail) still register task budgets.
+   */
+  operator_key?: string;
 }
 
 /**

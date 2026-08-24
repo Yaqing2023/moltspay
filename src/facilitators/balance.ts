@@ -79,17 +79,25 @@ export interface BalancePaymentPayload {
   buyer_id: string;
   /** Client-generated idempotency key: replays never double-deduct. */
   request_id?: string;
+  /**
+   * Commerce task scope. When set and a per-task budget is registered for
+   * (buyer_id, task_id) server-side, the deduct is capped by that budget. The
+   * budget itself is NOT carried here — only the task identity — so the payer
+   * cannot raise its own ceiling. @see BalanceLedger.setTaskBudget
+   */
+  task_id?: string;
   /** Originator signature (present when the client signs). @see ./balance/auth.ts */
   auth?: BalanceAuthFields;
 }
 
-/** Extract {buyer_id, request_id, auth} from an x402 payload, or null. */
+/** Extract {buyer_id, request_id, task_id, auth} from an x402 payload, or null. */
 export function extractBalancePayload(payment: X402PaymentPayload): BalancePaymentPayload | null {
   const p = payment.payload as Record<string, unknown> | undefined;
   if (p && typeof p.buyer_id === 'string' && p.buyer_id.length > 0) {
     return {
       buyer_id: p.buyer_id,
       request_id: typeof p.request_id === 'string' ? p.request_id : undefined,
+      task_id: typeof p.task_id === 'string' && p.task_id.length > 0 ? p.task_id : undefined,
       auth: extractBalanceAuth(p.auth) ?? undefined,
     };
   }
@@ -159,7 +167,7 @@ export class BalanceFacilitator extends BaseFacilitator {
     } catch (err: any) {
       return { valid: false, error: err.message };
     }
-    const check = this.ledger.checkDeduct(payload.buyer_id, amountSat);
+    const check = this.ledger.checkDeduct(payload.buyer_id, amountSat, payload.task_id);
     if (!check.success) {
       return {
         valid: false,
@@ -196,6 +204,7 @@ export class BalanceFacilitator extends BaseFacilitator {
         buyerId: payload.buyer_id,
         amountSat,
         requestId: payload.request_id,
+        taskId: payload.task_id,
         service: serviceId,
       });
     } catch (err: any) {
@@ -269,6 +278,8 @@ export class BalanceFacilitator extends BaseFacilitator {
         return `Amount exceeds the per-transaction limit${result.limitSat !== undefined ? ` of ${fromSat(result.limitSat)}` : ''}`;
       case 'exceeds_daily_limit':
         return `Amount exceeds the daily spending limit${result.limitSat !== undefined ? ` of ${fromSat(result.limitSat)}` : ''}`;
+      case 'exceeds_task_budget':
+        return `Amount exceeds the task budget${result.limitSat !== undefined ? ` of ${fromSat(result.limitSat)}` : ''}`;
       default:
         return 'Deduction failed';
     }

@@ -411,6 +411,11 @@ export class BalanceEndpoints {
     });
   }
 
+  // NOTE: /balance/task-budget register + query moved to the server layer and
+  // now use the rail-agnostic TaskBudgetMeter (one budget per task across ALL
+  // rails), not the balance ledger's per-(buyer,task) table. See
+  // MoltsPayServer.handleSetTaskBudget / handleTaskBudgetQuery.
+
   /** GET /balance/transactions?buyer_id=&limit=&offset= -- history, newest first. */
   handleTransactions(url: URL, res: ServerResponse): void {
     const { balance, sendJson } = this.deps;
@@ -429,6 +434,7 @@ export class BalanceEndpoints {
         amount: fromSat(r.amount_sat),
         service: r.service,
         description: r.description,
+        task_id: r.task_id,
         external_ref: r.external_ref,
         status: r.status,
         created_at: r.created_at,
