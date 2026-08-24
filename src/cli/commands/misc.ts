@@ -23,6 +23,77 @@ import { Wallet } from '../../wallet/Wallet.js';
 import * as readline from 'readline';
 import { DEFAULT_CONFIG_DIR, PID_FILE, GAS_SYMBOL, prompt, setupBNBApprovals, checkBNBApprovals, BNB_SPONSOR_KEY, BNB_SPENDER_ADDRESS, ERC20_APPROVE_ABI } from '../shared.js';
 
+// --- publish helpers (wallet-signed registry auth; see docs/PUBLISH-FLOW-PLAN.md) ---
+
+interface HttpResult { status: number; json: any; text: string; }
+
+async function postJson(url: string, body: any, token?: string): Promise<HttpResult> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  let json: any = null;
+  try { json = JSON.parse(text); } catch { /* non-JSON body */ }
+  return { status: res.status, json, text };
+}
+
+async function deleteJson(url: string, token?: string): Promise<HttpResult> {
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  });
+  const text = await res.text();
+  let json: any = null;
+  try { json = JSON.parse(text); } catch { /* non-JSON body */ }
+  return { status: res.status, json, text };
+}
+
+/** Nonce -> sign -> verify -> JWT. Caches the token per config dir. */
+async function walletAuth(registry: string, signer: ethers.Wallet, address: string, configDir: string): Promise<string> {
+  const nonce = await postJson(`${registry}/cri/auth/wallet/nonce`, { address });
+  if (nonce.status !== 200 || !nonce.json?.message) {
+    throw new Error(`nonce request failed (${nonce.status}): ${nonce.json?.error || nonce.text}`);
+  }
+  const signature = await signer.signMessage(nonce.json.message);
+  const verify = await postJson(`${registry}/cri/auth/wallet/verify`, {
+    address, signature, message: nonce.json.message, acceptedTerms: true,
+  });
+  if (verify.status !== 200 || !verify.json?.token) {
+    throw new Error(`wallet verify failed (${verify.status}): ${verify.json?.error || verify.text}`);
+  }
+  savePublishToken(configDir, address, verify.json.token);
+  return verify.json.token;
+}
+
+function publishTokenPath(configDir: string): string {
+  return join(configDir, 'publish-token.json');
+}
+
+function loadPublishToken(configDir: string, address: string): string | null {
+  try {
+    const data = JSON.parse(readFileSync(publishTokenPath(configDir), 'utf-8'));
+    if (!data?.token || String(data.address).toLowerCase() !== address.toLowerCase()) return null;
+    // Reject if the JWT is expired or within 60s of expiry.
+    const payload = JSON.parse(Buffer.from(String(data.token).split('.')[1] || '', 'base64').toString('utf-8'));
+    if (payload?.exp && payload.exp * 1000 < Date.now() + 60_000) return null;
+    return data.token;
+  } catch {
+    return null;
+  }
+}
+
+function savePublishToken(configDir: string, address: string, token: string): void {
+  try {
+    writeFileSync(publishTokenPath(configDir), JSON.stringify({ address, token }, null, 2), { mode: 0o600 });
+  } catch { /* token cache is best-effort */ }
+}
+
+function clearPublishToken(configDir: string, _address: string): void {
+  try { unlinkSync(publishTokenPath(configDir)); } catch { /* ignore */ }
+}
+
 export function registerMisc(program: Command): void {
 program
   .command('services [url]')
@@ -295,6 +366,183 @@ program
 
     } catch (err: any) {
       console.error(`❌ Parse error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+/**
+ * moltspay publish <path> --url <publicUrl>
+ *
+ * Publish a skill's services (from moltspay.services.json) to the public
+ * MoltsPay registry so agents can discover + pay for them. Auth is a wallet
+ * signature (SIWE): no account signup, no API key. The ~/.moltspay wallet is
+ * identity, auth, and payout all at once. See docs/PUBLISH-FLOW-PLAN.md.
+ */
+program
+  .command('publish <path>')
+  .description('Publish a skill\'s services to the MoltsPay registry (wallet-signed, no account needed)')
+  .option('--url <url>', 'Self-hosted: public http(s) URL where your MoltsPay server serves these services')
+  .option('--proxy', 'Platform-hosted: MoltsPay hosts the payment shell and forwards paid calls to your own API')
+  .option('--upstream <url>', 'Your existing API URL (required with --proxy)')
+  .option('--registry <url>', 'Registry base URL', process.env.MOLTSPAY_REGISTRY || 'https://moltspay.com')
+  .option('--config-dir <dir>', 'Config directory with wallet.json', DEFAULT_CONFIG_DIR)
+  .option('--accept-terms', 'Accept the MoltsPay Terms of Service (first publish only)')
+  .option('--yes', 'Skip confirmation prompts (for scripts/agents)')
+  .action(async (inputPath, options) => {
+    const registry = String(options.registry).replace(/\/+$/, '');
+    const configDir = options.configDir || DEFAULT_CONFIG_DIR;
+
+    // 1. Resolve + read manifest
+    const resolvedPath = resolve(inputPath);
+    let manifestPath: string;
+    if (existsSync(join(resolvedPath, 'moltspay.services.json'))) {
+      manifestPath = join(resolvedPath, 'moltspay.services.json');
+    } else if (resolvedPath.endsWith('.json') && existsSync(resolvedPath)) {
+      manifestPath = resolvedPath;
+    } else {
+      console.error(`❌ No moltspay.services.json found at: ${resolvedPath}`);
+      process.exit(1);
+    }
+    let manifest: any;
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+    } catch (err: any) {
+      console.error(`❌ Failed to parse manifest: ${err.message}`);
+      process.exit(1);
+    }
+    if (!manifest.provider?.wallet) {
+      console.error('❌ Manifest missing provider.wallet'); process.exit(1);
+    }
+    if (!Array.isArray(manifest.services) || manifest.services.length === 0) {
+      console.error('❌ Manifest has no services'); process.exit(1);
+    }
+
+    // 2. Resolve hosting mode + validate its URL locally (fail before signing)
+    const proxyMode = !!options.proxy;
+    const targetUrl = proxyMode ? options.upstream : options.url;
+    if (proxyMode && !options.upstream) {
+      console.error('❌ --proxy requires --upstream <your-api-url>'); process.exit(1);
+    }
+    if (!proxyMode && !options.url) {
+      console.error('❌ Provide --url <your-x402-server> (self-hosted) or --proxy --upstream <your-api> (platform-hosted)');
+      process.exit(1);
+    }
+    let url: URL;
+    try { url = new URL(targetUrl); } catch { console.error(`❌ Invalid URL: ${targetUrl}`); process.exit(1); return; }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      console.error(`❌ ${proxyMode ? '--upstream' : '--url'} must be an http(s) URL`); process.exit(1);
+    }
+
+    // 3. Load wallet
+    const walletPath = join(configDir, 'wallet.json');
+    if (!existsSync(walletPath)) {
+      console.error('❌ Wallet not initialized. Run: moltspay init'); process.exit(1);
+    }
+    const walletData = JSON.parse(readFileSync(walletPath, 'utf-8'));
+    const signer = new ethers.Wallet(walletData.privateKey);
+    const address = signer.address;
+
+    // MVP: payout wallet must equal signing wallet (mirror server rule locally)
+    if (manifest.provider.wallet.toLowerCase() !== address.toLowerCase()) {
+      console.error(`❌ provider.wallet (${manifest.provider.wallet}) does not match your wallet (${address}).`);
+      console.error('   In this release your payout wallet must be your signing wallet.');
+      process.exit(1);
+    }
+
+    console.log(`\n📡 Publishing to ${registry}`);
+    console.log(`   Wallet:   ${address}`);
+    console.log(`   Hosting:  ${proxyMode ? `platform proxy → ${options.upstream}` : `self-hosted → ${options.url}`}`);
+    console.log(`   Services: ${manifest.services.map((s: any) => s.id).join(', ')}\n`);
+
+    // 4. ToS consent (first publish auto-creates the account from the wallet)
+    if (!options.acceptTerms && !options.yes) {
+      console.log('First publish creates your creator account from your wallet.');
+      console.log('Continuing accepts the Terms of Service: https://moltspay.com/legal/terms');
+      const ans = await prompt('Accept and continue? [y/N]: ');
+      if (!/^y(es)?$/i.test(String(ans || '').trim())) { console.log('Aborted.'); process.exit(1); }
+    }
+
+    try {
+      // 5. Wallet auth -> JWT (cached, re-auth on 401)
+      let token = loadPublishToken(configDir, address);
+      if (!token) token = await walletAuth(registry, signer, address, configDir);
+
+      // 6. Publish
+      const body = {
+        provider: {
+          name: manifest.provider.name,
+          wallet: manifest.provider.wallet,
+          chains: manifest.provider.chains,
+        },
+        hostingMode: proxyMode ? 'proxy' : 'self',
+        ...(proxyMode ? { upstreamUrl: options.upstream } : { serviceEndpoint: options.url }),
+        services: manifest.services.map((s: any) => ({
+          id: s.id, name: s.name, description: s.description,
+          price: s.price, currency: s.currency, tags: s.tags, chains: s.chains,
+        })),
+      };
+
+      let pub = await postJson(`${registry}/registry/publish`, body, token);
+      if (pub.status === 401) {
+        clearPublishToken(configDir, address);
+        token = await walletAuth(registry, signer, address, configDir);
+        pub = await postJson(`${registry}/registry/publish`, body, token);
+      }
+      if (pub.status !== 200 || !pub.json?.success) {
+        console.error(`❌ Publish failed (${pub.status}): ${pub.json?.error || pub.text}`);
+        process.exit(1);
+      }
+
+      console.log(`✅ Published ${pub.json.published} service(s):`);
+      for (const s of pub.json.services) {
+        console.log(`   • ${s.name} (${s.serviceId}) ${s.priceDisplay} — ${s.action}`);
+        if (s.endpoint) console.log(`     endpoint: ${s.endpoint}`);
+      }
+      console.log(`\n🔎 Discover at: ${pub.json.registryUrl || registry + '/services/'}\n`);
+    } catch (err: any) {
+      console.error(`❌ ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+/**
+ * moltspay unpublish <service-id>
+ *
+ * Remove one of your published services from the registry (soft-delete).
+ */
+program
+  .command('unpublish <service-id>')
+  .description('Remove one of your published services from the registry')
+  .option('--registry <url>', 'Registry base URL', process.env.MOLTSPAY_REGISTRY || 'https://moltspay.com')
+  .option('--config-dir <dir>', 'Config directory with wallet.json', DEFAULT_CONFIG_DIR)
+  .action(async (serviceId, options) => {
+    const registry = String(options.registry).replace(/\/+$/, '');
+    const configDir = options.configDir || DEFAULT_CONFIG_DIR;
+    const walletPath = join(configDir, 'wallet.json');
+    if (!existsSync(walletPath)) {
+      console.error('❌ Wallet not initialized. Run: moltspay init'); process.exit(1);
+    }
+    const walletData = JSON.parse(readFileSync(walletPath, 'utf-8'));
+    const signer = new ethers.Wallet(walletData.privateKey);
+    const address = signer.address;
+
+    try {
+      let token = loadPublishToken(configDir, address);
+      if (!token) token = await walletAuth(registry, signer, address, configDir);
+
+      let res = await deleteJson(`${registry}/registry/publish/${encodeURIComponent(serviceId)}`, token);
+      if (res.status === 401) {
+        clearPublishToken(configDir, address);
+        token = await walletAuth(registry, signer, address, configDir);
+        res = await deleteJson(`${registry}/registry/publish/${encodeURIComponent(serviceId)}`, token);
+      }
+      if (res.status !== 200 || !res.json?.success) {
+        console.error(`❌ Unpublish failed (${res.status}): ${res.json?.error || res.text}`);
+        process.exit(1);
+      }
+      console.log(`✅ Unpublished "${serviceId}".`);
+    } catch (err: any) {
+      console.error(`❌ ${err.message}`);
       process.exit(1);
     }
   });
