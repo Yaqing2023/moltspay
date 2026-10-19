@@ -238,7 +238,7 @@ export class MoltsPayServer {
           platform_public_key_pem: providerWechat.platform_public_key_path
             ? toPublicKeyPem(readPem(providerWechat.platform_public_key_path))
             : undefined,
-          apiv3_key: providerWechat.apiv3_key,
+          apiv3_key: providerWechat.apiv3_key || process.env.WECHAT_APIV3_KEY,
           notify_url: providerWechat.notify_url,
           api_base: providerWechat.api_base,
         };
